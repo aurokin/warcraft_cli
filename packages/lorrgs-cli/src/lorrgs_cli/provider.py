@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
-from warcraft_api.cache import redacted_redis_url
+from warcraft_api.cache import cache_backend_health, redacted_redis_url
 from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
@@ -286,9 +286,10 @@ def doctor(**options: Any) -> Envelope:
         settings, static_ttl, ranking_ttl, report_ttl = load_lorrgs_cache_settings_from_env()
     except ValueError as exc:
         raise ProviderError("invalid_cache_config", str(exc)) from exc
+    health = cache_backend_health(settings)
     payload: dict[str, Any] = {
-        # Lorrgs takes no credentials, so nothing can leave a surface unconfigured.
-        "status": "ready",
+        # Lorrgs takes no credentials, so only a Redis cache that does not answer degrades it.
+        "status": "ready" if health["available"] else "degraded",
         "installed": True,
         "language": "python",
         "auth": {"required": False, "configured": True, "flow": "none"},
@@ -301,6 +302,7 @@ def doctor(**options: Any) -> Envelope:
             "redis_url": redacted_redis_url(settings.redis_url),
             "prefix": settings.prefix,
             "ttls": {"static_metadata": static_ttl, "rankings": ranking_ttl, "loaded_fights": report_ttl},
+            **health,
         },
         "notes": list(NOTES),
     }

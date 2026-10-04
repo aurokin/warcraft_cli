@@ -59,13 +59,15 @@ def _explain_input_text(ctx: typer.Context, text: str | None, file: str | None) 
         fail(ctx, "invalid_query", "Provide only one of --text or --file.")
     if text is not None:
         return text
-    if file is None:
+    if file is None or file == "-":
         if sys.stdin.isatty():
             # Reading a terminal would wait for input nobody is going to type.
             fail(ctx, "invalid_query", "No SimC input provided (use --text, --file, or stdin).")
         return sys.stdin.read()
     try:
         return Path(file).expanduser().read_text(encoding="utf-8")
+    except FileNotFoundError:
+        fail(ctx, "not_found", f"Input file not found: {file}")
     except OSError as exc:
         fail(ctx, "invalid_query", f"Could not read input file: {exc}")
 
@@ -74,9 +76,13 @@ def _explain_input_text(ctx: typer.Context, text: str | None, file: str | None) 
 def explain_input(
     ctx: typer.Context,
     text: str | None = typer.Option(None, "--text", help="Inline SimC addon/profile text."),
-    file: str | None = typer.Option(None, "--file", help="Path to a file containing SimC addon/profile text."),
+    file: str | None = typer.Option(
+        None, "--file", help="Path to a file containing SimC addon/profile text; `-` reads stdin."),
 ) -> None:
-    """Classify SimC addon/profile text locally and explain the Raidbots-to-simc handoff. No network."""
+    """Classify SimC addon/profile text locally and explain the Raidbots-to-simc handoff. No network.
+
+    Reads stdin when neither --text nor --file is given.
+    """
     content = _explain_input_text(ctx, text, file)
     _emit_surface(ctx, lambda: provider_explain_input(content))
 

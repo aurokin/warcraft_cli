@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from simc_cli.apl import AplEntry, group_entries, parse_apl
-from simc_cli.prune import ConditionOutcome, PruneContext, evaluate_condition_outcome, explanation_for_condition
+from simc_cli.prune import RUNTIME_ONLY, ConditionOutcome, PruneContext, entry_verdict, without_talents
 
 LIST_NAME_ALIASES = {
     "trinkets": "trinket helper",
@@ -161,8 +161,7 @@ def summarize_branches(apl_path, context: PruneContext, start_list: str = "defau
                 reason="shadowed by earlier guaranteed dispatch",
             )
             continue
-        outcome = _entry_outcome(entry, context)
-        reason = explanation_for_condition(entry.condition, context, outcome) if entry.condition else "no condition"
+        outcome, reason = entry_verdict(entry, context)
         if outcome.guaranteed_true:
             guaranteed_dispatch = target_list
             guaranteed_dispatch_line = entry.line_no
@@ -254,8 +253,7 @@ def summarize_list_decisions(apl_path, context: PruneContext, list_name: str) ->
     grouped = group_entries(entries)
     decisions: list[ListDecision] = []
     for entry in grouped.get(list_name, []):
-        outcome = _entry_outcome(entry, context)
-        reason = explanation_for_condition(entry.condition, context, outcome) if entry.condition else "no condition"
+        outcome, reason = entry_verdict(entry, context)
         target = f" -> {entry.target_list}" if entry.target_list else ""
         decisions.append(
             ListDecision(
@@ -283,7 +281,9 @@ def inactive_priority_decisions(apl_path, context: PruneContext, list_name: str,
     decisions = summarize_list_decisions(apl_path, context, list_name)
     rows = [decision for decision in decisions if decision.status == "dead"]
     if talent_only:
-        rows = [decision for decision in rows if "talent." in decision.reason]
+        # Talent-gated: dead for this build, but not once its talents and hero tree are unknown.
+        blind = {row.line_no: row.status for row in summarize_list_decisions(apl_path, without_talents(context), list_name)}
+        rows = [decision for decision in rows if blind[decision.line_no] != "dead"]
     return rows
 
 
@@ -350,12 +350,16 @@ def compare_branches(apl_path, left_context: PruneContext, right_context: PruneC
     """Compare dispatch and the resolved focus lists of two builds or target counts on one APL."""
     left = summarize_branches(apl_path, left_context, start_list=start_list)
     right = summarize_branches(apl_path, right_context, start_list=start_list)
+    left_branches = {**_rotation_calls(apl_path, left_context, start_list), **left.branch_decisions}
+    right_branches = {**_rotation_calls(apl_path, right_context, start_list), **right.branch_decisions}
     decision_changes: list[str] = []
-    for target in sorted(set(left.branch_decisions) | set(right.branch_decisions)):
-        left_decision = left.branch_decisions.get(target)
-        right_decision = right.branch_decisions.get(target)
+    for target in sorted(set(left_branches) | set(right_branches)):
+        left_decision = left_branches.get(target)
+        right_decision = right_branches.get(target)
         if left_decision and right_decision:
-            if left_decision.status != right_decision.status or left_decision.reason != right_decision.reason:
+            # A branch dead on both sides is no change, even when its reasons differ (active_enemies=1 vs 3).
+            both_dead = left_decision.status == right_decision.status == "dead"
+            if not both_dead and (left_decision.status != right_decision.status or left_decision.reason != right_decision.reason):
                 decision_changes.append(
                     f"{target}: {left_decision.status} -> {right_decision.status}"
                     f" | left={left_decision.reason}"
@@ -366,8 +370,9 @@ def compare_branches(apl_path, left_context: PruneContext, right_context: PruneC
         elif right_decision:
             decision_changes.append(f"{target}: only in right ({right_decision.status})")
 
-    left_focus_list = resolve_focus_list(apl_path, left_context, start_list=start_list).focus_list
-    right_focus_list = resolve_focus_list(apl_path, right_context, start_list=start_list).focus_list
+    left_focus = resolve_focus_list(apl_path, left_context, start_list=start_list)
+    right_focus = resolve_focus_list(apl_path, right_context, start_list=start_list)
+    left_focus_list, right_focus_list = left_focus.focus_list, right_focus.focus_list
     left_decisions = summarize_list_decisions(apl_path, left_context, left_focus_list)
     right_decisions = summarize_list_decisions(apl_path, right_context, right_focus_list)
     focus_changes: list[str] = []
@@ -389,7 +394,7 @@ def compare_branches(apl_path, left_context: PruneContext, right_context: PruneC
         start_list=start_list,
         left_dispatch=left.guaranteed_dispatch,
         right_dispatch=right.guaranteed_dispatch,
-        dispatch_changed=left.guaranteed_dispatch != right.guaranteed_dispatch,
+        dispatch_changed=left.guaranteed_dispatch != right.guaranteed_dispatch or left_focus.path != right_focus.path,
         decision_changes=decision_changes,
         left_focus_list=left_focus_list,
         right_focus_list=right_focus_list,
@@ -400,6 +405,17 @@ def compare_branches(apl_path, left_context: PruneContext, right_context: PruneC
         left_focus_intent=summarize_intent(apl_path, left_context, left_focus_list),
         right_focus_intent=summarize_intent(apl_path, right_context, right_focus_list),
     )
+
+
+def _rotation_calls(apl_path, context: PruneContext, list_name: str) -> dict[str, BranchDecision]:
+    """The list's ``call_action_list`` rows into rotation lists, which many APLs dispatch through instead of ``run_action_list``."""
+    return {
+        decision.target_list: BranchDecision(
+            target_list=decision.target_list, line_no=decision.line_no, status=decision.status, reason=decision.reason
+        )
+        for decision in summarize_list_decisions(apl_path, context, list_name)
+        if decision.action_name == "call_action_list" and decision.target_list and not is_helper_decision(decision)
+    }
 
 
 def humanize_action_label(label: str) -> str:
@@ -467,12 +483,10 @@ def _trace_list(grouped, list_name: str, context: PruneContext,
         if stop_here:
             lines.append(TraceLine(depth=depth + 1, text=f"L{entry.line_no}: shadowed by earlier guaranteed run_action_list"))
             continue
-        outcome = _entry_outcome(entry, context)
+        outcome, reason = entry_verdict(entry, context)
         lines.append(TraceLine(depth=depth + 1, text=_label_for_entry(entry, outcome)))
-        if entry.condition:
-            reason = explanation_for_condition(entry.condition, context, outcome)
-            if reason != "depends on runtime-only state":
-                lines.append(TraceLine(depth=depth + 2, text=f"because: {reason}"))
+        if reason not in {"no condition", RUNTIME_ONLY}:
+            lines.append(TraceLine(depth=depth + 2, text=f"because: {reason}"))
         if entry.target_list and entry.kind == "call_action_list" and outcome.can_be_true:
             _trace_list(grouped, entry.target_list, context, lines, depth + 2, max_depth, local_visited)
         if entry.target_list and entry.kind == "run_action_list":
@@ -483,12 +497,6 @@ def _trace_list(grouped, list_name: str, context: PruneContext,
                 lines.append(TraceLine(depth=depth + 2, text=f"possible path into [{entry.target_list}]"))
                 _trace_list(grouped, entry.target_list, context, lines, depth + 3, max_depth, local_visited)
                 lines.append(TraceLine(depth=depth + 2, text="fallthrough remains possible if condition is false"))
-
-
-def _entry_outcome(entry: AplEntry, context: PruneContext) -> ConditionOutcome:
-    if not entry.condition:
-        return ConditionOutcome(can_be_true=True, can_be_false=False)
-    return evaluate_condition_outcome(entry.condition, context)
 
 
 def _label_for_entry(entry: AplEntry, outcome: ConditionOutcome) -> str:

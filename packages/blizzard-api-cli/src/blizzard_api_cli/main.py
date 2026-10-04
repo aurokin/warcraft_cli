@@ -97,12 +97,22 @@ def character(
     ctx: typer.Context,
     realm_slug: str = typer.Argument(..., help="Realm slug the character plays on, e.g. illidan."),
     name: str = typer.Argument(..., help="Character name."),
+    region_first_name: str | None = typer.Argument(
+        None,
+        metavar="[NAME]",
+        help="With three arguments they are REGION REALM NAME, as raiderio and warcraftlogs take them.",
+        show_default=False,
+    ),
     region: str | None = _REGION_OPTION,
     classic: bool = _CLASSIC_OPTION,
     game_version: str | None = _GAME_VERSION_OPTION,
     locale: str | None = _LOCALE_OPTION,
 ) -> None:
-    """Fetch a character profile from the profile namespace (retail only)."""
+    """Fetch a character profile from the profile namespace (retail only): REALM NAME --region R, or REGION REALM NAME."""
+    if region_first_name is not None:
+        if region is not None and region.strip().lower() != realm_slug.strip().lower():
+            fail(ctx, "invalid_query", f"The region is given twice: {realm_slug!r} as an argument and {region!r} as --region.")
+        region, realm_slug, name = realm_slug, name, region_first_name
     query = {"realm": realm_slug, "name": name, "region": region, "game_version": game_version, "classic": classic, "locale": locale}
     _run_command(
         ctx,

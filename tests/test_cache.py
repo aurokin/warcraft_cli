@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -10,9 +11,14 @@ from typing import Any
 import httpx
 import pytest
 from raiderio_cli.client import RaiderIOClient
+from warcraft_api import cache as cache_module
 from warcraft_api.cache import (
+    CacheSettings,
+    CacheTTLConfig,
     FileCacheStore,
     RedisCacheStore,
+    build_cache_store,
+    cache_backend_health,
     clear_file_cache,
     clear_redis_cache,
     inspect_file_cache,
@@ -88,7 +94,7 @@ def test_redis_cache_store_uses_prefix_and_roundtrips() -> None:
 
     class FakeRedisModule:
         @staticmethod
-        def from_url(url: str, decode_responses: bool = True) -> FakeRedisClient:
+        def from_url(url: str, decode_responses: bool = True, **_: object) -> FakeRedisClient:
             assert url == "redis://cache.example:6379/3"
             assert decode_responses is True
             return fake_client
@@ -115,7 +121,157 @@ def test_redis_cache_store_uses_prefix_and_roundtrips() -> None:
         "all_hits": False,
         "oldest_hit_age_seconds": None,
         "oldest_hit_ttl_seconds": None,
+        "errors": 0,
     }
+
+
+def test_a_failed_file_cache_write_leaves_no_temp_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = FileCacheStore(tmp_path)
+    store.set("search_suggestions:abc123", {"query": "old"}, ttl_seconds=60)
+
+    def fail(*_: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("os.replace", fail)
+    monkeypatch.setattr("pathlib.Path.replace", fail)
+    store.set("search_suggestions:abc123", {"query": "new"}, ttl_seconds=60)
+
+    assert [path.name for path in (tmp_path / "search_suggestions").iterdir()] == ["abc123.json"]
+    assert store.get("search_suggestions:abc123") == {"query": "old"}
+
+
+def test_a_file_cache_write_does_not_share_a_fixed_temp_name_with_other_writers(tmp_path: Path) -> None:
+    """Another writer's temp file under the old fixed name must not block or tear this write."""
+    store = FileCacheStore(tmp_path)
+    (tmp_path / "search_suggestions" / "abc123.tmp").mkdir(parents=True)
+
+    store.set("search_suggestions:abc123", {"query": "thunderfury"}, ttl_seconds=60)
+
+    assert store.get("search_suggestions:abc123") == {"query": "thunderfury"}
+
+
+def test_a_file_cache_entry_follows_the_umask(tmp_path: Path) -> None:
+    previous = os.umask(0o022)
+    try:
+        FileCacheStore(tmp_path).set("search_suggestions:abc123", {"query": "thunderfury"}, ttl_seconds=60)
+    finally:
+        os.umask(previous)
+
+    assert (tmp_path / "search_suggestions" / "abc123.json").stat().st_mode & 0o777 == 0o644
+
+
+def test_a_redis_write_of_a_payload_json_cannot_hold_is_dropped() -> None:
+    class RecordingRedisClient:
+        sets = 0
+
+        def set(self, *_: object, **__: object) -> None:
+            RecordingRedisClient.sets += 1
+
+    _redis_store(RecordingRedisClient()).set("entity:a", {"raw": b"bytes"}, ttl_seconds=60)
+
+    assert RecordingRedisClient.sets == 0
+
+
+def _redis_store(client: object, url: str = "redis://cache.example:6379/3") -> RedisCacheStore:
+    class FakeRedisModule:
+        @staticmethod
+        def from_url(url: str, **_: object) -> object:
+            return client
+
+    return RedisCacheStore(redis_url=url, prefix="wowhead_cli", import_module_func=lambda name: FakeRedisModule)
+
+
+def test_an_unreachable_redis_is_skipped_after_its_first_failure_and_reported_as_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cache_module, "_FAILED_REDIS_URLS", set())
+
+    class HungRedisClient:
+        calls = 0
+
+        def _fail(self, *_: object, **__: object) -> None:
+            HungRedisClient.calls += 1
+            raise TimeoutError("Timeout connecting to server")
+
+        get = set = _fail
+
+    with cache_ledger() as ledger:
+        store = _redis_store(HungRedisClient())
+        assert store.get("entity:a") is None
+        store.set("entity:a", {"id": 1}, ttl_seconds=60)
+        # A second store on the same URL (another provider in the same process) skips it too.
+        assert _redis_store(HungRedisClient()).get("entity:b") is None
+
+    assert HungRedisClient.calls == 1
+    block = ledger.provenance()
+    assert block is not None
+    assert (block["backend"], block["lookups"], block["hits"], block["errors"]) == ("redis", 2, 0, 3)
+
+
+def test_redis_clients_get_short_timeouts() -> None:
+    pytest.importorskip("redis")
+    client = cache_module._build_redis_client("redis://cache.example:6379/3")
+    kwargs = client.connection_pool.connection_kwargs
+    assert (kwargs["socket_connect_timeout"], kwargs["socket_timeout"]) == (1.0, 2.0)
+
+
+def _redis_settings(url: str | None = "redis://cache.example:6379/3") -> CacheSettings:
+    return CacheSettings(
+        enabled=True, backend="redis", cache_dir=Path("unused"), redis_url=url, prefix="p", ttls=CacheTTLConfig()
+    )
+
+
+def test_the_redis_backend_without_the_redis_extra_is_a_config_error_naming_the_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "redis", None)
+    with pytest.raises(ValueError, match=r"warcraft\[redis\]"):
+        build_cache_store(_redis_settings())
+
+
+def test_an_invalid_redis_url_error_never_quotes_the_userinfo() -> None:
+    class StrictRedisModule:
+        @staticmethod
+        def from_url(url: str, **_: object) -> object:
+            # redis-py reads a password holding '/' as the port and quotes it back.
+            raise ValueError("Port could not be cast to integer value as 'FAKEPASS'")
+
+    with pytest.raises(ValueError) as caught:
+        cache_module._build_redis_client(
+            "redis://user:FAKEPASS/x@cache.example:6379/0", import_module_func=lambda name: StrictRedisModule
+        )
+    assert "FAKEPASS" not in str(caught.value)
+    assert "Invalid Redis URL redis://***@" in str(caught.value)
+
+
+def test_cache_backend_health_pings_redis_and_reports_why_it_is_unavailable() -> None:
+    class Module:
+        def __init__(self, ping_error: Exception | None) -> None:
+            self.ping_error = ping_error
+
+        def from_url(self, url: str, **_: object) -> Module:
+            return self
+
+        def ping(self) -> bool:
+            if self.ping_error is not None:
+                raise self.ping_error
+            return True
+
+    def health(module: Module) -> object:
+        return cache_backend_health(_redis_settings(), import_module_func=lambda name: module)
+
+    assert health(Module(None)) == {"available": True, "error": None}
+    assert health(Module(ConnectionError("invalid username-password pair"))) == {
+        "available": False,
+        "error": "invalid username-password pair",
+    }
+    file_settings = CacheSettings(
+        enabled=True, backend="file", cache_dir=Path("unused"), redis_url=None, prefix="p", ttls=CacheTTLConfig()
+    )
+    assert cache_backend_health(file_settings) == {"available": True, "error": None}
+
+
+def test_cache_backend_health_reports_a_missing_redis_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "redis", None)
+    health = cache_backend_health(_redis_settings())
+    assert health["available"] is False
+    assert "warcraft[redis]" in str(health["error"])
 
 
 def test_inspect_file_cache_summarizes_active_expired_and_invalid_entries(
@@ -213,7 +369,7 @@ def test_inspect_and_clear_redis_cache_support_prefix_and_namespaces() -> None:
 
     class FakeRedisModule:
         @staticmethod
-        def from_url(url: str, decode_responses: bool = True) -> FakeRedisClient:
+        def from_url(url: str, decode_responses: bool = True, **_: object) -> FakeRedisClient:
             assert url == "redis://cache.example:6379/3"
             assert decode_responses is True
             return fake_client
@@ -470,6 +626,10 @@ def test_entity_response_cache_is_scoped_by_expansion(monkeypatch: pytest.Monkey
         ("redis://user:FAKEPASS@cache.example:6380/2?password=QUERYPASS", "redis://***@cache.example:6380/2"),
         ("redis://:FAKE@PASS@cache.example:6380/2", "redis://***@cache.example:6380/2"),
         ("redis://:FA[KE@PA]SS@cache.example:6380/2", "redis://***@cache.example:6380/2"),
+        ("redis://user:FAKE/PASS@cache.example:6380/2", "redis://***@cache.example:6380/2"),
+        ("redis://user:FAKE?PASS@cache.example:6380/2", "redis://***@cache.example:6380/2"),
+        ("redis://:FAKE/PASS?x@cache.example:6380/2", "redis://***@cache.example:6380/2"),
+        ("redis://:FAKE#PASS@cache.example:6380/2", "redis://***@cache.example:6380/2"),
         ("redis://cache.example:6379/0", "redis://cache.example:6379/0"),
         ("FAKEPASS@cache.example", "***"),
         (None, None),

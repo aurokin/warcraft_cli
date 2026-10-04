@@ -647,24 +647,30 @@ def _call_surface(
     return 0, payload
 
 
-def provider_search(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, Any]:
+def provider_search(
+    provider: str, query: str, *, limit: int = 5, expansion: str | None = None, entity_types: tuple[str, ...] = ()
+) -> dict[str, Any]:
+    """One provider's search. ``entity_types`` restricts the kinds a provider that can filter returns."""
     registration = get_provider(provider)
     unsupported = _unsupported_expansion_result(registration, expansion, command="search", query=query)
     if unsupported is not None:
         return unsupported
-    options = provider_expansion_options(registration, expansion)
+    options = {**provider_expansion_options(registration, expansion), **({"entity_types": entity_types} if entity_types else {})}
     code, payload = _call_surface(
         provider, "search", lambda: registration.surface.search(query, limit=limit, **options), query=query
     )
     return {"provider": provider, "exit_code": code, "payload": payload}
 
 
-def provider_resolve(provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, Any]:
+def provider_resolve(
+    provider: str, query: str, *, limit: int = 5, expansion: str | None = None, entity_types: tuple[str, ...] = ()
+) -> dict[str, Any]:
+    """One provider's resolve. ``entity_types`` restricts the kinds a provider that can filter returns."""
     registration = get_provider(provider)
     unsupported = _unsupported_expansion_result(registration, expansion, command="resolve", query=query)
     if unsupported is not None:
         return unsupported
-    options = provider_expansion_options(registration, expansion)
+    options = {**provider_expansion_options(registration, expansion), **({"entity_types": entity_types} if entity_types else {})}
     code, payload = _call_surface(
         provider, "resolve", lambda: registration.surface.resolve(query, limit=limit, **options), query=query
     )
@@ -786,7 +792,9 @@ class ProviderInvoke(Protocol):
 class ProviderLookup(Protocol):
     """``provider_search`` / ``provider_resolve``: one free-text lookup, as ``{provider, exit_code, payload}``."""
 
-    def __call__(self, provider: str, query: str, *, limit: int = 5, expansion: str | None = None) -> dict[str, Any]: ...
+    def __call__(
+        self, provider: str, query: str, *, limit: int = 5, expansion: str | None = None, entity_types: tuple[str, ...] = ()
+    ) -> dict[str, Any]: ...
 
 
 class SimcCall(Protocol):

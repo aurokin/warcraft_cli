@@ -114,6 +114,6 @@ Search a previously exported guide bundle without touching the network.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 5 | Maximum matches to return per kind. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum matches per kind and in the top list. |
 | `--kind` | str (repeatable) |  | Kinds to search. Repeat or pass comma-separated values from: sections, navigation, linked_entities, build_references, analysis_surfaces. |
 | `--section-title` | str |  | Restrict section matches to a title substring. |

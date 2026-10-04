@@ -429,6 +429,17 @@ def _resolve_talent_transport(ctx: typer.Context, request: TalentSource, calls: 
             requested_expansion=requested_expansion,
             invoke=calls.invoke,
         )
+    elif _looks_like_warcraftlogs_report_reference(source):
+        _fail_talent_route(
+            ctx,
+            code="missing_actor_id",
+            message=(
+                "A Warcraft Logs report ref needs --actor-id: the talents are one player's. List the fight's "
+                "players with `warcraft warcraftlogs report-player-details <code> --fight-id <id>`."
+            ),
+            source=source,
+            exit_code=EXIT_USAGE,
+        )
     elif _looks_like_transport_packet_path_input(source):
         _fail_talent_route(
             ctx,

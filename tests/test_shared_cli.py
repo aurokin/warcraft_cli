@@ -295,9 +295,19 @@ def _run_argv(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str
         (["dummy", "--profile", "bogus", "show"], "show", "Invalid value for --profile: --profile must be one of: agent, human"),
         (["dummy", "--bogus-flag", "show"], "show", "No such option: --bogus-flag"),
         (["dummy", "--region", "kr", "show"], "show", "No such option: --region"),
-        (["dummy", "nosuchcommand"], "nosuchcommand", "No such command 'nosuchcommand'."),
+        (
+            ["dummy", "nosuchcommand"],
+            "nosuchcommand",
+            "No such command 'nosuchcommand'. Commands: group, missing, need, refuse, show.",
+        ),
         (["dummy", "need"], "need", "Missing argument 'target'."),
-        (["dummy"], "", "Missing command."),
+        (["dummy"], "", "Missing command. Commands: group, missing, need, refuse, show."),
+        (["dummy", "group"], "group", "Missing command. Commands: boom, leaf, sink."),
+        (
+            ["dummy", "show", "--pretty"],
+            "show",
+            "No such option: --pretty. --pretty is a global flag: put it before the subcommand (dummy --pretty ... show ...).",
+        ),
         (
             ["dummy", "group", "leaf", "--pages", "abc"],
             "group leaf",
@@ -311,6 +321,8 @@ def _run_argv(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str
         "unknown-command",
         "missing-argument",
         "no-command",
+        "no-subcommand",
+        "misplaced-global-flag",
         "nested-command",
     ],
 )
@@ -329,7 +341,7 @@ def test_guarded_run_renders_usage_errors_as_the_json_envelope(
     assert payload["ok"] is False
     assert payload["provider"] == "dummy"
     assert payload["command"] == expected_command
-    assert payload["error"] == {"code": "invalid_argument", "message": expected_message}
+    assert (payload["error"]["code"], payload["error"]["message"]) == ("invalid_argument", expected_message)
 
 
 @pytest.mark.parametrize(
@@ -378,3 +390,18 @@ def test_guarded_run_exits_zero_on_success(monkeypatch: pytest.MonkeyPatch, caps
     exit_code, out, _ = _run_argv(monkeypatch, capsys, ["dummy", "show"])
     assert exit_code == 0
     assert json.loads(out)["data"]["a"] == {"b": 1}
+
+
+@pytest.mark.parametrize(
+    ("argv", "details"),
+    [
+        (["dummy", "group"], {"commands": ["boom", "leaf", "sink"]}),
+        (["dummy", "show", "--profile", "human"], {"global_flag": "--profile"}),
+    ],
+)
+def test_guarded_run_usage_error_details_name_the_fix(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], argv: list[str], details: dict[str, object]
+) -> None:
+    """Agents read the subcommands, or the global flag to move, from ``error.details``."""
+    _exit_code, _out, err = _run_argv(monkeypatch, capsys, argv)
+    assert json.loads(err)["error"]["details"] == details

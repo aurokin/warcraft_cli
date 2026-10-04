@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 import httpx
-from warcraft_api.cache import redacted_redis_url
+from warcraft_api.cache import cache_backend_health, redacted_redis_url
 from warcraft_core.auth import provider_auth_status
 from warcraft_core.discovery import stub_envelope
 from warcraft_core.envelope import Envelope, success_envelope
@@ -116,6 +116,7 @@ def _cache_payload() -> dict[str, Any]:
         "redis_url": redacted_redis_url(settings.redis_url),
         "prefix": settings.prefix,
         "ttls": {"static": static_ttl, "dynamic_and_profile": dynamic_ttl},
+        **cache_backend_health(settings),
     }
 
 
@@ -124,12 +125,14 @@ def doctor_envelope() -> Envelope:
     auth = load_blizzard_auth_config()
     # Every read needs client credentials, so without them the reads are blocked, not ready.
     reads = "ready" if auth.configured else "requires_client_credentials"
+    cache = _cache_payload()
     return success_envelope(
         provider=PROVIDER_NAME,
         command="doctor",
         kind="doctor",
         data={
-            "status": "ready" if auth.configured else "degraded",
+            # A Redis cache that does not answer degrades every read too.
+            "status": "ready" if auth.configured and cache.get("available") is not False else "degraded",
             "tier": TIER,
             "installed": True,
             "language": "python",
@@ -142,7 +145,7 @@ def doctor_envelope() -> Envelope:
                 "game_data": reads,
                 "profile": reads,
             },
-            "cache": _cache_payload(),
+            "cache": cache,
             "notes": [
                 "Experimental tier: the read surface is small (realm, item, character) and "
                 "search/resolve are stubs.",

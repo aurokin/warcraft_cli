@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from warcraft_api.cache import redacted_redis_url
+from warcraft_api.cache import cache_backend_health, redacted_redis_url
 from warcraft_content.article_bundle import article_export_dir, bundle_query_payload, write_article_bundle
 from warcraft_content.article_discovery import article_resolve_payload, article_search_payload
 from warcraft_content.article_provider_cli import preview_block
@@ -33,7 +33,9 @@ from warcraft_wiki_cli.search import (
     title_names_query,
 )
 
-API_REFERENCE_FAMILIES = frozenset({"api_function", "api_enum", "framework_page", "xml_schema", "cvar", "api_changes"})
+API_REFERENCE_FAMILIES = frozenset(
+    {"api_function", "api_enum", "framework_page", "xml_schema", "cvar", "api_changes", "howto_programming"}
+)
 EVENT_REFERENCE_FAMILIES = frozenset({"event_reference", "ui_handler", "framework_page"})
 # Exact page titles a typed lookup fetches before it falls back to search, most specific first.
 # "Event:PLAYER_LOGIN" and "API:UnitHealth" are the canonical namespaced titles; the space-separated
@@ -463,8 +465,9 @@ class WarcraftWikiProvider:
             settings, search_ttl, page_ttl = load_warcraft_wiki_cache_settings_from_env()
         except ValueError as exc:
             raise ProviderError("invalid_cache_config", str(exc)) from exc
+        health = cache_backend_health(settings)
         payload = {
-            "status": "ready",
+            "status": "ready" if health["available"] else "degraded",
             "installed": True,
             "language": "python",
             "capabilities": dict(CAPABILITIES),
@@ -478,6 +481,7 @@ class WarcraftWikiProvider:
                     "search": search_ttl,
                     "page_html": page_ttl,
                 },
+                **health,
             },
         }
         return _envelope(command="doctor", kind="doctor", payload=payload, provenance=API_PROVENANCE)

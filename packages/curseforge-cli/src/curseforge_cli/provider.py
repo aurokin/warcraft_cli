@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from warcraft_api.cache import redacted_redis_url
+from warcraft_api.cache import cache_backend_health, redacted_redis_url
 from warcraft_core.discovery import stub_envelope
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.provider import ProviderSurface
@@ -57,15 +57,18 @@ def _cache_payload() -> dict[str, Any]:
         "redis_url": redacted_redis_url(settings.redis_url),
         "prefix": settings.prefix,
         "ttls": {"addon": ttl},
+        **cache_backend_health(settings),
     }
 
 
 def doctor_envelope() -> Envelope:
     """Install state, API-key auth posture, and capability metadata; never raises."""
     auth = load_curseforge_auth_config()
+    cache = _cache_payload()
     data: dict[str, Any] = {
-        # The addon lookup needs the API key, so without one the provider can do nothing useful.
-        "status": "ready" if auth.configured else "degraded",
+        # The addon lookup needs the API key, so without one the provider can do nothing useful; a
+        # Redis cache that does not answer also degrades it.
+        "status": "ready" if auth.configured and cache.get("available") is not False else "degraded",
         "tier": TIER,
         "installed": True,
         "language": "python",
@@ -76,7 +79,7 @@ def doctor_envelope() -> Envelope:
             "resolve": "coming_soon",
             "addon": "ready" if auth.configured else "requires_api_key",
         },
-        "cache": _cache_payload(),
+        "cache": cache,
         "notes": [
             f"curseforge is an {TIER} provider: the surface is one addon lookup plus doctor, and "
             "search/resolve are stubs. The endpoints it does use are live-confirmed.",

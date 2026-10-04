@@ -135,6 +135,28 @@ def tracked_spell_ids(catalog: dict[int, dict[str, Any]], explicit_spell_ids: li
     }
 
 
+def received_aura_spell_ids(
+    catalog: dict[int, dict[str, Any]], tracked: set[int], events_payload: dict[str, Any], *, source_id: int
+) -> set[int]:
+    """Tracked externals (Lorrgs' ``other-externals``: Power Infusion, Bloodlust, Ironbark) the actor did not cast.
+
+    Lorrgs files them for every spec and records them on top parses as auras received, under one id
+    for every variant (Heroism and Time Warp are both Bloodlust 2825). For a player who did not cast
+    one, the player's side cannot hold it, so compared it would always read as missed. One the player
+    cast (a priest's Power Infusion) stays compared.
+    """
+    cast_ids = {
+        int_or_none(row.get("abilityGameID"))
+        for row in as_list(events_payload.get("events"))
+        if isinstance(row, dict) and row.get("type") == "cast" and int_or_none(row.get("sourceID")) == source_id
+    }
+    return {
+        spell_id
+        for spell_id in tracked - cast_ids
+        if as_dict(catalog.get(spell_id)).get("spell_type") == "other-externals"
+    }
+
+
 def spell_summary(spell_id: int | None, *, catalog: dict[int, dict[str, Any]]) -> dict[str, Any] | None:
     if spell_id is None:
         return None
@@ -332,18 +354,22 @@ def top_parse_samples(
     boss_catalog: dict[int, dict[str, Any]],
     spell_ids: set[int],
     player_phase_count: int,
+    analyzed_fight: tuple[str, int],
 ) -> dict[str, Any]:
     """Top-parse samples for the selected phase.
 
     ``status`` is ``no_phase_data`` when samples were read but none has a window for the phase, and
     ``sample_fraction`` counts only the samples that have one (``phase_sample_count``). The encounter
     has several phases when the player's fight or any top-parse fight shows more than one window.
+    ``analyzed_fight`` (report code, fight id) is skipped when it is a top parse, so the player is
+    never compared with themselves; ``excluded_analyzed_fight`` says when that happened.
     """
     if ranking_data is None:
         return {
             "status": "unavailable",
             "sample_count": 0,
             "phase_sample_count": 0,
+            "excluded_analyzed_fight": False,
             "samples": [],
             "selected_phase_spell_frequency": [],
         }
@@ -353,6 +379,7 @@ def top_parse_samples(
     samples: list[dict[str, Any]] = []
     frequency: Counter[int] = Counter()
     total_casts: Counter[int] = Counter()
+    excluded_analyzed_fight = False
     for report in reports:
         if len(samples) >= sample_limit:
             break
@@ -362,6 +389,9 @@ def top_parse_samples(
             if len(samples) >= sample_limit:
                 break
             if not isinstance(fight, dict):
+                continue
+            if (report.get("report_id"), fight.get("fight_id")) == analyzed_fight:
+                excluded_analyzed_fight = True
                 continue
             sample = _sample_for_fight(
                 report,
@@ -381,6 +411,7 @@ def top_parse_samples(
         "status": "no_phase_data" if samples and not phase_sample_count else "ready",
         "sample_count": len(samples),
         "phase_sample_count": phase_sample_count,
+        "excluded_analyzed_fight": excluded_analyzed_fight,
         "available_report_count": len(reports),
         "samples": samples,
         "selected_phase_spell_frequency": _frequency_rows(

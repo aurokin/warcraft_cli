@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from simc_cli.branch import compare_branches, explain_intent, resolve_focus_list, summarize_branches, summarize_intent
+from simc_cli.branch import (
+    compare_branches,
+    explain_intent,
+    inactive_priority_decisions,
+    resolve_focus_list,
+    summarize_branches,
+    summarize_intent,
+)
 from simc_cli.packet import build_analysis_packet
 from simc_cli.prune import PruneContext
 
@@ -101,3 +108,45 @@ def test_focus_stays_on_a_rotation_list_that_ends_by_calling_a_smaller_one(tmp_p
     )
 
     assert resolve_focus_list(apl, PruneContext(enabled_talents=set(), disabled_talents=set(), targets=1)).focus_list == "spellslinger"
+
+
+def test_talent_only_rows_are_the_ones_the_build_kills_not_the_ones_that_name_a_talent(tmp_path: Path) -> None:
+    """The filter used to match "talent." in the reason: it dropped a row the hero tree kills and kept a
+    row only the target count kills because its reason also listed a taken talent."""
+    apl = tmp_path / "warlock_destruction.simc"
+    apl.write_text(
+        "actions=call_action_list,name=soul_harvester,if=hero_tree.soul_harvester\n"
+        "actions+=/call_action_list,name=aoe_hc,if=active_enemies>=2&talent.wither\n"
+        "actions+=/cataclysm\n"
+        "actions+=/chaos_bolt\n"
+    )
+    context = PruneContext(enabled_talents={"wither"}, disabled_talents=set(), targets=1, hero_tree="hellcaller",
+                           untaken_talents={"cataclysm"})
+
+    rows = inactive_priority_decisions(apl, context, "default", talent_only=True)
+
+    assert [row.action_label for row in rows] == ["call_action_list -> soul_harvester", "cataclysm"]
+
+
+def test_branch_compare_sees_a_rotation_switch_made_through_call_action_list(tmp_path: Path) -> None:
+    """Beast Mastery dispatches with call_action_list; only run_action_list rows used to count as dispatch."""
+    apl = tmp_path / "hunter_beast_mastery.simc"
+    apl.write_text(
+        "actions=call_action_list,name=cds\n"
+        "actions+=/call_action_list,name=st,if=active_enemies<2\n"
+        "actions+=/call_action_list,name=cleave,if=active_enemies>1\n"
+        # Dead on both sides, for different reasons: no change.
+        "actions+=/call_action_list,name=aoe,if=active_enemies>5\n"
+        "actions.st=kill_command\nactions.st+=/cobra_shot\n"
+        "actions.cleave=multishot\nactions.cleave+=/kill_command\n"
+        "actions.aoe=multishot\n"
+    )
+    left = PruneContext(enabled_talents=set(), disabled_talents=set(), targets=1)
+    right = PruneContext(enabled_talents=set(), disabled_talents=set(), targets=3)
+
+    comparison = compare_branches(apl, left, right)
+
+    assert comparison.dispatch_changed is True
+    assert [change.split(" |")[0] for change in comparison.decision_changes] == [
+        "cleave: dead -> guaranteed", "st: guaranteed -> dead"
+    ]

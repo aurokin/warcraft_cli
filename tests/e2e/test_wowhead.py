@@ -1138,6 +1138,11 @@ def test_blue_tracker_listing_leads_to_one_blue_topic(require, blue_listing: Res
     assert filtered.data["filters"]["regions"] == [regions[0]], filtered.describe()
     assert {row["id"] for row in filtered.data["results"]} == {row["id"] for row in rows if row["region"] == regions[0]}
     assert 0 < filtered.data["count"] < len(rows), "--region returned the whole listing"
+    # `na` is every other provider's spelling of `us`; it used to filter every post away.
+    north_america = run(BINARY, "blue-tracker", "--limit", "200", "--region", "na")
+    assert north_america.data["filters"]["regions"] == ["us"], north_america.describe()
+    assert {row["id"] for row in north_america.data["results"]} == {row["id"] for row in rows if row["region"] == "us"}
+    run(BINARY, "blue-tracker", "--region", "xx", expect=EXIT_USAGE, error_code="invalid_argument")
 
     topics = [row for row in rows if "/blue-tracker/topic/" in row["url"]]
     assert topics, f"no forum topic in the listing\n{blue_listing.describe()}"
@@ -1461,6 +1466,19 @@ def test_unknown_item_id_is_a_not_found_envelope(require) -> None:
     assert missing.stdout == "", missing.describe()
     assert missing.payload["data"] == {}, missing.describe()
     assert missing.payload["error"]["details"]["status_code"] == 404, missing.describe()
+
+
+def test_a_misspelled_entity_type_is_a_usage_error_not_a_missing_entity(require) -> None:
+    """`entity items` read Wowhead's tooltip 404 as "Thunderfury does not exist", and `entity-page items`
+    answered with the item listing Wowhead redirects `/items=19019` to."""
+    require("wowhead")
+    for argv in (("entity", "items", str(pins.ITEM_ID)), ("entity-page", "items", str(pins.ITEM_ID))):
+        typo = run(BINARY, *argv, expect=EXIT_USAGE, error_code="invalid_argument")
+        assert "item" in typo.payload["error"]["message"].split("Known entity types: ", 1)[1], typo.describe()
+    # Wowhead's tooltip endpoint has no `class` type but its pages do, so the message points there.
+    no_tooltip = run(BINARY, "entity", "class", "1", expect=EXIT_USAGE, error_code="invalid_argument")
+    assert "`wowhead entity-page class 1`" in no_tooltip.payload["error"]["message"], no_tooltip.describe()
+    run(BINARY, "entity-page", "class", "1")
 
 
 def test_network_failure_is_an_exit_5_envelope(require) -> None:

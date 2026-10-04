@@ -11,12 +11,13 @@ import sys
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, NoReturn
 from urllib.parse import parse_qs, urlparse
 
 import typer
-from warcraft_api.cache import redacted_redis_url
+from warcraft_api.cache import cache_backend_health, redacted_redis_url
 from warcraft_core.analytics import numeric_summary
 from warcraft_core.auth import (
     delete_provider_auth_state,
@@ -375,6 +376,102 @@ def _float_option(*param_decls: str, help: str) -> Any:
     return typer.Option(None, *param_decls, help=help, parser=_finite_float, metavar="FLOAT")
 
 
+def _epoch_ms(value: str) -> float:
+    """A report-range bound: an ISO-8601 date or time (UTC unless it carries an offset), or UNIX epoch milliseconds.
+
+    The date is tried first so a compact ``20260901`` is that day, not 20260901 ms after 1970.
+    """
+    try:
+        moment = datetime.fromisoformat(value.strip())
+    except ValueError:
+        try:
+            return _finite_float(value)
+        except typer.BadParameter:
+            raise typer.BadParameter(f"{value!r} is neither UNIX epoch milliseconds nor an ISO-8601 date.") from None
+    return (moment if moment.tzinfo else moment.replace(tzinfo=UTC)).timestamp() * 1000
+
+
+def _epoch_ms_option(*param_decls: str, help: str) -> Any:
+    return typer.Option(None, *param_decls, help=help, parser=_epoch_ms, metavar="EPOCH_MS|DATE")
+
+
+# Warcraft Logs' retail raid difficulty ids; `warcraftlogs zone <id>` lists the ones a zone has.
+_DIFFICULTY_IDS = {"lfr": 1, "normal": 3, "heroic": 4, "mythic": 5}
+
+
+def _difficulty_id(value: str) -> int:
+    """A ``--difficulty`` value: a Warcraft Logs difficulty id, or lfr/normal/heroic/mythic for its retail id."""
+    text = value.strip().lower()
+    if text in _DIFFICULTY_IDS:
+        return _DIFFICULTY_IDS[text]
+    try:
+        return int(text)
+    except ValueError:
+        raise typer.BadParameter(
+            f"{value!r} is not a difficulty: use an id or lfr (1), normal (3), heroic (4) or mythic (5)."
+        ) from None
+
+
+def _difficulty_option(help: str = "Optional difficulty filter.") -> Any:
+    return typer.Option(
+        None,
+        "--difficulty",
+        help=f"{help} An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's).",
+        parser=_difficulty_id,
+        metavar="DIFFICULTY",
+    )
+
+
+def _graphql_enum_option(
+    flag: str, values: tuple[str, ...], *, help: str, default: str | None = None, aliases: dict[str, str] | None = None
+) -> Any:
+    """An optional flag for one Warcraft Logs GraphQL enum, checked locally so a typo fails with the valid values.
+
+    Matching ignores case, hyphens, underscores and spaces (``damage-done`` is ``DamageDone``).
+    """
+    by_key = {value.lower(): value for value in values} | (aliases or {})
+
+    def parse(text: str) -> str:
+        key = re.sub(r"[-_\s]+", "", text).lower()
+        if key not in by_key:
+            raise typer.BadParameter(f"{text!r} is not one of: {', '.join(values)}.")
+        return by_key[key]
+
+    return typer.Option(default, flag, help=f"{help} One of: {', '.join(values)}.", parser=parse, metavar="TEXT")
+
+
+_HOSTILITY_TYPES = ("Friendlies", "Enemies")
+_KILL_TYPES = ("All", "Encounters", "Kills", "Trash", "Wipes")
+_VIEW_TYPES = ("Default", "Ability", "Source", "Target")
+# TableDataType and GraphDataType share these values; EventDataType swaps Summary and Survivability for All and CombatantInfo.
+_TABLE_DATA_TYPES = (
+    "Summary", "Buffs", "Casts", "DamageDone", "DamageTaken", "Deaths", "Debuffs", "Dispels", "Healing", "Interrupts",
+    "Resources", "Summons", "Survivability", "Threat",
+)
+_EVENT_DATA_TYPES = (
+    "All", "Buffs", "Casts", "CombatantInfo", "DamageDone", "DamageTaken", "Deaths", "Debuffs", "Dispels", "Healing",
+    "Interrupts", "Resources", "Summons", "Threat",
+)
+_HOSTILITY_OPTION = _graphql_enum_option("--hostility-type", _HOSTILITY_TYPES, help="Optional hostility filter.")
+_KILL_TYPE_OPTION = _graphql_enum_option("--kill-type", _KILL_TYPES, help="Optional kill filter.")
+_VIEW_BY_OPTION = _graphql_enum_option("--view-by", _VIEW_TYPES, help="Optional view grouping.")
+# Specs Warcraft Logs ranks on healing; every one of these names is a healer for each class that has it.
+_HEALER_SPEC_SLUGS = frozenset({"Discipline", "Holy", "Mistweaver", "Preservation", "Restoration"})
+# Warcraft Logs' difficulty id for a Mythic+ (keystone dungeon) zone or fight.
+_DUNGEON_DIFFICULTY = 10
+
+
+def _default_ranking_metric(zone: dict[str, Any], spec_slug: str | None) -> str:
+    """The metric encounter-rankings sends when ``--metric`` is omitted, so ``query.metric`` names what ranked the rows.
+
+    Warcraft Logs' own default is score in a Mythic+ zone and dps in a raid zone, healers included, so a healer spec
+    is ranked on hps only in a raid zone.
+    """
+    if any(isinstance(row, dict) and row.get("id") == _DUNGEON_DIFFICULTY for row in list_at(zone, "difficulties")):
+        return "playerscore"
+    return "hps" if spec_slug in _HEALER_SPEC_SLUGS else "dps"
+
+
 def _load_graphql_query(ctx: typer.Context, query: str | None, *, introspect: bool) -> str:
     if introspect:
         return WARCRAFTLOGS_INTROSPECTION_QUERY
@@ -392,6 +489,8 @@ def _load_graphql_query(ctx: typer.Context, query: str | None, *, introspect: bo
         path = Path(path_text).expanduser()
         try:
             loaded = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            _fail(ctx, "not_found", f"GraphQL query file {str(path)!r} does not exist.")
         except (OSError, UnicodeDecodeError) as exc:
             _fail(ctx, "invalid_query", f"Could not read GraphQL query file {str(path)!r}: {exc}")
     else:
@@ -557,27 +656,6 @@ def _validated_transport_packet(ctx: typer.Context, packet: Any, *, command_name
         return validate_talent_transport_packet(packet)
     except ValueError as exc:
         _fail(ctx, "invalid_transport_packet", f"{command_name} produced an invalid talent transport packet: {exc}")
-
-
-def _normalize_graphql_enum(value: str | None) -> str | None:
-    if not value:
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    if any(sep in text for sep in ("-", "_", " ")):
-        parts = [part for part in re.split(r"[-_\s]+", text) if part]
-        return "".join(part[:1].upper() + part[1:] for part in parts)
-    if text.islower():
-        return text[:1].upper() + text[1:]
-    return text
-
-
-def _normalize_hard_mode_level_rank_filter(value: str | None) -> str | None:
-    normalized = _normalize_graphql_enum(value)
-    if normalized == "NoHardMode":
-        return "NormalMode"
-    return normalized
 
 
 # characterRankings takes Warcraft Logs' own CamelCase slugs ("DeathKnight", "BeastMastery") and
@@ -1027,6 +1105,7 @@ def _doctor_cache_payload() -> dict[str, Any]:
         "redis_url": redacted_redis_url(settings.redis_url),
         "prefix": settings.prefix,
         "ttls": {"guild": guild_ttl, "static": static_ttl, "reports": report_ttl, "finished_report": finished_report_ttl},
+        **cache_backend_health(settings),
     }
 
 
@@ -1047,12 +1126,14 @@ def _doctor_payload(*, live: bool, site: WarcraftLogsSiteProfile) -> dict[str, A
         live=live,
         site=site,
     )
+    cache = _doctor_cache_payload()
     return {
-        # Every data command needs the public API, so without it the provider is degraded.
-        "status": "ready" if public_api_access["ready"] else "degraded",
+        # Every data command needs the public API, so without it the provider is degraded, as it is
+        # when a Redis cache does not answer.
+        "status": "ready" if public_api_access["ready"] and cache.get("available") is not False else "degraded",
         "installed": True,
         "language": "python",
-        "cache": _doctor_cache_payload(),
+        "cache": cache,
         "site_profile": _site_profile_payload(site),
         "auth": {
             "required": True,
@@ -2330,11 +2411,11 @@ def _resolve_encounter(
     ctx: typer.Context,
     *,
     client: WarcraftLogsClient,
+    zone: dict[str, Any],
     zone_id: int,
     boss_id: int | None,
     boss_name: str | None,
 ) -> dict[str, Any]:
-    zone = client.zone(zone_id=zone_id)
     encounters = [row for row in (list_at(zone, "encounters")) if isinstance(row, dict)]
     if boss_id is not None:
         return _resolve_encounter_by_id(
@@ -3268,6 +3349,32 @@ def _report_player_details_payload(report: dict[str, Any], *, report_code: str |
     }
 
 
+def _raid_fight_ids(report: dict[str, Any]) -> set[Any]:
+    """The ranked fights of ``report`` that are not Mythic+ runs."""
+    return {
+        row.get("fightID")
+        for row in list_at(dict_at(report, "rankings"), "data")
+        if isinstance(row, dict) and row.get("difficulty") != _DUNGEON_DIFFICULTY
+    }
+
+
+def _with_healers_from(report: dict[str, Any], healer_report: dict[str, Any]) -> dict[str, Any]:
+    """``report``'s rankings with each raid fight's healer role taken from the same fight in ``healer_report``."""
+    raid_fights = _raid_fight_ids(report)
+    healers_by_fight = {
+        row.get("fightID"): dict_at(row, "roles").get("healers")
+        for row in list_at(dict_at(healer_report, "rankings"), "data")
+        if isinstance(row, dict) and row.get("fightID") in raid_fights
+    }
+    rows = [
+        {**row, "roles": {**dict_at(row, "roles"), "healers": healers_by_fight[row.get("fightID")]}}
+        if isinstance(row, dict) and healers_by_fight.get(row.get("fightID")) is not None
+        else row
+        for row in list_at(dict_at(report, "rankings"), "data")
+    ]
+    return {**report, "rankings": {**dict_at(report, "rankings"), "data": rows}}
+
+
 def _report_rankings_payload(report: dict[str, Any]) -> dict[str, Any]:
     rankings = report.get("rankings")
     rows = rankings.get("data") if isinstance(rankings, dict) else []
@@ -4079,7 +4186,14 @@ def server(
 @app.command("zones")
 def zones(
     ctx: typer.Context,
-    expansion_id: int | None = typer.Option(None, "--expansion-id", help="Optional Warcraft Logs expansion ID filter."),
+    expansion_id: int | None = typer.Option(
+        None,
+        "--expansion-id",
+        help=(
+            "Optional Warcraft Logs expansion ID filter: 7 = Midnight, 6 = The War Within "
+            "(`warcraftlogs expansions` lists them; Raider.IO numbers expansions differently)."
+        ),
+    ),
 ) -> None:
     """List zones, optionally filtered to one expansion."""
     client = _client(ctx)
@@ -4192,13 +4306,19 @@ def _run_encounter_rankings(ctx: typer.Context, request: _EncounterRankingsReque
         _check_region(ctx, request.server_region)
     client = _client(ctx)
     try:
+        zone = client.zone(zone_id=request.zone_id)
         encounter_payload = _resolve_encounter(
             ctx,
             client=client,
+            zone=zone,
             zone_id=request.zone_id,
             boss_id=request.boss_id,
             boss_name=request.boss_name,
         )
+        if request.options.metric is None:
+            request = replace(
+                request, options=replace(request.options, metric=_default_ranking_metric(zone, request.options.spec_name))
+            )
         rankings_payload = client.encounter_rankings(
             encounter_id=int(encounter_payload["id"]),
             options=request.options,
@@ -4231,17 +4351,27 @@ def encounter_rankings(
     boss_id: int | None = typer.Option(None, "--boss-id", help="Encounter ID to rank."),
     boss_name: str | None = typer.Option(None, "--boss-name", help="Encounter name to resolve within the selected zone."),
     bracket: int | None = typer.Option(None, "--bracket", help="Optional Warcraft Logs bracket filter."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    difficulty: int | None = _difficulty_option(),
     class_name: str | None = typer.Option(None, "--class-name", help="Optional class filter (Death Knight, death-knight, dk)."),
     spec_name: str | None = typer.Option(None, "--spec-name", help="Optional spec filter (Beast Mastery, beast-mastery, bm)."),
-    metric: str | None = typer.Option(None, "--metric", help="Optional ranking metric such as dps, hps, or bossdps."),
+    metric: str | None = typer.Option(
+        None,
+        "--metric",
+        help="Ranking metric such as dps, hps, or bossdps. Defaults to playerscore in a Mythic+ zone; "
+        "in a raid zone hps for a healer --spec-name, else dps.",
+    ),
     page: int | None = typer.Option(None, "--page", min=1, help="Optional rankings page number."),
     partition: int | None = typer.Option(None, "--partition", help="Optional Warcraft Logs partition filter."),
     size: int | None = typer.Option(None, "--size", help="Optional raid size filter."),
     server_region: str | None = typer.Option(None, "--server-region", help="Optional server region filter."),
     server_slug: str | None = typer.Option(None, "--server-slug", help="Optional server slug filter."),
-    leaderboard: str | None = typer.Option(None, "--leaderboard", help="Optional leaderboard enum filter."),
-    hard_mode_level: str | None = typer.Option(None, "--hard-mode-level", help="Optional hard-mode-level enum filter."),
+    leaderboard: str | None = _graphql_enum_option("--leaderboard", ("Any", "LogsOnly"), help="Optional leaderboard filter."),
+    hard_mode_level: str | None = _graphql_enum_option(
+        "--hard-mode-level",
+        ("Any", "Highest", "NormalMode", "Level0", "Level1", "Level2", "Level3", "Level4"),
+        help="Optional hard-mode-level filter (no-hard-mode is NormalMode).",
+        aliases={"nohardmode": "NormalMode"},
+    ),
     filter_text: str | None = typer.Option(None, "--filter", help="Optional Warcraft Logs advanced encounter ranking filter string."),
     include_combatant_info: bool | None = typer.Option(
         None,
@@ -4253,7 +4383,7 @@ def encounter_rankings(
         "--include-other-players/--no-include-other-players",
         help="Optional toggle for other players in the clear.",
     ),
-    top: int = typer.Option(10, "--top", min=1, max=100, help="Maximum returned ranking rows after normalization."),
+    top: int = typer.Option(10, "--limit", "--top", min=1, max=100, help="Maximum returned ranking rows after normalization."),
 ) -> None:
     """Rank characters on one encounter, filtered by class, spec, difficulty, and server."""
     class_slug, spec_slug = _ranking_class_and_spec(ctx, class_name, spec_name)
@@ -4275,8 +4405,8 @@ def encounter_rankings(
                 size=size,
                 server_region=server_region,
                 server_slug=server_slug,
-                leaderboard=_normalize_graphql_enum(leaderboard),
-                hard_mode_level=_normalize_hard_mode_level_rank_filter(hard_mode_level),
+                leaderboard=leaderboard,
+                hard_mode_level=hard_mode_level,
                 metric=metric,
                 filter=filter_text,
                 include_combatant_info=include_combatant_info,
@@ -4323,7 +4453,7 @@ def guild_rankings(
     name: str = typer.Argument(..., help="Guild name."),
     zone_id: int | None = typer.Option(None, "--zone-id", help="Optional Warcraft Logs zone ID."),
     size: int | None = typer.Option(None, "--size", help="Optional raid size."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID for speed ranks."),
+    difficulty: int | None = _difficulty_option("Optional difficulty for speed ranks."),
 ) -> None:
     """Show a guild's progress and speed rankings for one zone."""
     client = _client(ctx)
@@ -4450,11 +4580,11 @@ def character_rankings(
     realm: str = typer.Argument(..., help="Character realm slug or name."),
     name: str = typer.Argument(..., help="Character name."),
     zone_id: int | None = typer.Option(None, "--zone-id", help="Optional Warcraft Logs zone ID."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID."),
+    difficulty: int | None = _difficulty_option(),
     metric: str | None = typer.Option(None, "--metric", help="Optional ranking metric such as dps, hps, or tankhps."),
     size: int | None = typer.Option(None, "--size", help="Optional raid size."),
     spec_name: str | None = typer.Option(None, "--spec-name", help="Optional spec filter (Beast Mastery, beast-mastery, bm)."),
-    top: int = typer.Option(5, "--top", min=1, max=20, help="Number of top ranking rows to keep in the summary."),
+    top: int = typer.Option(5, "--limit", "--top", min=1, max=20, help="Number of top ranking rows to keep in the summary."),
 ) -> None:
     """Show a character's encounter rankings for one zone."""
     # The spec list is retail's; a classic site has specs it lacks (Combat), so only retail is checked.
@@ -4528,8 +4658,8 @@ def reports(
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild name for guild-scoped report queries."),
     limit: int = typer.Option(25, "--limit", min=1, max=100, help="Reports per page."),
     page: int = typer.Option(1, "--page", min=1, help="Page number."),
-    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _epoch_ms_option("--start-time", help="Report-range start: UNIX epoch ms or ISO-8601 date (UTC)."),
+    end_time: float | None = _epoch_ms_option("--end-time", help="Report-range end: UNIX epoch ms or ISO-8601 date (UTC)."),
     zone_id: int | None = typer.Option(None, "--zone-id", help="Optional Warcraft Logs zone filter."),
     game_zone_id: int | None = typer.Option(None, "--game-zone-id", help="Optional game zone filter."),
 ) -> None:
@@ -4582,8 +4712,8 @@ def guild_reports(
     name: str = typer.Argument(..., help="Guild name."),
     limit: int = typer.Option(25, "--limit", min=1, max=100, help="Reports per page."),
     page: int = typer.Option(1, "--page", min=1, help="Page number."),
-    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _epoch_ms_option("--start-time", help="Report-range start: UNIX epoch ms or ISO-8601 date (UTC)."),
+    end_time: float | None = _epoch_ms_option("--end-time", help="Report-range end: UNIX epoch ms or ISO-8601 date (UTC)."),
     zone_id: int | None = typer.Option(None, "--zone-id", help="Optional Warcraft Logs zone filter."),
     game_zone_id: int | None = typer.Option(None, "--game-zone-id", help="Optional game zone filter."),
 ) -> None:
@@ -4643,7 +4773,14 @@ def _validate_cohort_scope(ctx: typer.Context, client: WarcraftLogsClient, scope
     # a classic site has specs the retail list lacks (Combat).
     if scope.spec_name and client.site.key == RETAIL_PROFILE.key and not retail_specs_named(scope.spec_name):
         _fail(ctx, "invalid_query", f"Unknown --spec-name {scope.spec_name!r}; {_SPEC_NAME_HINT}")
-    encounter = _resolve_encounter(ctx, client=client, zone_id=scope.zone_id, boss_id=scope.boss_id, boss_name=scope.boss_name)
+    encounter = _resolve_encounter(
+        ctx,
+        client=client,
+        zone=client.zone(zone_id=scope.zone_id),
+        zone_id=scope.zone_id,
+        boss_id=scope.boss_id,
+        boss_name=scope.boss_name,
+    )
     return replace(scope, boss_id=encounter["id"], boss_name=None)
 
 
@@ -4755,7 +4892,7 @@ def _fastest_kills_command(kind: str, summary: str) -> Callable[..., None]:
         zone_id: int = typer.Option(..., "--zone-id", help="Warcraft Logs zone ID to sample reports from."),
         boss_id: int | None = typer.Option(None, "--boss-id", help="Encounter ID to match."),
         boss_name: str | None = typer.Option(None, "--boss-name", help="Boss name to match within sampled fights."),
-        difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+        difficulty: int | None = _difficulty_option(),
         spec_name: str | None = typer.Option(
             None,
             "--spec-name",
@@ -4763,11 +4900,11 @@ def _fastest_kills_command(kind: str, summary: str) -> Callable[..., None]:
         ),
         kill_time_min: float | None = _float_option("--kill-time-min", help="Optional minimum kill time in seconds."),
         kill_time_max: float | None = _float_option("--kill-time-max", help="Optional maximum kill time in seconds."),
-        top: int = typer.Option(10, "--top", min=1, max=100, help="Maximum returned kill rows after ranking."),
+        top: int = typer.Option(10, "--limit", "--top", min=1, max=100, help="Maximum returned kill rows after ranking."),
         report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
         reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
-        start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
-        end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
+        start_time: float | None = _epoch_ms_option("--start-time", help="Report-range start: UNIX epoch ms or ISO-8601 date (UTC)."),
+        end_time: float | None = _epoch_ms_option("--end-time", help="Report-range end: UNIX epoch ms or ISO-8601 date (UTC)."),
         guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
         guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
         guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
@@ -4828,14 +4965,14 @@ def spec_kill_samples(
     ),
     boss_id: int | None = typer.Option(None, "--boss-id", help="Encounter ID to match."),
     boss_name: str | None = typer.Option(None, "--boss-name", help="Boss name to match within sampled fights."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    difficulty: int | None = _difficulty_option(),
     kill_time_min: float | None = _float_option("--kill-time-min", help="Optional minimum kill time in seconds."),
     kill_time_max: float | None = _float_option("--kill-time-max", help="Optional maximum kill time in seconds."),
-    top: int = typer.Option(10, "--top", min=1, max=100, help="Maximum returned kill rows after ranking."),
+    top: int = typer.Option(10, "--limit", "--top", min=1, max=100, help="Maximum returned kill rows after ranking."),
     report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
     reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
-    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _epoch_ms_option("--start-time", help="Report-range start: UNIX epoch ms or ISO-8601 date (UTC)."),
+    end_time: float | None = _epoch_ms_option("--end-time", help="Report-range end: UNIX epoch ms or ISO-8601 date (UTC)."),
     guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
@@ -4883,7 +5020,7 @@ def boss_spec_usage(
     zone_id: int = typer.Option(..., "--zone-id", help="Warcraft Logs zone ID to sample reports from."),
     boss_id: int | None = typer.Option(None, "--boss-id", help="Encounter ID to match."),
     boss_name: str | None = typer.Option(None, "--boss-name", help="Boss name to match within sampled fights."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    difficulty: int | None = _difficulty_option(),
     spec_name: str | None = typer.Option(
         None,
         "--spec-name",
@@ -4891,11 +5028,11 @@ def boss_spec_usage(
     ),
     kill_time_min: float | None = _float_option("--kill-time-min", help="Optional minimum kill time in seconds."),
     kill_time_max: float | None = _float_option("--kill-time-max", help="Optional maximum kill time in seconds."),
-    top: int = typer.Option(10, "--top", min=1, max=100, help="Maximum returned spec rows after ranking."),
+    top: int = typer.Option(10, "--limit", "--top", min=1, max=100, help="Maximum returned spec rows after ranking."),
     report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
     reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
-    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _epoch_ms_option("--start-time", help="Report-range start: UNIX epoch ms or ISO-8601 date (UTC)."),
+    end_time: float | None = _epoch_ms_option("--end-time", help="Report-range end: UNIX epoch ms or ISO-8601 date (UTC)."),
     guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
@@ -4943,7 +5080,7 @@ def ability_usage_summary(
     ability_id: int = typer.Option(..., "--ability-id", help="Ability game ID to summarize across the sampled kill cohort."),
     boss_id: int | None = typer.Option(None, "--boss-id", help="Encounter ID to match."),
     boss_name: str | None = typer.Option(None, "--boss-name", help="Boss name to match within sampled fights."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    difficulty: int | None = _difficulty_option(),
     spec_name: str | None = typer.Option(
         None,
         "--spec-name",
@@ -4956,8 +5093,8 @@ def ability_usage_summary(
     event_limit: int = typer.Option(200, "--event-limit", min=1, max=5000, help="Maximum cast events to request per sampled kill."),
     report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
     reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
-    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _epoch_ms_option("--start-time", help="Report-range start: UNIX epoch ms or ISO-8601 date (UTC)."),
+    end_time: float | None = _epoch_ms_option("--end-time", help="Report-range end: UNIX epoch ms or ISO-8601 date (UTC)."),
     guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
@@ -5005,7 +5142,7 @@ def comp_samples(
     zone_id: int = typer.Option(..., "--zone-id", help="Warcraft Logs zone ID to sample reports from."),
     boss_id: int | None = typer.Option(None, "--boss-id", help="Encounter ID to match."),
     boss_name: str | None = typer.Option(None, "--boss-name", help="Boss name to match within sampled fights."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    difficulty: int | None = _difficulty_option(),
     spec_name: str | None = typer.Option(
         None,
         "--spec-name",
@@ -5013,11 +5150,11 @@ def comp_samples(
     ),
     kill_time_min: float | None = _float_option("--kill-time-min", help="Optional minimum kill time in seconds."),
     kill_time_max: float | None = _float_option("--kill-time-max", help="Optional maximum kill time in seconds."),
-    top: int = typer.Option(10, "--top", min=1, max=100, help="Maximum returned sampled kill rows after ranking."),
+    top: int = typer.Option(10, "--limit", "--top", min=1, max=100, help="Maximum returned sampled kill rows after ranking."),
     report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
     reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
-    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _epoch_ms_option("--start-time", help="Report-range start: UNIX epoch ms or ISO-8601 date (UTC)."),
+    end_time: float | None = _epoch_ms_option("--end-time", help="Report-range end: UNIX epoch ms or ISO-8601 date (UTC)."),
     guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
@@ -5260,8 +5397,10 @@ def report_encounter_casts(
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
-    hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
-    limit: int = typer.Option(200, "--limit", min=1, max=10000, help="Maximum cast events to request from Warcraft Logs."),
+    hostility_type: str | None = _HOSTILITY_OPTION,
+    limit: int = typer.Option(
+        200, "--event-limit", "--limit", min=1, max=10000, help="Maximum cast events to request from Warcraft Logs."
+    ),
     preview_limit: int = typer.Option(20, "--preview-limit", min=1, max=200, help="Maximum preview cast rows to return."),
     window_start_ms: float | None = _float_option("--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = _float_option("--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
@@ -5278,7 +5417,6 @@ def report_encounter_casts(
             fight_id=fight_id,
             allow_unlisted=allow_unlisted,
         )
-        normalized_hostility_type = _normalize_graphql_enum(hostility_type)
         options, query = _encounter_filter_options(
             ctx,
             fight,
@@ -5287,7 +5425,7 @@ def report_encounter_casts(
                 data_type="Casts",
                 source_id=source_id,
                 target_id=target_id,
-                hostility_type=normalized_hostility_type,
+                hostility_type=hostility_type,
                 translate=translate,
                 limit=limit,
                 window_start_ms=window_start_ms,
@@ -5343,8 +5481,8 @@ def report_encounter_buffs(
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
-    hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
-    view_by: str | None = typer.Option("source", "--view-by", help="Optional table view grouping."),
+    hostility_type: str | None = _HOSTILITY_OPTION,
+    view_by: str = _graphql_enum_option("--view-by", _VIEW_TYPES, help="Table view grouping.", default="Source"),
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
     preview_limit: int = typer.Option(20, "--preview-limit", min=1, max=200, help="Maximum preview buff rows to return."),
     window_start_ms: float | None = _float_option("--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
@@ -5362,8 +5500,6 @@ def report_encounter_buffs(
             fight_id=fight_id,
             allow_unlisted=allow_unlisted,
         )
-        normalized_hostility_type = _normalize_graphql_enum(hostility_type)
-        normalized_view_by = _normalize_graphql_enum(view_by)
         options, query = _encounter_filter_options(
             ctx,
             fight,
@@ -5372,9 +5508,9 @@ def report_encounter_buffs(
                 data_type="Buffs",
                 source_id=source_id,
                 target_id=target_id,
-                hostility_type=normalized_hostility_type,
+                hostility_type=hostility_type,
                 translate=translate,
-                view_by=normalized_view_by,
+                view_by=view_by,
                 wipe_cutoff=wipe_cutoff,
                 window_start_ms=window_start_ms,
                 window_end_ms=window_end_ms,
@@ -5408,7 +5544,7 @@ def report_encounter_buffs(
                 table_report=table_report,
                 master_report=master_report,
                 preview_limit=preview_limit,
-                view_by=normalized_view_by,
+                view_by=view_by,
                 ability_id=int(ability_id) if ability_id is not None else None,
             ),
         },
@@ -5425,7 +5561,7 @@ def report_encounter_aura_summary(
         None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
-    hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
+    hostility_type: str | None = _HOSTILITY_OPTION,
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
     window_start_ms: float | None = _float_option("--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = _float_option("--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
@@ -5443,7 +5579,6 @@ def report_encounter_aura_summary(
             fight_id=fight_id,
             allow_unlisted=allow_unlisted,
         )
-        normalized_hostility_type = _normalize_graphql_enum(hostility_type)
         options, query = _encounter_filter_options(
             ctx,
             fight,
@@ -5452,7 +5587,7 @@ def report_encounter_aura_summary(
                 data_type="Buffs",
                 source_id=source_id,
                 target_id=target_id,
-                hostility_type=normalized_hostility_type,
+                hostility_type=hostility_type,
                 translate=translate,
                 view_by="Source",
                 wipe_cutoff=wipe_cutoff,
@@ -5630,7 +5765,9 @@ def report_encounter_aura_compare(
     right_label: str = typer.Option("right", "--right-label", help="Label for the right comparison window."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter applied to both windows."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter applied to both windows."),
-    hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter applied to both windows."),
+    hostility_type: str | None = _graphql_enum_option(
+        "--hostility-type", _HOSTILITY_TYPES, help="Optional hostility filter applied to both windows."
+    ),
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff applied to both windows."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
@@ -5643,7 +5780,7 @@ def report_encounter_aura_compare(
         data_type="Buffs",
         source_id=source_id,
         target_id=target_id,
-        hostility_type=_normalize_graphql_enum(hostility_type),
+        hostility_type=hostility_type,
         translate=translate,
         view_by="Source",
         wipe_cutoff=wipe_cutoff,
@@ -5685,7 +5822,7 @@ def _damage_summary_command(actor_field: Literal["source", "target"]) -> Callabl
         source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
         target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
         ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
-        hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
+        hostility_type: str | None = _HOSTILITY_OPTION,
         wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
         window_start_ms: float | None = _float_option(
             "--window-start-ms", help="Optional encounter-relative start offset in milliseconds."
@@ -5704,7 +5841,6 @@ def _damage_summary_command(actor_field: Literal["source", "target"]) -> Callabl
                 fight_id=fight_id,
                 allow_unlisted=allow_unlisted,
             )
-            normalized_hostility_type = _normalize_graphql_enum(hostility_type)
             options, query = _encounter_filter_options(
                 ctx,
                 fight,
@@ -5713,7 +5849,7 @@ def _damage_summary_command(actor_field: Literal["source", "target"]) -> Callabl
                     data_type="DamageDone",
                     source_id=source_id,
                     target_id=target_id,
-                    hostility_type=normalized_hostility_type,
+                    hostility_type=hostility_type,
                     translate=translate,
                     view_by=actor_field.capitalize(),
                     wipe_cutoff=wipe_cutoff,
@@ -5769,8 +5905,8 @@ def report_encounter_damage_breakdown(
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
-    hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
-    view_by: str | None = typer.Option("source", "--view-by", help="Optional table view grouping."),
+    hostility_type: str | None = _HOSTILITY_OPTION,
+    view_by: str = _graphql_enum_option("--view-by", _VIEW_TYPES, help="Table view grouping.", default="Source"),
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
     window_start_ms: float | None = _float_option("--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = _float_option("--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
@@ -5787,8 +5923,6 @@ def report_encounter_damage_breakdown(
             fight_id=fight_id,
             allow_unlisted=allow_unlisted,
         )
-        normalized_hostility_type = _normalize_graphql_enum(hostility_type)
-        normalized_view_by = _normalize_graphql_enum(view_by)
         options, query = _encounter_filter_options(
             ctx,
             fight,
@@ -5797,9 +5931,9 @@ def report_encounter_damage_breakdown(
                 data_type="DamageDone",
                 source_id=source_id,
                 target_id=target_id,
-                hostility_type=normalized_hostility_type,
+                hostility_type=hostility_type,
                 translate=translate,
-                view_by=normalized_view_by,
+                view_by=view_by,
                 wipe_cutoff=wipe_cutoff,
                 window_start_ms=window_start_ms,
                 window_end_ms=window_end_ms,
@@ -5835,7 +5969,7 @@ def kill_time_distribution(
     zone_id: int = typer.Option(..., "--zone-id", help="Warcraft Logs zone ID to sample reports from."),
     boss_id: int | None = typer.Option(None, "--boss-id", help="Encounter ID to match."),
     boss_name: str | None = typer.Option(None, "--boss-name", help="Boss name to match within sampled fights."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    difficulty: int | None = _difficulty_option(),
     spec_name: str | None = typer.Option(
         None,
         "--spec-name",
@@ -5845,8 +5979,8 @@ def kill_time_distribution(
     kill_time_max: float | None = _float_option("--kill-time-max", help="Optional maximum kill time in seconds."),
     report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
     reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
-    start_time: float | None = _float_option("--start-time", help="Optional report-range start time in milliseconds."),
-    end_time: float | None = _float_option("--end-time", help="Optional report-range end time in milliseconds."),
+    start_time: float | None = _epoch_ms_option("--start-time", help="Report-range start: UNIX epoch ms or ISO-8601 date (UTC)."),
+    end_time: float | None = _epoch_ms_option("--end-time", help="Report-range end: UNIX epoch ms or ISO-8601 date (UTC)."),
     guild_region: str | None = typer.Option(None, "--guild-region", help="Optional guild-region scope for report discovery."),
     guild_realm: str | None = typer.Option(None, "--guild-realm", help="Optional guild-realm scope for report discovery."),
     guild_name: str | None = typer.Option(None, "--guild-name", help="Optional guild-name scope for report discovery."),
@@ -5891,7 +6025,7 @@ def kill_time_distribution(
 def report_fights(
     ctx: typer.Context,
     code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    difficulty: int | None = _difficulty_option(),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """List the fights in one report."""
@@ -5982,7 +6116,7 @@ def graphql(
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Inject declared $encounterID variables."),
     start_time: float | None = _float_option("--start-time", help="Inject declared $startTime variables."),
     end_time: float | None = _float_option("--end-time", help="Inject declared $endTime variables."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Inject declared $difficulty variables."),
+    difficulty: int | None = _difficulty_option("Inject declared $difficulty variables."),
     zone_id: int | None = typer.Option(None, "--zone-id", help="Inject declared $zoneID variables."),
     source_id: int | None = typer.Option(None, "--source-id", help="Inject declared $sourceID variables."),
     target_id: int | None = typer.Option(None, "--target-id", help="Inject declared $targetID variables."),
@@ -6106,24 +6240,24 @@ def report_events(
     ctx: typer.Context,
     code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
     ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
-    data_type: str | None = typer.Option(
-        None,
+    data_type: str | None = _graphql_enum_option(
         "--data-type",
+        _EVENT_DATA_TYPES,
         help=(
-            "Event data type (e.g. casts, damage-done, healing). Strongly recommended; "
+            "Event data type. Strongly recommended; "
             "without it Warcraft Logs returns events.data: null even on valid scoped slices."
         ),
     ),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    difficulty: int | None = _difficulty_option(),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
-    end_time: float | None = _float_option("--end-time", help="Optional event-range end timestamp."),
+    end_time: float | None = _float_option("--end-time", help="Optional event-range end, in milliseconds from the report start."),
     fight_id: list[int] | None = FIGHT_ID_OPTION,
     filter_expression: str | None = typer.Option(None, "--filter-expression", help="Optional Warcraft Logs filter expression."),
-    hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
-    kill_type: str | None = typer.Option(None, "--kill-type", help="Optional kill filter."),
+    hostility_type: str | None = _HOSTILITY_OPTION,
+    kill_type: str | None = _KILL_TYPE_OPTION,
     limit: int | None = typer.Option(None, "--limit", min=1, max=10000, help="Optional page event limit."),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor ID filter."),
-    start_time: float | None = _float_option("--start-time", help="Optional event-range start timestamp."),
+    start_time: float | None = _float_option("--start-time", help="Optional event-range start, in milliseconds from the report start."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor ID filter."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
@@ -6132,14 +6266,14 @@ def report_events(
     code, fight_id = _report_code_and_fights(ctx, code, fight_id)
     options = ReportFilterOptions(
         ability_id=ability_id,
-        data_type=_normalize_graphql_enum(data_type),
+        data_type=data_type,
         difficulty=difficulty,
         encounter_id=encounter_id,
         end_time=end_time,
         fight_ids=fight_id,
         filter_expression=filter_expression,
-        hostility_type=_normalize_graphql_enum(hostility_type),
-        kill_type=_normalize_graphql_enum(kill_type),
+        hostility_type=hostility_type,
+        kill_type=kill_type,
         limit=limit,
         source_id=source_id,
         start_time=start_time,
@@ -6161,19 +6295,19 @@ def report_table(
     ctx: typer.Context,
     code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
     ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
-    data_type: str | None = typer.Option(None, "--data-type", help="Optional table data type."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    data_type: str | None = _graphql_enum_option("--data-type", _TABLE_DATA_TYPES, help="Optional table data type."),
+    difficulty: int | None = _difficulty_option(),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
-    end_time: float | None = _float_option("--end-time", help="Optional event-range end timestamp."),
+    end_time: float | None = _float_option("--end-time", help="Optional event-range end, in milliseconds from the report start."),
     fight_id: list[int] | None = FIGHT_ID_OPTION,
     filter_expression: str | None = typer.Option(None, "--filter-expression", help="Optional Warcraft Logs filter expression."),
-    hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
-    kill_type: str | None = typer.Option(None, "--kill-type", help="Optional kill filter."),
+    hostility_type: str | None = _HOSTILITY_OPTION,
+    kill_type: str | None = _KILL_TYPE_OPTION,
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor ID filter."),
-    start_time: float | None = _float_option("--start-time", help="Optional event-range start timestamp."),
+    start_time: float | None = _float_option("--start-time", help="Optional event-range start, in milliseconds from the report start."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor ID filter."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
-    view_by: str | None = typer.Option(None, "--view-by", help="Optional view grouping."),
+    view_by: str | None = _VIEW_BY_OPTION,
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
@@ -6185,19 +6319,19 @@ def report_table(
         allow_unlisted=allow_unlisted,
         options=ReportFilterOptions(
             ability_id=ability_id,
-            data_type=_normalize_graphql_enum(data_type),
+            data_type=data_type,
             difficulty=difficulty,
             encounter_id=encounter_id,
             end_time=end_time,
             fight_ids=fight_id,
             filter_expression=filter_expression,
-            hostility_type=_normalize_graphql_enum(hostility_type),
-            kill_type=_normalize_graphql_enum(kill_type),
+            hostility_type=hostility_type,
+            kill_type=kill_type,
             source_id=source_id,
             start_time=start_time,
             target_id=target_id,
             translate=translate,
-            view_by=_normalize_graphql_enum(view_by),
+            view_by=view_by,
             wipe_cutoff=wipe_cutoff,
         ),
         field="table",
@@ -6209,19 +6343,19 @@ def report_graph(
     ctx: typer.Context,
     code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
     ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
-    data_type: str | None = typer.Option(None, "--data-type", help="Optional graph data type."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    data_type: str | None = _graphql_enum_option("--data-type", _TABLE_DATA_TYPES, help="Optional graph data type."),
+    difficulty: int | None = _difficulty_option(),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
-    end_time: float | None = _float_option("--end-time", help="Optional event-range end timestamp."),
+    end_time: float | None = _float_option("--end-time", help="Optional event-range end, in milliseconds from the report start."),
     fight_id: list[int] | None = FIGHT_ID_OPTION,
     filter_expression: str | None = typer.Option(None, "--filter-expression", help="Optional Warcraft Logs filter expression."),
-    hostility_type: str | None = typer.Option(None, "--hostility-type", help="Optional hostility filter."),
-    kill_type: str | None = typer.Option(None, "--kill-type", help="Optional kill filter."),
+    hostility_type: str | None = _HOSTILITY_OPTION,
+    kill_type: str | None = _KILL_TYPE_OPTION,
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor ID filter."),
-    start_time: float | None = _float_option("--start-time", help="Optional event-range start timestamp."),
+    start_time: float | None = _float_option("--start-time", help="Optional event-range start, in milliseconds from the report start."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor ID filter."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
-    view_by: str | None = typer.Option(None, "--view-by", help="Optional view grouping."),
+    view_by: str | None = _VIEW_BY_OPTION,
     wipe_cutoff: int | None = typer.Option(None, "--wipe-cutoff", help="Optional wipe cutoff."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
@@ -6233,19 +6367,19 @@ def report_graph(
         allow_unlisted=allow_unlisted,
         options=ReportFilterOptions(
             ability_id=ability_id,
-            data_type=_normalize_graphql_enum(data_type),
+            data_type=data_type,
             difficulty=difficulty,
             encounter_id=encounter_id,
             end_time=end_time,
             fight_ids=fight_id,
             filter_expression=filter_expression,
-            hostility_type=_normalize_graphql_enum(hostility_type),
-            kill_type=_normalize_graphql_enum(kill_type),
+            hostility_type=hostility_type,
+            kill_type=kill_type,
             source_id=source_id,
             start_time=start_time,
             target_id=target_id,
             translate=translate,
-            view_by=_normalize_graphql_enum(view_by),
+            view_by=view_by,
             wipe_cutoff=wipe_cutoff,
         ),
         field="graph",
@@ -6290,17 +6424,17 @@ def report_master_data(
 def report_player_details(
     ctx: typer.Context,
     code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    difficulty: int | None = _difficulty_option(),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
-    end_time: float | None = _float_option("--end-time", help="Optional event-range end timestamp."),
+    end_time: float | None = _float_option("--end-time", help="Optional event-range end, in milliseconds from the report start."),
     fight_id: list[int] | None = FIGHT_ID_OPTION,
     include_combatant_info: bool | None = typer.Option(
         None,
         "--include-combatant-info/--no-include-combatant-info",
         help="Optional combatant detail toggle.",
     ),
-    kill_type: str | None = typer.Option(None, "--kill-type", help="Optional kill filter."),
-    start_time: float | None = _float_option("--start-time", help="Optional event-range start timestamp."),
+    kill_type: str | None = _KILL_TYPE_OPTION,
+    start_time: float | None = _float_option("--start-time", help="Optional event-range start, in milliseconds from the report start."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
@@ -6308,14 +6442,13 @@ def report_player_details(
     code, fight_id = _report_code_and_fights(ctx, code, fight_id)
     # Warcraft Logs answers a wider playerDetails query with an empty roster plus a GraphQL
     # warning, which reads as "this report has no players". Reject it here like report-events does.
-    normalized_kill_type = _normalize_graphql_enum(kill_type)
     options = ReportPlayerDetailsOptions(
         difficulty=difficulty,
         encounter_id=encounter_id,
         end_time=end_time,
         fight_ids=fight_id or None,
         include_combatant_info=include_combatant_info,
-        kill_type=normalized_kill_type,
+        kill_type=kill_type,
         start_time=start_time,
         translate=translate,
     )
@@ -6325,7 +6458,7 @@ def report_player_details(
         "end_time": end_time,
         "fight_ids": fight_id,
         "include_combatant_info": include_combatant_info,
-        "kill_type": normalized_kill_type,
+        "kill_type": kill_type,
         "start_time": start_time,
         "translate": translate,
     }
@@ -6382,34 +6515,30 @@ def report_player_details(
 def report_rankings(
     ctx: typer.Context,
     code: str = typer.Argument(..., help="Warcraft Logs report URL or report code."),
-    compare: str | None = typer.Option(None, "--compare", help="Optional compare mode such as rankings or parses."),
-    difficulty: int | None = typer.Option(None, "--difficulty", help="Optional difficulty ID filter."),
+    compare: str | None = _graphql_enum_option("--compare", ("Rankings", "Parses"), help="Optional compare mode."),
+    difficulty: int | None = _difficulty_option(),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
     fight_id: list[int] | None = FIGHT_ID_OPTION,
-    player_metric: str | None = typer.Option(None, "--player-metric", help="Optional player metric such as dps or hps."),
-    timeframe: str | None = typer.Option(None, "--timeframe", help="Optional timeframe such as today or historical."),
+    player_metric: str | None = typer.Option(
+        None,
+        "--player-metric",
+        help="Player metric such as dps or hps for every role. Defaults to Warcraft Logs' default "
+        "(dps for raid fights, score for Mythic+), with healers on hps in raid fights.",
+    ),
+    timeframe: str | None = _graphql_enum_option("--timeframe", ("Today", "Historical"), help="Optional ranking timeframe."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """Return the rankings attached to one report's fights."""
     code, fight_id = _report_code_and_fights(ctx, code, fight_id)
-    normalized_compare = _normalize_graphql_enum(compare)
-    normalized_timeframe = _normalize_graphql_enum(timeframe)
     options = ReportRankingsOptions(
-        compare=normalized_compare,
+        compare=compare,
         difficulty=difficulty,
         encounter_id=encounter_id,
         fight_ids=fight_id or None,
-        player_metric=player_metric,
-        timeframe=normalized_timeframe,
+        # Warcraft Logs' "default" is dps for a raid fight and score for a Mythic+ run, for every role.
+        player_metric=player_metric or "default",
+        timeframe=timeframe,
     )
-    query = {
-        "compare": normalized_compare,
-        "difficulty": difficulty,
-        "encounter_id": encounter_id,
-        "fight_ids": fight_id,
-        "player_metric": player_metric,
-        "timeframe": normalized_timeframe,
-    }
     client = _client(ctx)
     try:
         _require_matching_fight(
@@ -6422,6 +6551,14 @@ def report_rankings(
             difficulty=difficulty,
         )
         payload = client.report_rankings(code=code, allow_unlisted=allow_unlisted, options=options)
+        healer_metric = options.player_metric
+        # That default ranks raid healers on dps, so their hps ranking costs a second request.
+        if player_metric is None and _raid_fight_ids(payload):
+            healer_metric = "hps"
+            healer_payload = client.report_rankings(
+                code=code, allow_unlisted=allow_unlisted, options=replace(options, player_metric=healer_metric)
+            )
+            payload = _with_healers_from(payload, healer_payload)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
     finally:
@@ -6429,7 +6566,15 @@ def report_rankings(
     _emit(
         ctx,
         {
-            "query": query,
+            "query": {
+                "compare": compare,
+                "difficulty": difficulty,
+                "encounter_id": encounter_id,
+                "fight_ids": fight_id,
+                "player_metric": options.player_metric,
+                "healer_metric": healer_metric,
+                "timeframe": timeframe,
+            },
             **_report_rankings_payload(payload),
         },
         client=client,

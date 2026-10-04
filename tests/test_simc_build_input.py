@@ -207,6 +207,68 @@ def test_load_build_spec_extracts_class_and_spec_from_talents_url() -> None:
     assert spec.source_kind == "wowhead_talent_calc_url"
 
 
+@pytest.mark.parametrize(
+    ("actor_class", "spec_name", "expected"),
+    [("dk", "fdk", ("deathknight", "frost")), ("hunter", "bm", ("hunter", "beast_mastery")),
+     ("Death Knight", "Frost", ("deathknight", "frost")), ("dh", "veng", ("demonhunter", "vengeance"))],
+)
+def test_load_build_spec_reads_the_class_and_spec_shorthand_other_providers_take(
+    actor_class: str, spec_name: str, expected: tuple[str, str]
+) -> None:
+    """`--actor-class dk` and `--spec bm` were rejected as unknown, while every other provider takes them."""
+    spec = load_build_spec(
+        profile_path=None, build_file=None, build_text=None, talents=TalentStrings(talents="ABC123"),
+        actor_class=actor_class, spec_name=spec_name,
+    )
+
+    assert (spec.actor_class, spec.spec) == expected
+
+
+@pytest.mark.parametrize(
+    ("actor_class", "spec_name", "expected"),
+    [("mage", "fdk", ("mage", "fdk")), (None, "bm", ("hunter", "beast_mastery"))],
+    ids=["other-class-spec-stays-raw", "spec-fills-its-class"],
+)
+def test_load_build_spec_pairs_a_spec_shorthand_only_with_its_own_class(
+    actor_class: str | None, spec_name: str, expected: tuple[str, str]
+) -> None:
+    """`--actor-class mage --spec fdk` came back as mage frost; `--spec bm` alone still asked for a class."""
+    spec = load_build_spec(
+        profile_path=None, build_file=None, build_text=None, talents=TalentStrings(talents="ABC123"),
+        actor_class=actor_class, spec_name=spec_name,
+    )
+
+    assert (spec.actor_class, spec.spec) == expected
+
+
+def test_identify_build_refuses_an_apl_of_another_spec_than_the_build_names(tmp_path: Path) -> None:
+    """A Frost build read against mage_fire.simc used to walk the Fire rotation with ok:true."""
+    repo = _repo(tmp_path)
+    build_spec = BuildSpec(actor_class="mage", spec="frost", talents="FROST_HASH", source_kind="wowhead_talent_calc_url")
+
+    with (
+        patch("simc_cli.build_input.decode_build", side_effect=_decodes_only_as("mage", "frost", [])),
+        pytest.raises(UnknownClassSpecError, match="mage_fire is the mage fire APL"),
+    ):
+        identify_build(repo, build_spec, apl_path=tmp_path / "mage_fire.simc")
+
+
+def test_identify_build_checks_the_apl_against_the_spec_the_hash_decodes_as(tmp_path: Path) -> None:
+    """A Fire hash under a /talent-calc/mage/frost/ URL is Fire: the URL path is only a guess.
+
+    The APL check used to compare the URL path, so mage_frost.simc passed with ok:true and the
+    matching mage_fire.simc was refused.
+    """
+    repo = _repo(tmp_path)
+    build_spec = BuildSpec(actor_class="mage", spec="frost", talents="FIRE_HASH", source_kind="wowhead_talent_calc_url")
+
+    with patch("simc_cli.build_input.decode_build", side_effect=_decodes_only_as("mage", "fire", [])):
+        _, identity = identify_build(repo, build_spec, apl_path=tmp_path / "mage_fire.simc")
+        assert (identity.actor_class, identity.spec) == ("mage", "fire")
+        with pytest.raises(UnknownClassSpecError, match="The build is mage fire, but mage_frost is the mage frost APL"):
+            identify_build(repo, build_spec, apl_path=tmp_path / "mage_frost.simc")
+
+
 @pytest.mark.parametrize("prefix", ["ptr", "beta"])
 def test_load_build_spec_accepts_retail_ptr_and_beta_talent_calc_urls(prefix: str) -> None:
     """The Classic-era refusal must not catch Wowhead's retail PTR and Beta calculators."""
@@ -658,7 +720,7 @@ def test_identify_build_narrows_an_unverified_packet_to_the_apl_name_spec(tmp_pa
         # A renamed copy of mage_arcane.simc: 'arcane_variant' is no mage spec.
         ("mage_arcane_variant", None, 40),
         # The caller's mage does not pair with the file's fury; only --actor-class narrows the probe.
-        ("warrior_fury", "mage", 3),
+        ("mage_fury", "mage", 3),
     ],
 )
 def test_identify_build_drops_an_apl_name_guess_that_names_no_simc_spec(

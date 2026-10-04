@@ -29,9 +29,9 @@ Use these flags to narrow report, encounter, table, graph, ranking, and sampled 
 A `--fight-id`, `--encounter-id`, or `--difficulty` that matches no fight in the report fails with
 `not_found` (exit 4) on `report-events`, `report-table`, `report-graph`, `report-rankings`, and
 `report-player-details`, with the rejected slice echoed in the failure envelope's `query`.
-- `--difficulty`: provider difficulty id
+- `--difficulty`: Warcraft Logs difficulty id or retail name (`lfr` = 1, `normal` = 3, `heroic` = 4, `mythic` = 5)
 - `--zone-id`: provider zone id
-- `--start-time` / `--end-time`: absolute report timestamps in milliseconds
+- `--start-time` / `--end-time`: on report slices (`report-events`, `report-table`, `report-graph`, `report-player-details`), milliseconds from the report start; on `reports`, `guild-reports` and the sampled commands, UNIX epoch milliseconds or an ISO-8601 date (UTC)
 - `--window-start-ms` / `--window-end-ms`: encounter-relative timestamps on supported `report-encounter*` commands; a window that starts at or after the fight's end fails with `invalid_query` (exit 2) instead of answering zero
 - `--left-window-start-ms` / `--left-window-end-ms` and `--right-window-start-ms` / `--right-window-end-ms`: explicit comparison windows for `report-encounter-aura-compare`
 - `--boss-id` / `--boss-name`: sampled cross-report boss scope where supported
@@ -43,10 +43,12 @@ Use identity flags when the question is about one actor, target, ability, event 
 - `--source-id`: source actor id
 - `--target-id`: target actor id
 - `--ability-id`: ability game id
-- `--hostility-type`: provider hostility enum
-- `--kill-type`: provider kill enum
-- `--data-type`: event/table/graph data type, for example `casts` or `damage-done`
-- `--view-by`: table/graph grouping, for example `source` or `target`
+- `--hostility-type`: `Friendlies` or `Enemies`
+- `--kill-type`: `All`, `Encounters`, `Kills`, `Trash` or `Wipes`
+- `--data-type`: event/table/graph data type, for example `casts` or `damage-done` (`--help` lists them all)
+- `--view-by`: table/graph grouping: `Default`, `Ability`, `Source` or `Target`
+
+These enum flags ignore case and hyphens and reject any other value before a request, listing the valid ones.
 - `--wipe-cutoff`: provider wipe cutoff where supported
 
 Returned actors, abilities, encounters, and talent packets use the shared identity contract documented in [IDENTITY_CONTRACT.md](../foundation/IDENTITY_CONTRACT.md). Preserve those identity objects when chaining commands; do not re-resolve names if the payload already includes a stable id.

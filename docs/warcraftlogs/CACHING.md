@@ -105,10 +105,15 @@ are `null` rather than a TTL the deployment never applies. The `finished`/`live`
 
 ## Invalidation
 
-File and Redis caches expire by TTL; there is no manual per-report invalidation. Use the
-shared cache-admin commands (`cache inspect` / `cache clear`) to drop namespaces. Because the
-finished TTL is long, re-fetching a report that has since been edited waits out the TTL or a
-manual clear; finished WoW logs are effectively immutable, so this is acceptable.
+File and Redis caches expire by TTL; there is no manual per-report invalidation, and
+`warcraftlogs` has no cache-admin command (only `wowhead` has `cache-inspect` / `cache-clear`).
+To skip the cache for one run, set `WARCRAFTLOGS_CACHE_BACKEND=none`. To drop a namespace, delete
+its directory under the `cache_dir` that `warcraftlogs doctor` reports (default
+`~/.cache/warcraft/warcraftlogs/http/<namespace>/`), or on Redis delete its keys
+(`redis-cli --scan --pattern 'warcraftlogs_cli:<namespace>:*' | xargs redis-cli del`, with the
+configured `WARCRAFTLOGS_REDIS_PREFIX`). Because the finished TTL is long, re-fetching a report that
+has since been edited waits out the TTL or a manual clear; finished WoW logs are effectively
+immutable, so this is acceptable.
 
 ### Live → finished staleness window
 
@@ -118,8 +123,8 @@ for up to that TTL (default 60s) after the report finishes, including by
 sampled boss analytics. This is the accepted consequence of caching live reports
 (rather than no-caching them, for rate-limit relief): the short live TTL bounds the window,
 and once it expires the next fetch sees an `endTime` over two hours old and re-caches under the
-finished TTL. Finished WoW logs are immutable thereafter. To eliminate the window for a specific report,
-`cache clear` the report namespace before sampling.
+finished TTL. Finished WoW logs are immutable thereafter. To eliminate the window, run the sampling command
+with `WARCRAFTLOGS_CACHE_BACKEND=none`, or drop the `report` namespace first as described above.
 
 #### Provenance is a report property, not a per-namespace cache audit
 

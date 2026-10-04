@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from statistics import median
 from typing import Any
 
+import httpx
 from warcraft_core.analytics import (
     categorical_distribution,
     count_map,
@@ -248,6 +249,35 @@ def response_season(payload: dict[str, Any]) -> str | None:
     return str(season) if isinstance(season, str) and season else None
 
 
+def _runs_page(client: RaiderIOClient, request: SampleRequest, *, page: int) -> FetchedJson:
+    """One leaderboard page; an unknown ``--season`` fails as a usage error, not as an outage to retry."""
+    try:
+        return client.mythic_plus_runs(
+            season=request.season_param,
+            region=request.region,
+            dungeon=request.dungeon,
+            affixes=request.affixes or None,
+            page=page,
+        )
+    except httpx.HTTPStatusError as exc:
+        # Raider.IO answers an unknown season slug with HTTP 500. If the current season answers now
+        # (not from the cache), the season was the problem; if it does not, that failure propagates as
+        # the outage it is. A later page of a season whose first page answered is never a typo.
+        if exc.response.status_code != 500 or request.season_param is None or page != request.page:
+            raise
+        client.mythic_plus_runs(fresh=True)
+        raise unknown_season_error(request.season_param, exc) from exc
+
+
+def unknown_season_error(season: str, exc: httpx.HTTPStatusError) -> ProviderError:
+    """The usage error for a ``--season`` slug Raider.IO does not know, whichever status it answered with."""
+    return ProviderError(
+        "invalid_query",
+        f"Raider.IO has no Mythic+ season {season!r}. `raiderio dungeons --expansion-id <id>` lists each expansion's season slugs.",
+        details={"status_code": exc.response.status_code, "url": str(exc.request.url)},
+    )
+
+
 def sample_leaderboard_runs(client: RaiderIOClient, request: SampleRequest) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Read up to ``request.pages`` leaderboard pages, keeping at most ``request.limit`` distinct runs.
 
@@ -262,13 +292,7 @@ def sample_leaderboard_runs(client: RaiderIOClient, request: SampleRequest) -> t
     effective_season = request.season_param
     limit = request.limit
     for offset in range(request.pages):
-        fetched = client.mythic_plus_runs(
-            season=request.season_param,
-            region=request.region,
-            dungeon=request.dungeon,
-            affixes=request.affixes or None,
-            page=request.page + offset,
-        )
+        fetched = _runs_page(client, request, page=request.page + offset)
         payload = fetched.payload
         read_pages.append(fetched)
         served_season = response_season(payload)
@@ -814,6 +838,26 @@ def _nearest_threshold_rows(metric: str, target: float, runs: list[dict[str, Any
     return rows[:limit]
 
 
+def _out_of_range_note(metric: str, target: float, sampled_range: dict[str, float]) -> str:
+    """Why a target outside the sampled range has no estimate; above and below the range are different mistakes."""
+    lead = (
+        f"The target {target:g} is outside the sampled {metric} range {sampled_range['min']:g}-{sampled_range['max']:g}, "
+        "so there is no estimate."
+    )
+    if target < sampled_range["min"]:
+        return (
+            f"{lead} Leaderboard samples cover only the top of the ladder, and keyless paging stops at page 100, "
+            "so a target well below the top is not reachable from them."
+        )
+    if metric == "score":
+        return (
+            f"{lead} No sampled run reaches it: the sample starts at the top of the ladder, and one run's score tops out "
+            "near the sampled maximum. A player's Mythic+ rating is a different number; `raiderio cutoffs` gives the "
+            "rating at each top percentile."
+        )
+    return f"{lead} No sampled run reaches it, and the sample starts at the top of the ladder."
+
+
 def threshold_payload(metric: str, target: float, runs: list[dict[str, Any]], *,
                        meta: dict[str, Any], query: dict[str, Any], nearest_limit: int) -> dict[str, Any]:
     nearest = _nearest_threshold_rows(metric, target, runs, limit=nearest_limit)
@@ -831,13 +875,7 @@ def threshold_payload(metric: str, target: float, runs: list[dict[str, Any]], *,
     sampled = [float(value) for run in runs if isinstance(value := run.get(metric), (int, float))]
     sampled_range = {"min": min(sampled), "max": max(sampled)} if sampled else None
     out_of_range = sampled_range is not None and not sampled_range["min"] <= target <= sampled_range["max"]
-    note = (
-        f"The target {target:g} is outside the sampled {metric} range {sampled_range['min']:g}-{sampled_range['max']:g}, "
-        "so there is no estimate. Leaderboard samples cover only the top of the ladder, and keyless paging stops "
-        "at page 100, so a target well below the top is not reachable from them."
-        if out_of_range and sampled_range is not None
-        else None
-    )
+    note = _out_of_range_note(metric, target, sampled_range) if out_of_range and sampled_range is not None else None
     estimate: dict[str, Any] | None = None
     if estimate_values and not out_of_range:
         sorted_values = sorted(estimate_values)

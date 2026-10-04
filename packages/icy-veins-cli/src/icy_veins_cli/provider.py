@@ -13,7 +13,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-from warcraft_api.cache import redacted_redis_url
+from warcraft_api.cache import cache_backend_health, redacted_redis_url
 from warcraft_content.article_bundle import article_export_dir, bundle_query_payload
 from warcraft_content.article_discovery import article_resolve_payload, article_search_payload
 from warcraft_content.article_provider_cli import (
@@ -103,7 +103,11 @@ def doctor(**options: Any) -> Envelope:
     except ValueError as exc:
         raise ProviderError("invalid_cache_config", str(exc)) from exc
     data = article_doctor_payload(
-        settings, redis_url=redacted_redis_url(settings.redis_url), sitemap_ttl=sitemap_ttl, page_ttl=page_ttl
+        settings,
+        redis_url=redacted_redis_url(settings.redis_url),
+        cache_health=cache_backend_health(settings),
+        sitemap_ttl=sitemap_ttl,
+        page_ttl=page_ttl,
     )
     data["capabilities"]["index_refresh"] = "ready"
     site_index = load_site_index()

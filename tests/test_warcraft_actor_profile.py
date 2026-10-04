@@ -303,6 +303,34 @@ def test_actor_profile_region_override_drives_lookup(monkeypatch) -> None:
     assert payload["data"]["reconciliation"]["agree"] is True
 
 
+def test_actor_profile_looks_up_a_localized_realm_by_its_slug(monkeypatch) -> None:
+    """Warcraft Logs names the realm `Ревущийфьорд`; Raider.IO knows it only as `howling-fjord`."""
+    wcl = _wcl_payload({"dps": [_wcl_actor("Тёмычмаг", "Ревущийфьорд", "eu", "Mage", "Frost")]})
+    rio = _raiderio_payload("Тёмычмаг", "Mage", "Arcane", region="eu", realm="howling-fjord")
+    realms = {"reportData": {"report": {"rankedCharacters": [
+        {"server": {"slug": "gordunni", "normalizedName": "Гордунни"}},
+        {"server": {"slug": "howling-fjord", "normalizedName": "Ревущийфьорд"}},
+    ]}}}
+    seen: dict[str, Any] = {}
+
+    def fake(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        if args[0] == "report-player-details":
+            return _provider_result("warcraftlogs", wcl)
+        if args[0] == "graphql":
+            return _provider_result("warcraftlogs", realms)
+        seen["character_args"] = args
+        return _provider_result("raiderio", rio)
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake)
+    result = runner.invoke(warcraft_app, ["actor-profile", "ABC123", "Тёмычмаг", "--fight-id", "5"])
+
+    assert result.exit_code == 0, result.output
+    assert seen["character_args"] == ["character", "eu", "howling-fjord", "Тёмычмаг"]
+    data = json.loads(result.stdout)["data"]
+    # Raider.IO reports the active spec, so an off-spec log differs on spec alone.
+    assert (data["sources"]["raiderio"]["spec_source"], data["reconciliation"]["reasons"]) == ("active_spec", ["spec_mismatch"])
+
+
 def test_actor_profile_rejects_ambiguous_actor(monkeypatch) -> None:
     wcl = _wcl_payload(
         {

@@ -43,10 +43,11 @@ def load_curseforge_cache_settings_from_env() -> tuple[CacheSettings, int]:
 class CurseForgeClientError(RuntimeError):
     """Typed client error so the command layer can emit a structured ok:false envelope."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.details = details
 
 
 class CurseForgeClient:
@@ -154,7 +155,7 @@ class CurseForgeClient:
         if not isinstance(rows, list):
             raise CurseForgeClientError("invalid_response", "CurseForge search response had no data list.")
         if not rows:
-            raise CurseForgeClientError("addon_not_found", f"No CurseForge WoW addon matched slug {text!r}.")
+            raise self._slug_miss(text, f"No CurseForge WoW addon matched slug {text!r}.")
         # Require an exact slug AND a WoW gameId (when present): if the server ignored/broadened the
         # gameId filter and returned same-slug projects from multiple games, this skips the non-WoW
         # rows instead of binding the first slug match.
@@ -169,11 +170,32 @@ class CurseForgeClient:
             None,
         )
         if match is None:
-            raise CurseForgeClientError("addon_not_found", f"No CurseForge WoW addon had the exact slug {text!r}.")
+            raise self._slug_miss(text, f"No CurseForge WoW addon had the exact slug {text!r}.")
         mod_id = match.get("id")
         if not isinstance(mod_id, int):
             raise CurseForgeClientError("invalid_response", "CurseForge search result had no integer mod id.")
         return mod_id, "slug_search", search["source_url"]
+
+    def _slug_miss(self, text: str, message: str) -> CurseForgeClientError:
+        """The ``addon_not_found`` for a slug, with the addons a free-text search finds for it (``weakauras`` -> ``weakauras-2``).
+
+        The candidates are best effort: a failed search leaves them empty rather than hiding the miss.
+        """
+        try:
+            # sortField 2 is popularity, so the addon people mean comes first.
+            params = {"gameId": WOW_GAME_ID, "searchFilter": text, "sortField": 2, "sortOrder": "desc", "pageSize": 5}
+            rows = self._get("/v1/mods/search", params=params)["payload"].get("data")
+        except (httpx.HTTPError, CurseForgeClientError):
+            rows = None
+        candidates = [
+            {"slug": row["slug"], "id": row.get("id"), "name": row.get("name")}
+            for row in (rows if isinstance(rows, list) else [])
+            if isinstance(row, dict) and isinstance(row.get("slug"), str)
+        ]
+        if candidates:
+            slugs = ", ".join(row["slug"] for row in candidates)
+            message += f" Name matches, most popular first: {slugs} (retry with `curseforge addon <slug>`)."
+        return CurseForgeClientError("addon_not_found", message, details={"candidates": candidates})
 
     def _fetch_latest_changelog(self, mod_id: int, latest_files: list[dict[str, Any]]) -> dict[str, Any] | None:
         """The changelog of the newest file; ``latest_files`` is newest first."""

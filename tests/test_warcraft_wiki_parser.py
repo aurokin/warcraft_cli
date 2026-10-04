@@ -506,3 +506,29 @@ def test_parse_event_page_takes_no_signature_from_an_example_block() -> None:
     assert reference["content_family"] == "event_reference"
     assert reference["signature"] is None
     assert reference["arguments"] == "timestamp number"
+
+
+def test_parse_event_page_takes_its_arguments_from_the_top_level_parameters_not_an_example_payload() -> None:
+    # Synthetic, shaped like Event:COMBAT_LOG_EVENT_UNFILTERED (2026-10): the parameters are the
+    # top-level "Base Parameters" section and "Payload" is an example trace nested under "Example".
+    payload = {
+        "parse": {
+            "title": "Event:COMBAT LOG EVENT UNFILTERED",
+            "text": {
+                "*": """
+                <div class="mw-parser-output">
+                  <p>Fires for combat log events.</p>
+                  <h2><span class="mw-headline" id="Base_Parameters">Base Parameters</span></h2>
+                  <p>timestamp subevent hideCaster</p>
+                  <h2><span class="mw-headline" id="Example">Example</span></h2>
+                  <h3><span class="mw-headline" id="Payload">Payload</span></h3>
+                  <p>1617986084.18, "SWING_DAMAGE", false</p>
+                </div>
+                """
+            },
+        }
+    }
+
+    reference = parse_article_page(payload, source_title="Event:COMBAT_LOG_EVENT_UNFILTERED")["reference"]
+
+    assert reference["arguments"] == "timestamp subevent hideCaster"

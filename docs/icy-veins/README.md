@@ -185,8 +185,14 @@ misleading guide matches.
 query word, or when a query word names the guide's family (`talents`, `stats`, `easy mode`, ...). A
 family word ranks a guide only when the guide also matches one of the query's other words (role words
 such as `dps` aside), so `mythic+ tier list` lists the tier lists rather than every spec's Mythic+
-tips page, and `alchemy leveling` the alchemy page rather than every leveling guide. One
-word that no guide contains therefore empties the result. Words match whole, so `dh` does not match
+tips page, and `alchemy leveling` the alchemy page rather than every leveling guide. When no guide
+matches the query as typed, the difficulty and strategy words (`normal`, `heroic`, `mythic`, `lfr`,
+`strategy`, `tips`, `mechanics`, `route`) are left out on a boss, raid or dungeon page whose slug
+starts with the rest of the query, so `sszorak strategy` resolves to `sszorak-raid-guide` and
+`murder row mythic+` to `murder-row-dungeon-guide`. A page whose slug names a difficulty or strategy
+itself (`gorefiend-lfr-guide-halls-of-blood`), a spec's raid variant page and, for `mythic+`, a raid
+page are never matched that way, and a query some guide matches as typed (`anduin wrynn mythic`)
+keeps its ranking. Otherwise one word that no guide contains empties the result. Words match whole, so `dh` does not match
 "headhunters", and a trailing plural `s` or `es` is ignored on both sides, so `build` keeps the
 `...-spec-builds-talents` pages and `boss` the "world bosses" guide. Words such as `a`, `of` and `the` are ignored. Every Mythic+ spelling
 (`m+`, `m plus`, `mythic+`) reads as `mythic plus`, in the query and in page titles alike, so it finds
@@ -342,7 +348,7 @@ separately.
 
 | Variable | Default |
 | --- | --- |
-| `ICY_VEINS_CACHE_BACKEND` | `file` (`redis` also supported) |
+| `ICY_VEINS_CACHE_BACKEND` | `file` (also `redis`, or `none` to bypass the cache) |
 | `ICY_VEINS_CACHE_DIR` | `<cache root>/icy-veins/http` |
 | `ICY_VEINS_REDIS_URL` | unset |
 | `ICY_VEINS_REDIS_PREFIX` | `icy_veins_cli` |

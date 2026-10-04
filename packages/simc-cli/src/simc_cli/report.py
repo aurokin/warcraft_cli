@@ -28,6 +28,9 @@ class SimReportSummary:
     # Every actor after players[0], and the ranked profileset rows when the profile defined any.
     other_actors: list[dict[str, Any]]
     profilesets: dict[str, Any] | None
+    # SimC's stat weights for players[0] and the stat amount each was measured with, when the profile set
+    # calculate_scale_factors=1; None otherwise.
+    scale_factors: dict[str, Any] | None
 
 
 def load_sim_report(path: str | Path) -> dict[str, Any]:
@@ -67,11 +70,19 @@ def summarize_sim_report(report: dict[str, Any]) -> SimReportSummary:
             if isinstance(other, dict)
         ],
         profilesets=_profilesets_block(sim.get("profilesets")),
+        scale_factors=_scale_factors_block(player),
     )
 
 
 def _player_block(player: dict[str, Any]) -> dict[str, Any]:
     return {"name": _text(player.get("name")), "spec": _text(player.get("specialization")), "role": _text(player.get("role"))}
+
+
+def _scale_factors_block(player: dict[str, Any]) -> dict[str, Any] | None:
+    factors = player.get("scale_factors")
+    if not isinstance(factors, dict):
+        return None
+    return {"factors": factors, "deltas": player.get("scale_deltas")}
 
 
 def _profilesets_block(profilesets: Any) -> dict[str, Any] | None:
@@ -163,4 +174,5 @@ def sim_report_payload(
         "actor_count": 1 + len(summary.other_actors),
         "other_actors": summary.other_actors,
         "profilesets": summary.profilesets,
+        "scale_factors": summary.scale_factors,
     }

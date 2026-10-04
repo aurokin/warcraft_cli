@@ -425,6 +425,18 @@ def test_resolve_never_answers_a_one_word_query_with_a_row_the_word_does_not_nam
         assert best["unresolved_reason"] == "single_word_query_not_named_exactly", result.describe()
 
 
+def test_resolve_hints_at_the_match_ranked_first_even_when_its_provider_rated_it_low() -> None:
+    """``frost dk mythic+ build`` once hinted at the wiki's off-intent "Pit of Saron" (medium) ahead of
+    Icy Veins' Mythic Plus page, which only tied with its builds page (low). A low rating keeps a match
+    from being the answer, not from leading the hints."""
+    result = run("warcraft", "resolve", "frost dk mythic+ build", "--ranking-debug")
+    data = result.data
+    if not data["resolved"]:
+        first = data["ranking_debug"][0]
+        best = data["best_unresolved_candidate"]
+        assert (best["provider"], best["id"]) == (first["provider"], first["id"]), result.describe()
+
+
 def test_resolve_never_answers_a_season_query_with_another_season(require) -> None:
     """``mythic+ season 3`` was answered by the Season 2 achievement at high confidence."""
     require("wowhead")

@@ -86,8 +86,8 @@ def test_explain_input_rejects_empty_and_contradictory_input(require) -> None:
     both = run("raidbots", "explain-input", "--text", "x", "--file", "y", expect=EXIT_USAGE, error_code="invalid_query")
     assert "only one of --text or --file" in both.payload["error"]["message"]
 
-    missing = run("raidbots", "explain-input", "--file", "/nope/does-not-exist.simc", expect=EXIT_USAGE, error_code="invalid_query")
-    assert "Could not read input file" in missing.payload["error"]["message"]
+    missing = run("raidbots", "explain-input", "--file", "/nope/does-not-exist.simc", expect=EXIT_NOT_FOUND, error_code="not_found")
+    assert "/nope/does-not-exist.simc" in missing.payload["error"]["message"]
 
 
 def test_an_unparseable_reference_is_rejected_before_the_network(require) -> None:

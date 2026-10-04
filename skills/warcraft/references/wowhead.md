@@ -40,7 +40,8 @@
 - `guide-query` answers like `icy-veins guide-query` and `method guide-query`: per-kind `match_counts` and
   `matches` (whole bundle rows plus `kind` and `score`), a flattened `top`, and `failed_pages`;
   `--linked-source href|gatherer|multi` narrows linked entities by where the page linked them
-- use timeline filters like `--author`, `--type`, `--region`, and `--forum` instead of scanning broad result sets manually
+- use timeline filters like `--author`, `--type`, `--region`, and `--forum` instead of scanning broad result sets manually;
+  `blue-tracker --region` takes `us` (or `na`) and `eu` only
 - the `news`, `blue-tracker` and `guides` query keeps a row only when every query word is a whole word
   in it, up to a plural or possessive ending, so "hotfix" matches "Hotfixes" but "frost mage" does not
   match "Frost Death Knight" or "Damage"; a `guides` row's URL slug counts as its text, so a raid
@@ -56,8 +57,12 @@
 - filter timelines by date with `--date-from` / `--date-to`, and read each row's ISO `posted_at`
   rather than the rendered `posted` string; rows Wowhead timestamps in a form the CLI cannot read
   are left out of the window and counted in `scan.unparsed_timestamps`
-- `resolve --entity-type` covers the types Wowhead's suggestion endpoint labels; mounts, recipes,
-  and battle pets are not among them and come back as items, spells, or NPCs
+- `search --entity-type` and `resolve --entity-type` cover the types Wowhead's suggestion endpoint
+  labels; mounts, recipes, and battle pets are not among them and come back as items, spells, or NPCs
+- an entity type outside the known list that Wowhead does not answer fails `invalid_argument` with
+  the known types, not `not_found`: usually a typo (`entity items 19019`), but Wowhead's tooltip
+  endpoint also lacks some real page types (`class`, `title`, `skill`), so when the message says so,
+  try `entity-page`; `not_found` on a known type means Wowhead has no such entity
 - read `count` as the rows you were given and `total_matches` / `total` as every match before the
   limit; raise `--limit` when `truncated` is true
 - guides far older than the freshest guide in the same response carry `stale_guide` in
@@ -108,5 +113,7 @@
   code whose loadout header names another spec (`invalid_tool_ref`); classic calculators keep their
   own spec names (MoP Classic rogue `combat`); `listed_builds` are the ref's spec's builds only,
   and are absent for classic calculator refs
+- `talent-calc` parses a ref into class, spec and the raw `build_code`; it does not decode a classic
+  build code into talents or points per tree
 - do not assume Wowhead tool URLs expose enough stable state for deep reverse-engineering
 - treat Wowhead `analysis_surfaces` as an additive page-level layer extracted from trusted section structure, not as a replacement for the raw guide page

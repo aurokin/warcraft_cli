@@ -125,6 +125,16 @@ def test_unknown_slug_and_unknown_id_are_not_found(require) -> None:
     assert "999999999" in mod_id.payload["error"]["message"]
 
 
+def test_a_near_miss_slug_names_the_slug_to_retry_with(require) -> None:
+    """``dbm`` is what people type; the miss lists the real slugs instead of dead-ending."""
+    require("curseforge")
+    miss = run("curseforge", "addon", "dbm", expect=EXIT_NOT_FOUND, error_code="addon_not_found")
+    candidates = miss.payload["error"]["details"]["candidates"]
+    assert CURSEFORGE_ADDON_SLUG in [row["slug"] for row in candidates], miss.describe()
+    retried = run("curseforge", "addon", candidates[0]["slug"])
+    assert retried.payload["provenance"]["mod_id"] == candidates[0]["id"], retried.describe()
+
+
 def test_a_non_wow_mod_id_is_refused(require) -> None:
     require("curseforge")
     # CurseForge mod ids are global across games; provenance hardcodes game_id=1, so a Minecraft

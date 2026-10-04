@@ -7,6 +7,7 @@ commands in ``wowhead_cli.main`` are thin wrappers over these functions.
 
 from __future__ import annotations
 
+import re
 import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -14,14 +15,14 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from warcraft_api.cache import CacheSettings, load_cache_settings_from_env, redacted_redis_url
+from warcraft_api.cache import CacheSettings, cache_backend_health, load_cache_settings_from_env, redacted_redis_url
 from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND, resolve_data, search_data
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.provider import ProviderError
 
 from wowhead_cli.doctor import build_doctor_payload
-from wowhead_cli.entity_types import RESOLVE_ENTITY_TYPES
+from wowhead_cli.entity_types import ENTITY_TYPE_KEYS, RESOLVE_ENTITY_TYPES
 from wowhead_cli.expansion_profiles import (
     ExpansionProfile,
     detect_expansion_from_url,
@@ -70,6 +71,31 @@ def select_expansion(expansion: str | None = None, *, url_hint: str | None = Non
     return ExpansionSelection(resolve_expansion(None), "default")
 
 
+# The entity type in a tooltip (``/tooltip/item/19019``) or page (``/item=19019/slug``) URL.
+_REQUESTED_ENTITY_TYPE_RE = re.compile(
+    r"/(?:tooltip/(?P<tooltip>[a-z][a-z-]*)/(?P<tooltip_id>\d+)|(?P<page>[a-z][a-z-]*)=\d+(?:/[^/]*)?)$"
+)
+
+
+def unknown_entity_type_error(entity_type: str, *, details: dict[str, Any], tooltip_id: str | None = None) -> ProviderError:
+    """The usage error for a TYPE this CLI does not know that Wowhead did not answer as an entity either.
+
+    Wowhead may have types the table lacks, so such a request still goes out; when Wowhead answers
+    404 or with another page, the TYPE is usually misspelled (``items``), not the entity missing.
+    Wowhead's tooltip endpoint also 404s on some real page types (``class``, ``title``), so a tooltip
+    404 (``tooltip_id`` set) points at ``entity-page`` instead of calling the type wrong.
+    """
+    known = f"Known entity types: {', '.join(sorted(ENTITY_TYPE_KEYS))}."
+    if tooltip_id is not None:
+        message = (
+            f"Wowhead's tooltip endpoint has no {entity_type!r} {tooltip_id}; if the type is right, "
+            f"`wowhead entity-page {entity_type} {tooltip_id}` may still answer. {known}"
+        )
+    else:
+        message = f"{entity_type!r} is not an entity type this CLI knows, and Wowhead did not answer it as one. {known}"
+    return ProviderError("invalid_argument", message, details=details)
+
+
 @contextmanager
 def transport_errors() -> Iterator[None]:
     """Translate httpx transport failures into ``ProviderError`` so callers get an envelope, never a traceback.
@@ -81,6 +107,10 @@ def transport_errors() -> Iterator[None]:
     except httpx.HTTPStatusError as exc:
         status = exc.response.status_code
         details = {"status_code": status, "url": str(exc.request.url)}
+        match = _REQUESTED_ENTITY_TYPE_RE.search(exc.request.url.path) if status == 404 else None
+        entity_type = (match.group("tooltip") or match.group("page")) if match else None
+        if match and entity_type is not None and entity_type not in ENTITY_TYPE_KEYS:
+            raise unknown_entity_type_error(entity_type, details=details, tooltip_id=match.group("tooltip_id")) from exc
         raise ProviderError(error_code_for_http_status(status), f"Wowhead returned HTTP {status}", details=details) from exc
     except httpx.TimeoutException as exc:
         raise ProviderError("timeout", f"{type(exc).__name__}: {exc}") from exc
@@ -219,19 +249,37 @@ def _ranked_suggestions(
     return stripped_query, ranked, merge
 
 
-def search(query: str, *, limit: int = 10, expansion: str | None = None, **options: Any) -> Envelope:
+def _entity_type_filter(entity_types: tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    """The ``--entity-type`` values, limited to the types Wowhead's suggestions can carry."""
+    try:
+        return split_choices(list(entity_types), allowed=RESOLVE_ENTITY_TYPES, label="entity type")
+    except ValueError as exc:
+        raise ProviderError("invalid_argument", str(exc)) from exc
+
+
+def search(
+    query: str,
+    *,
+    limit: int = 10,
+    entity_types: tuple[str, ...] | list[str] = (),
+    expansion: str | None = None,
+    **options: Any,
+) -> Envelope:
     """Rank Wowhead search suggestions for a free-text query or Wowhead URL."""
     del options
     query = _validated_query(query)
     selection = select_expansion(expansion, url_hint=query)
     profile = selection.profile
+    selected_entity_types = _entity_type_filter(entity_types)
     url_row = _url_answer(query, profile=profile)
     search_query: str | None = None
     merge: dict[str, Any] | None = None
     if url_row is not None:
-        normalized = [url_row]
+        normalized = [url_row] if not selected_entity_types or url_row["entity_type"] in selected_entity_types else []
     else:
-        search_query, normalized, merge = _ranked_suggestions(open_client(profile), query, profile=profile)
+        search_query, normalized, merge = _ranked_suggestions(
+            open_client(profile), query, profile=profile, entity_types=selected_entity_types
+        )
     data = search_data(
         search_query=search_query,
         ranked=normalized,
@@ -240,6 +288,7 @@ def search(query: str, *, limit: int = 10, expansion: str | None = None, **optio
         expansion=profile.key,
         expansion_source=selection.source,
         search_url=search_url(search_query, expansion=profile) if search_query is not None else None,
+        filters={"entity_types": list(selected_entity_types)},
         suggestion_merge=merge,
     )
     return envelope("search", SEARCH_KIND, data, query=query)
@@ -257,10 +306,7 @@ def resolve(
     del options
     target = _validated_query(target)
     profile = select_expansion(expansion, url_hint=target).profile
-    try:
-        selected_entity_types = split_choices(list(entity_types), allowed=RESOLVE_ENTITY_TYPES, label="resolve entity type")
-    except ValueError as exc:
-        raise ProviderError("invalid_argument", str(exc)) from exc
+    selected_entity_types = _entity_type_filter(entity_types)
     url_row = _url_answer(target, profile=profile)
     search_query: str | None = None
     merge: dict[str, Any] | None = None
@@ -297,7 +343,9 @@ def doctor(*, live: bool = True, expansion: str | None = None, **options: Any) -
         settings = load_cache_settings_from_env()
     except ValueError as exc:
         raise ProviderError("invalid_cache_config", str(exc)) from exc
-    data = build_doctor_payload(profile, live=live, cache=cache_settings_payload(settings))
+    # Settings parse without touching Redis, so ping it, or a dead Redis reads as a cold cache.
+    cache = {**cache_settings_payload(settings), **cache_backend_health(settings)}
+    data = build_doctor_payload(profile, live=live, cache=cache)
     return envelope("doctor", "doctor", data)
 
 

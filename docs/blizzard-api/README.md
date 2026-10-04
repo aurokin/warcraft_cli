@@ -19,10 +19,10 @@ client credentials and emits the shared JSON envelope.
 
 | Command | Behavior |
 |---------|----------|
-| `blizzard doctor` | Reports install state, auth posture, region routing, capability metadata, cache configuration, and the experimental tier. `status` is `ready` with client credentials and `degraded` without them, when `game_data` and `profile` read `requires_client_credentials`. |
+| `blizzard doctor` | Reports install state, auth posture, region routing, capability metadata, cache configuration, and the experimental tier. `status` is `ready` with client credentials and `degraded` without them, when `game_data` and `profile` read `requires_client_credentials`, or when a Redis cache backend does not answer (`cache.available: false`). |
 | `blizzard realm <slug>` | Reads `/data/wow/realm/{slug}` from the dynamic Game Data namespace. |
 | `blizzard item <item-id>` | Reads `/data/wow/item/{id}` from the static Game Data namespace. |
-| `blizzard character <realm-slug> <name>` | Reads `/profile/wow/character/{realm}/{name}` from the profile namespace. Retail only. |
+| `blizzard character <realm-slug> <name>` | Reads `/profile/wow/character/{realm}/{name}` from the profile namespace. Retail only. Also takes `<region> <realm-slug> <name>`, the order `raiderio` and `warcraftlogs` use; a positional region that differs from `--region` is `invalid_query` (exit 2). |
 | `blizzard search <query>` | Coming soon. Returns a `kind: "search_results"` envelope with `coming_soon: true`, no rows and exit 0, not an error. |
 | `blizzard resolve <query>` | Coming soon. Returns a `kind: "resolve_match"` envelope with `coming_soon: true`, `confidence: "none"`, no candidates and exit 0, not an error. |
 
@@ -121,8 +121,8 @@ The wrapper registers this provider as `blizzard-api` with `expansion_mode="none
 by region and namespace class, which is not the wrapper's expansion axis, so it stays out of
 expansion fanout. `warcraft --expansion <x> blizzard ...` still runs: the wrapper ignores the
 expansion for this provider (Blizzard's default retail routing applies) and attaches an
-`expansion_advisory` note to the result. Pass `--region`/namespace flags explicitly when you need
-a specific game version.
+`expansion_advisory` note to the result. For classic, pass the game version to the command
+itself: `blizzard <cmd> ... --game-version classic` (there is no namespace flag).
 
 `blizzard_api_cli.provider.PROVIDER` is the in-process surface (`search`, `resolve`, `doctor`); it
 returns envelopes and never prints.

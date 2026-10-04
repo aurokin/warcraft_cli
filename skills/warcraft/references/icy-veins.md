@@ -27,6 +27,7 @@
 - for narrow subpage questions, search terms like `easy mode`, `rotation`, `stat priority`, or `mythic+ tips` work well
 - a subpage family word ranks a page only when the page also matches the rest of the query: `mythic+ tier list` finds the tier lists, not every spec's M+ tips page
 - class and spec shorthand works in queries (`ret pally`, `bm hunter`, `frost dk`), and so do `m+`, `mythic+` and `m plus`
+- a boss, raid or dungeon name followed by a difficulty or strategy word (`sszorak strategy`, `murder row mythic+`, `vorasius heroic`) finds that page when nothing matches the query as typed; the name must be the start of the page's slug, a page for another difficulty (`gorefiend-lfr-guide-...` for `gorefiend mythic`) is not returned, so a raid name that only its boss pages' headlines carry (`voidspire mythic`) still finds nothing, and `voidspire` alone lists the boss pages
 - official names with punctuation work as typed: `Nerub-ar Palace`, `Ara-Kara, City of Echoes`, `K'aresh`
 - page headlines from the site index are matched too, so a raid's name finds its boss pages (`voidspire`) and a boss name finds its page (`vorasius`); `search` and `resolve` label boss pages `content_family: "raid_encounter"`, while `icy-veins guide` classifies by slug alone and reports a current boss page (`<boss>-raid-guide`) as `raid_guide`
 - transmog set and model pages only rank for a query that says `transmog`

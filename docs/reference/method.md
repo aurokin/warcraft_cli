@@ -104,6 +104,6 @@ Search an exported Method bundle on disk without touching the network.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 5 | Maximum matches to return. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum matches per kind and in the top list. |
 | `--kind` | str (repeatable) |  | Restrict search kinds. Repeat or pass comma-separated values from: sections, navigation, linked_entities, build_references, analysis_surfaces. |
 | `--section-title` | str |  | Restrict section searching to section titles containing this text. |

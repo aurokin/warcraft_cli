@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from warcraft_core.provider import ProviderError
-from warcraft_core.shapes import unique_strings
+from warcraft_core.shapes import as_dict, unique_strings
 from warcraft_core.timestamps import iso_now_utc
 
 
@@ -531,6 +531,19 @@ def _bundle_title(bundle: dict[str, Any]) -> str | None:
     return None
 
 
+def _content_updated_at(manifest: dict[str, Any]) -> str | None:
+    """When the site last changed the guide itself, as opposed to ``exported_at`` (when it was read).
+
+    A wowhead guide-export records Wowhead's JSON-LD ``dateModified`` as ``content_updated_at``; an
+    article bundle keeps the guide's ``last_updated`` (Method, Icy Veins) in its resource block.
+    """
+    value = manifest.get("content_updated_at")
+    if value is None:
+        resource = manifest.get(manifest.get("resource_key") or "guide")
+        value = resource.get("last_updated") if isinstance(resource, dict) else None
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def _bundle_descriptor(bundle: dict[str, Any], *, path: Path) -> dict[str, Any]:
     manifest_raw = bundle.get("manifest")
     manifest: dict[str, Any] = manifest_raw if isinstance(manifest_raw, dict) else {}
@@ -544,6 +557,7 @@ def _bundle_descriptor(bundle: dict[str, Any], *, path: Path) -> dict[str, Any]:
         "title": _bundle_title(bundle),
         "resource_key": manifest.get("resource_key"),
         "exported_at": manifest.get("exported_at"),
+        "content_updated_at": _content_updated_at(manifest),
         "counts": counts,
         # A comparison that includes a partial export must not read as complete on both sides.
         "failed_page_count": len(_failed_page_rows(manifest)),
@@ -787,6 +801,20 @@ def _build_build_reference_rows(
     return rows, membership
 
 
+def _build_reference_total(bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> int:
+    """How many bundles a build reference must be in to count as shared.
+
+    Every bundle that can hold build references: a wowhead guide-export never lists a build
+    references file, so it does not keep the others' builds partial. At least two, so a build only
+    one bundle could hold is never shared.
+    """
+    holders = 0
+    for _path, bundle in bundle_inputs:
+        files = as_dict(bundle.get("manifest")).get("files")
+        holders += isinstance(files, dict) and _CONTENT_FILES["build_references"] in files
+    return max(2, holders)
+
+
 def compare_article_bundles(bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> dict[str, Any]:
     if len(bundle_inputs) < 2:
         raise ValueError("compare_article_bundles requires at least two bundles")
@@ -807,7 +835,9 @@ def compare_article_bundles(bundle_inputs: list[tuple[Path, dict[str, Any]]]) ->
     section_evidence, tag_evidence, build_evidence = _collect_bundle_evidence(bundle_inputs)
     analysis_rows, analysis_membership = _build_analysis_surface_rows(tag_evidence, bundle_descriptors, total)
     section_rows, section_membership = _build_section_evidence_rows(section_evidence, bundle_descriptors, total)
-    build_rows, build_membership = _build_build_reference_rows(build_evidence, bundle_descriptors, total)
+    build_rows, build_membership = _build_build_reference_rows(
+        build_evidence, bundle_descriptors, _build_reference_total(bundle_inputs)
+    )
 
     return {
         "kind": "guide_bundle_comparison",

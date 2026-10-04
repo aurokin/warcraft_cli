@@ -12,6 +12,7 @@ from typing import Annotated, Any, Final, NoReturn
 
 import httpx
 import typer
+from typer._click.exceptions import NoSuchOption, UsageError
 from typer.core import TyperGroup, TyperOption
 
 from warcraft_core.cache_ledger import cache_ledger, current_cache_ledger, with_cache_provenance
@@ -269,6 +270,32 @@ def fail(
     raise typer.Exit(exit_code if exit_code is not None else exit_code_for(code))
 
 
+def _usage_error(exc: UsageError) -> tuple[str, dict[str, Any] | None]:
+    """The message and details of a usage error, naming the fix Click's own text leaves out.
+
+    A root flag typed after the subcommand is unknown there, so Click only says "No such option" (and
+    may suggest an unrelated flag); the message says to move it. A group called without a valid
+    subcommand lists the subcommands it has, because the usage panel that would show them is suppressed.
+    """
+    message = exc.format_message()
+    ctx = exc.ctx
+    if ctx is None:
+        return message, None
+    root = ctx.find_root()
+    if isinstance(exc, NoSuchOption) and ctx is not root:
+        option = exc.option_name
+        if any(option in (*param.opts, *param.secondary_opts) for param in root.command.params):
+            return (
+                f"No such option: {option}. {option} is a global flag: put it before the subcommand "
+                f"({root.info_name} {option} ... {ctx.command_path.removeprefix(root.command_path).strip()} ...).",
+                {"global_flag": option},
+            )
+    if type(exc) is UsageError and isinstance(ctx.command, TyperGroup):
+        commands = sorted(name for name, command in ctx.command.commands.items() if not command.hidden)
+        return f"{message} Commands: {', '.join(commands)}.", {"commands": commands}
+    return message, None
+
+
 def error_envelope_for(provider: str, command: str, exc: BaseException) -> tuple[Envelope, int]:
     """Map an escaping exception to ``(error envelope, exit code)`` per docs/foundation/ERROR_CONTRACT.md.
 
@@ -281,9 +308,12 @@ def error_envelope_for(provider: str, command: str, exc: BaseException) -> tuple
 
     if isinstance(exc, ProviderError):
         return build(exc.code, exc.message, exc.exit_code, exc.details)
-    if isinstance(exc, typer.TyperException):
+    if isinstance(exc, UsageError):
         # Typer's vendored Click raises these for unknown flags, rejected option values and missing
         # arguments. Their text becomes the envelope message instead of a Rich usage panel.
+        message, details = _usage_error(exc)
+        return build("invalid_argument", message, exc.exit_code, details)
+    if isinstance(exc, typer.TyperException):
         code = "invalid_argument" if exc.exit_code == EXIT_USAGE else "internal_error"
         return build(code, exc.format_message(), exc.exit_code)
     if isinstance(exc, httpx.TimeoutException):

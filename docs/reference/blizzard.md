@@ -61,7 +61,7 @@ Fetch an item record from the static Game Data namespace.
 
 ## blizzard character
 
-Fetch a character profile from the profile namespace (retail only).
+Fetch a character profile from the profile namespace (retail only): REALM NAME --region R, or REGION REALM NAME.
 
 **Arguments**
 
@@ -69,6 +69,7 @@ Fetch a character profile from the profile namespace (retail only).
 | --- | --- | --- | --- |
 | `realm_slug` | str | required | Realm slug the character plays on, e.g. illidan. |
 | `name` | str | required | Character name. |
+| `region_first_name` | [name] |  | With three arguments they are REGION REALM NAME, as raiderio and warcraftlogs take them. |
 
 **Options**
 

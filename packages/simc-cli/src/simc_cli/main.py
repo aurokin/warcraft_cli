@@ -80,8 +80,8 @@ from simc_cli.build_input import (
 from simc_cli.compare import (
     build_variant_profile,
     compare_apl_variants,
-    default_gear_disclosures,
     output_previews,
+    profile_disclosures,
     validate_profile_file,
     variant_report_payload,
     verify_clean_payload,
@@ -246,10 +246,15 @@ def _serialize_build_identity(identity: BuildIdentity) -> dict[str, Any]:
 
 
 def _resolve_path(paths: RepoPaths, value: str) -> Path:
-    """Resolve an APL path: relative to the current directory when that file exists, else to the checkout."""
+    """Resolve an APL path: relative to the current directory when that file exists, else to the checkout.
+
+    A bare file name the checkout root does not hold names a spec APL in ActionPriorityLists/default.
+    """
     path = Path(value).expanduser()
     if not path.is_absolute() and not path.exists():
         path = paths.root / path
+        if not path.exists() and Path(value).name == value:
+            path = paths.apl_default / value
     return path.resolve()
 
 
@@ -431,13 +436,22 @@ def _prune_context(
     enable_tokens = resolve_talent_tokens(paths.root, build_spec.actor_class, split_csv_values(option_values["enable"]))
     disabled = resolve_talent_tokens(paths.root, build_spec.actor_class, split_csv_values(option_values["disable"]))
     decoded = [talent for tree in ("class", "spec", "hero") for talent in resolution.talents_by_tree.get(tree, [])]
+    enabled = set(resolution.enabled_talents) | enable_tokens
+    class_id = CLASS_ID_BY_ACTOR_CLASS.get(resolution.actor_class or "")
+    spec_id = specialization_ids(paths.root).get((resolution.actor_class or "", resolution.spec or ""))
+    untaken: set[str] = set()
+    if resolution.enabled_talents and class_id is not None and spec_id is not None:
+        untaken = load_trait_table(paths.root).untaken_talents(
+            enabled, class_id=class_id, spec_id=spec_id, include_hero=resolution.hero_tree is not None
+        )
     context = PruneContext(
-        enabled_talents=set(resolution.enabled_talents) | enable_tokens,
+        enabled_talents=enabled,
         disabled_talents=disabled,
         targets=targets,
         talent_sources={talent.token: talent.tree for talent in decoded} | dict.fromkeys(enable_tokens, "manual"),
         talent_ranks={talent.token: talent.rank for talent in decoded if talent.rank_known and talent.rank > 0},
         hero_tree=tokenize_talent_name(resolution.hero_tree.name) if resolution.hero_tree else None,
+        untaken_talents=untaken | disabled,
     )
     return context, resolution
 
@@ -561,6 +575,11 @@ def _load_identified_build_spec_or_raise(
             exit_code=EXIT_USAGE,
             details={"reference_type": exc.reference_type},
         ) from exc
+    except UnknownClassSpecError as exc:
+        # The class, spec or APL named beside the build is wrong, not a build packet.
+        raise ProviderError("invalid_query", str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise ProviderError("not_found", f"File not found: {exc.filename}") from exc
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         code = "invalid_build_packet" if build_packet or packet is not None else "invalid_query"
         raise ProviderError(code, str(exc)) from exc
@@ -828,8 +847,8 @@ def checkout_command(ctx: typer.Context) -> None:
 @app.command("search")
 def search(
     ctx: typer.Context,
-    query: str = typer.Argument(..., help="Free-text query. Structured discovery is deferred for simc phase 1."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused in phase 1."),
+    query: str = typer.Argument(..., help="Free-text query. Discovery search is not implemented yet."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused until simc search ships."),
 ) -> None:
     """Return the structured coming-soon stub for free-text search."""
     emit(ctx, PROVIDER.search(query, limit=limit, repo_root=_cfg(ctx).repo_root))
@@ -838,8 +857,8 @@ def search(
 @app.command("resolve")
 def resolve(
     ctx: typer.Context,
-    query: str = typer.Argument(..., help="Free-text query. Structured resolution is deferred for simc phase 1."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused in phase 1."),
+    query: str = typer.Argument(..., help="Free-text query. Conservative resolution is not implemented yet."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused until simc resolve ships."),
 ) -> None:
     """Return the structured coming-soon stub for free-text resolution."""
     del limit
@@ -1191,6 +1210,8 @@ def _transport_input_or_fail(
     if build_packet:
         try:
             packet, resolved_packet_path = load_build_packet(build_packet)
+        except FileNotFoundError as exc:
+            fail(ctx, "not_found", f"Build packet not found: {exc.filename}")
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             fail(ctx, "invalid_build_packet", str(exc))
         resolved = _packet_transport_input(packet, resolved_packet_path, actor_class, spec_name)
@@ -1341,7 +1362,7 @@ def _build_harness(
             "build_spec": _serialize_build_spec(build_spec),
             "identity": _serialize_build_identity(identity),
             "extra_lines": line,
-            "disclosures": default_gear_disclosures(target.read_text()),
+            "disclosures": profile_disclosures(target.read_text()),
         },
     )
 
@@ -2783,7 +2804,7 @@ def _run_sim(
             json_report_path=str(json_path) if json_out is not None else None,
             command=result.command,
             iterations_requested=overrides.iterations,
-            disclosures=default_gear_disclosures(profile.path.read_text()),
+            disclosures=profile_disclosures(profile.path.read_text()),
         ),
     )
 

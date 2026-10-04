@@ -56,7 +56,8 @@ def _type_label(param: Parameter) -> str:
     choices = getattr(param_type, "choices", None)
     if choices:
         return _cell("choice: " + ", ".join(str(choice) for choice in choices))
-    label = param_type.name
+    # A metavar names what the parser takes (warcraftlogs `EPOCH_MS|DATE`) better than its click type.
+    label = param.metavar.lower() if param.metavar else param_type.name
     # IntRange/FloatRange: the bounds `--help` prints, such as `1<=x<=200`.
     describe_range = getattr(param_type, "_describe_range", None)
     if callable(describe_range):

@@ -843,6 +843,28 @@ def test_threshold_gives_no_estimate_for_a_target_the_sample_cannot_reach(baseli
     assert threshold["note"], result.describe()
 
 
+def test_threshold_above_the_sampled_scores_points_at_rating_cutoffs(baseline_sample: Result) -> None:
+    """3000 is a player rating typed into a run-score threshold; the note says so instead of blaming paging."""
+    result = run("raiderio", "threshold", "mythic-plus-runs", "--metric", "score", "--value", "3000", *SCOPE)
+    threshold = result.data["threshold"]
+    assert threshold["sampled_range"]["max"] < 3000, result.describe()
+    assert "raiderio cutoffs" in threshold["note"] and "not reachable" not in threshold["note"], result.describe()
+
+
+def test_cutoffs_give_the_rating_at_each_top_percentile(current_season: str) -> None:
+    result = run("raiderio", "cutoffs", "--region", "us")
+    assert result.payload["kind"] == "mythic_plus_cutoffs", result.describe()
+    assert result.payload["query"] == {"season": current_season, "region": "us"}, result.describe()
+    rows = result.data["cutoffs"]
+    assert [row["percentile"] for row in rows][:2] == ["top 0.1%", "top 1%"], result.describe()
+    ratings = [row["all"]["rating"] for row in rows]
+    # A higher percentile takes a higher rating, and the top 0.1% is a small slice of the population.
+    assert ratings == sorted(ratings, reverse=True) and ratings[0] > 0, result.describe()
+    top = rows[0]["all"]
+    assert top["population_count"] < top["total_population"] / 100, result.describe()
+    assert current_season in result.payload["provenance"]["citations"]["cutoffs_url"], result.describe()
+
+
 def test_leaderboard_mythic_plus_reports_returned_versus_requested(current_season: str) -> None:
     result = run("raiderio", "leaderboard", "mythic-plus", "--season", current_season, "--region", "us", "--dungeon", "all", "--limit", "25")
 
@@ -1001,6 +1023,10 @@ def test_malformed_request_is_a_usage_error() -> None:
         (("threshold", "mythic-plus-runs", "--metric", "bogus", "--value", "100"), "threshold mythic-plus-runs", "invalid_query"),
         (("leaderboard", "raids", "--raid", "sporefall", "--difficulty", "bogus"), "leaderboard raids", "invalid_query"),
         (("leaderboard", "raids", "--raid", "sporefall", "--realm", "malganis"), "leaderboard raids", "invalid_query"),
+        # Raider.IO answers an unknown season with HTTP 500 and an unknown raid with a bare 400; both are typos.
+        (("leaderboard", "mythic-plus", "--season", "season-zz-9", "--limit", "1"), "leaderboard mythic-plus", "invalid_query"),
+        (("leaderboard", "raids", "--raid", "zz-no-such-raid"), "leaderboard raids", "invalid_query"),
+        (("cutoffs", "--season", "season-zz-9"), "cutoffs", "invalid_query"),
     ],
 )
 def test_invalid_kind_or_metric_is_a_usage_error(args: tuple[str, ...], command: str, error_code: str) -> None:

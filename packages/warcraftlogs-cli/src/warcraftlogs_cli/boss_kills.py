@@ -29,7 +29,7 @@ class CrossReportScope:
 
     Field order is the emitted ``query`` key order: ``dataclasses.asdict`` on this
     object is what the sampled payloads echo back to the caller. ``top`` is the
-    returned-row cap; commands without a ``--top`` flag leave it at the default and
+    returned-row cap; commands without a ``--limit`` (``--top``) flag leave it at the default and
     drop it from their query echo.
     """
 
@@ -670,7 +670,7 @@ def spec_filtered_kill_samples_payload(
     if truncated:
         notes.append(
             "returned kills are the fastest qualifying kills (ascending duration); slower kills in "
-            "the cohort are excluded by --top, so the returned subset is not a representative random sample"
+            "the cohort are excluded by --limit, so the returned subset is not a representative random sample"
         )
     return {
         "kind": "spec_filtered_kill_samples",

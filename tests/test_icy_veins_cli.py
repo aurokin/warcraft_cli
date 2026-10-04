@@ -1746,3 +1746,72 @@ def test_icy_veins_guide_query_answers_a_file_path_itself_with_the_query(tmp_pat
     assert payload["error"]["code"] == "invalid_argument"
     assert payload["error"]["message"].startswith("Bundle path is not a directory")
     assert payload["query"] is not None
+
+
+# Captured from the live Icy Veins site index (October 2026): a boss page, a dungeon page, an old-style
+# boss page that starts with the family words, and a spec's raid variant.
+ENCOUNTER_SLUGS = [
+    "sszorak-raid-guide",
+    "murder-row-dungeon-guide",
+    "raid-guide-eranog-vault-of-the-incarnates",
+    "frost-mage-pve-dps-nerub-ar-palace-raid-guide",
+    "frost-mage-pve-dps-guide",
+]
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("sszorak strategy", "sszorak-raid-guide"),
+        ("sszorak heroic", "sszorak-raid-guide"),
+        ("murder row mythic+", "murder-row-dungeon-guide"),
+        ("murder row tips", "murder-row-dungeon-guide"),
+    ],
+)
+def test_icy_veins_resolve_answers_a_boss_or_dungeon_query_that_adds_a_difficulty_or_strategy_word(
+    monkeypatch, query: str, expected: str
+) -> None:
+    """Live `icy-veins search "sszorak strategy"` (2026-10) found nothing: the page title lacks "strategy"."""
+    payload = _invoke_with_sitemap(monkeypatch, ENCOUNTER_SLUGS, ["resolve", query])
+
+    assert (payload["resolved"], payload["match"]["id"]) == (True, expected)
+
+
+@pytest.mark.parametrize("query", ["raid tips", "heroic raid", "frost mage mythic"])
+def test_icy_veins_difficulty_words_admit_no_page_their_other_words_do_not_name(monkeypatch, query: str) -> None:
+    """Only a boss or dungeon name drops those words: not the family word, and not a spec's raid variant."""
+    ids = _search_ids(monkeypatch, ENCOUNTER_SLUGS, query)
+
+    assert not {"raid-guide-eranog-vault-of-the-incarnates", "frost-mage-pve-dps-nerub-ar-palace-raid-guide"} & set(ids)
+
+
+# Captured from the live Icy Veins sitemap and site index (October 2026): a boss with one journal per
+# difficulty, a boss with only an LFR page and a strategy page beside an abilities page, plus the
+# Midnight season pages, one a raid guide.
+DIFFICULTY_SLUGS = [
+    "anduin-wrynn-mythic-encounter-journal",
+    "anduin-wrynn-heroic-encounter-journal",
+    "anduin-wrynn-lfr-encounter-journal",
+    "gorefiend-lfr-guide-halls-of-blood",
+    "aggramar-abilities",
+    "aggramar-mythic-strategy-tactics",
+    "midnight-season-1-raid-guide",
+    "midnight-mythic-season-1-guide",
+]
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("anduin wrynn mythic", ["anduin-wrynn-mythic-encounter-journal"]),
+        ("aggramar mythic", ["aggramar-mythic-strategy-tactics"]),
+        ("gorefiend mythic", []),
+        ("midnight mythic+ season 1", ["midnight-mythic-season-1-guide"]),
+        ("midnight season 1 mythic", ["midnight-mythic-season-1-guide"]),
+    ],
+)
+def test_icy_veins_difficulty_words_stay_when_a_page_matches_them_or_names_another_difficulty(
+    monkeypatch, query: str, expected: list[str]
+) -> None:
+    """Dropping "mythic" once admitted the heroic and LFR journals, ``gorefiend-lfr-guide-...`` and the raid guide."""
+    assert _search_ids(monkeypatch, DIFFICULTY_SLUGS, query) == expected

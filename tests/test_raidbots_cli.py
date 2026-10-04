@@ -644,3 +644,15 @@ def test_report_input_returns_real_simc_text(monkeypatch: pytest.MonkeyPatch, tm
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["data"]["input"] == profile
+
+
+def test_explain_input_missing_file_is_not_found(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["explain-input", "--file", str(tmp_path / "missing.simc")])
+    assert result.exit_code == 4
+    assert json.loads(result.stderr)["error"]["code"] == "not_found"
+
+
+def test_explain_input_file_dash_reads_stdin() -> None:
+    result = runner.invoke(app, ["explain-input", "--file", "-"], input=TOP_GEAR_INPUT)
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["data"]["scope"]["sim_type_guess"] == "top_gear_or_droptimizer"

@@ -51,7 +51,8 @@ def addon(
         payload = addon_envelope(slug_or_id)
     except (CurseForgeClientError, httpx.HTTPError) as exc:
         code, message = _error_detail(exc)
-        fail(ctx, code, message, exit_code=_EXIT_CODE_BY_ERROR_CODE.get(code, exit_code_for(code)))
+        details = exc.details if isinstance(exc, CurseForgeClientError) else None
+        fail(ctx, code, message, exit_code=_EXIT_CODE_BY_ERROR_CODE.get(code, exit_code_for(code)), details=details)
     emit(ctx, payload)
 
 

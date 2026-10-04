@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from typing import Any
 from urllib.parse import quote, unquote, urljoin, urlparse
@@ -43,6 +44,8 @@ PROGRAMMING_FRAMEWORK_TITLES = {
     "hyperlinks",
     "macro commands",
     "ui escape sequences",
+    "toc format",
+    "secure execution and tainting",
     "warcraft wiki:interface customization",
     "user interface customization guide",
     "ui faq/addon author resources",
@@ -163,6 +166,9 @@ def _title_pattern_family(normalized: str) -> str | None:
         return "api_enum"
     if normalized.startswith("uihandler "):
         return "ui_handler"
+    # Widget pages ("UIOBJECT Button") and FrameXML templates ("SecureActionButtonTemplate").
+    if normalized.startswith("uiobject ") or re.fullmatch(r"\w+template", normalized):
+        return "framework_page"
     # One page per console variable ("CVar autoLootDefault"); "Console variables" is their list.
     if normalized.startswith("cvar "):
         return "cvar"
@@ -438,8 +444,11 @@ def extract_reference_metadata(*, family: str, text: str, sections: list[dict[st
         return metadata
     metadata["programming_reference"] = True
     metadata["signature"] = _signature_text(root)
-    # Event pages title their arguments section "Payload".
-    metadata["arguments"] = (section_map.get("arguments") or section_map.get("payload") or {}).get("text")
+    # Event pages title their arguments section "Payload", and COMBAT_LOG_EVENT_UNFILTERED "Base
+    # Parameters". Only a top-level section counts: CLEU's nested "Payload" is an example trace.
+    top_level = _section_lookup([section for section in sections if section["level"] <= 2])
+    arguments = top_level.get("arguments") or top_level.get("payload") or top_level.get("base_parameters") or {}
+    metadata["arguments"] = arguments.get("text")
     metadata["returns"] = section_map.get("returns", {}).get("text")
     metadata["details"] = section_map.get("details", {}).get("text")
     return metadata

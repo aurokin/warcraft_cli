@@ -214,8 +214,8 @@ Fetch top composition ranking rows for an encounter.
 | `--limit` | int range [1<=x<=50] | 20 | Maximum report rows to request. |
 | `--role` | str (repeatable) |  | Role count filter <role>.<op>.<n>, role tank/heal/mdps/rdps, op eq/gt/gte/lt/lte, e.g. heal.gte.4; repeatable. |
 | `--spec` | str (repeatable) |  | Spec count filter <spec>.<op>.<n>, e.g. mage-frost.gte.1; any provider's spec spelling works; repeatable. |
-| `--killtime-min` | int range [x>=0] | 0 | Minimum kill time in seconds. |
-| `--killtime-max` | int range [x>=0] | 0 | Maximum kill time in seconds. |
+| `--kill-time-min / --killtime-min` | int range [x>=0] | 0 | Minimum kill time in seconds; 0 = no bound. |
+| `--kill-time-max / --killtime-max` | int range [x>=0] | 0 | Maximum kill time in seconds; 0 = no bound. |
 
 ## lorrgs user-report
 
@@ -258,5 +258,6 @@ Fetch selected fights from an already-cached Lorrgs user report.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--fight` | str |  | Dot-separated fight ids, e.g. 2.4.15. Defaults to fight id from URL. |
+| `--fight-id` | int (repeatable) |  | A fight id; repeatable, the same as --fight 2.4.15. |
 | `--player` | str |  | Optional dot-separated player source ids, e.g. 1.5.20. |
 | `--type` | str |  | Optional report view type, e.g. damage-done. Defaults to type from URL. |

@@ -47,7 +47,7 @@ Fan out a free-text query to every search-ready provider and rank the merged can
 
 ## warcraft resolve
 
-Fan out a query to every resolve-ready provider and return the single best match plus its follow-up command. The answer is the candidate `warcraft search` would rank first, skipping any its own provider rated `low`, and only when that provider resolved it at `high` confidence; otherwise the command reports `resolved: false` with the top-ranked remaining candidate as `best_unresolved_candidate` and lists any lower match a provider resolved under `provider_resolved_candidates`.
+Fan out a query to every resolve-ready provider and return the single best match plus its follow-up command. The answer is the candidate `warcraft search` would rank first, skipping any its own provider rated `low`, and only when that provider resolved it at `high` confidence; otherwise the command reports `resolved: false` with the top-ranked candidate as `best_unresolved_candidate` and lists any lower match a provider resolved under `provider_resolved_candidates`.
 
 **Arguments**
 

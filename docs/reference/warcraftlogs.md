@@ -91,7 +91,7 @@ List zones, optionally filtered to one expansion.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--expansion-id` | int |  | Optional Warcraft Logs expansion ID filter. |
+| `--expansion-id` | int |  | Optional Warcraft Logs expansion ID filter: 7 = Midnight, 6 = The War Within (`warcraftlogs expansions` lists them; Raider.IO numbers expansions differently). |
 
 ## warcraftlogs zone
 
@@ -125,21 +125,21 @@ Rank characters on one encounter, filtered by class, spec, difficulty, and serve
 | `--boss-id` | int |  | Encounter ID to rank. |
 | `--boss-name` | str |  | Encounter name to resolve within the selected zone. |
 | `--bracket` | int |  | Optional Warcraft Logs bracket filter. |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--class-name` | str |  | Optional class filter (Death Knight, death-knight, dk). |
 | `--spec-name` | str |  | Optional spec filter (Beast Mastery, beast-mastery, bm). |
-| `--metric` | str |  | Optional ranking metric such as dps, hps, or bossdps. |
+| `--metric` | str |  | Ranking metric such as dps, hps, or bossdps. Defaults to playerscore in a Mythic+ zone; in a raid zone hps for a healer --spec-name, else dps. |
 | `--page` | int range [x>=1] |  | Optional rankings page number. |
 | `--partition` | int |  | Optional Warcraft Logs partition filter. |
 | `--size` | int |  | Optional raid size filter. |
 | `--server-region` | str |  | Optional server region filter. |
 | `--server-slug` | str |  | Optional server slug filter. |
-| `--leaderboard` | str |  | Optional leaderboard enum filter. |
-| `--hard-mode-level` | str |  | Optional hard-mode-level enum filter. |
+| `--leaderboard` | text |  | Optional leaderboard filter. One of: Any, LogsOnly. |
+| `--hard-mode-level` | text |  | Optional hard-mode-level filter (no-hard-mode is NormalMode). One of: Any, Highest, NormalMode, Level0, Level1, Level2, Level3, Level4. |
 | `--filter` | str |  | Optional Warcraft Logs advanced encounter ranking filter string. |
 | `--include-combatant-info / --no-include-combatant-info` | boolean |  | Optional combatant info toggle. |
 | `--include-other-players / --no-include-other-players` | boolean |  | Optional toggle for other players in the clear. |
-| `--top` | int range [1<=x<=100] | 10 | Maximum returned ranking rows after normalization. |
+| `--limit / --top` | int range [1<=x<=100] | 10 | Maximum returned ranking rows after normalization. |
 
 ## warcraftlogs guild
 
@@ -177,7 +177,7 @@ Show a guild's progress and speed rankings for one zone.
 | --- | --- | --- | --- |
 | `--zone-id` | int |  | Optional Warcraft Logs zone ID. |
 | `--size` | int |  | Optional raid size. |
-| `--difficulty` | int |  | Optional difficulty ID for speed ranks. |
+| `--difficulty` | difficulty |  | Optional difficulty for speed ranks. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 
 ## warcraftlogs guild-members
 
@@ -248,11 +248,11 @@ Show a character's encounter rankings for one zone.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--zone-id` | int |  | Optional Warcraft Logs zone ID. |
-| `--difficulty` | int |  | Optional difficulty ID. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--metric` | str |  | Optional ranking metric such as dps, hps, or tankhps. |
 | `--size` | int |  | Optional raid size. |
 | `--spec-name` | str |  | Optional spec filter (Beast Mastery, beast-mastery, bm). |
-| `--top` | int range [1<=x<=20] | 5 | Number of top ranking rows to keep in the summary. |
+| `--limit / --top` | int range [1<=x<=20] | 5 | Number of top ranking rows to keep in the summary. |
 
 ## warcraftlogs report
 
@@ -283,8 +283,8 @@ List reports for a guild, optionally narrowed by zone and time window.
 | `--guild-name` | str |  | Optional guild name for guild-scoped report queries. |
 | `--limit` | int range [1<=x<=100] | 25 | Reports per page. |
 | `--page` | int range [x>=1] | 1 | Page number. |
-| `--start-time` | _finite_float |  | Optional report-range start time in milliseconds. |
-| `--end-time` | _finite_float |  | Optional report-range end time in milliseconds. |
+| `--start-time` | epoch_ms\|date |  | Report-range start: UNIX epoch ms or ISO-8601 date (UTC). |
+| `--end-time` | epoch_ms\|date |  | Report-range end: UNIX epoch ms or ISO-8601 date (UTC). |
 | `--zone-id` | int |  | Optional Warcraft Logs zone filter. |
 | `--game-zone-id` | int |  | Optional game zone filter. |
 
@@ -306,8 +306,8 @@ List a guild's reports by region, realm, and name.
 | --- | --- | --- | --- |
 | `--limit` | int range [1<=x<=100] | 25 | Reports per page. |
 | `--page` | int range [x>=1] | 1 | Page number. |
-| `--start-time` | _finite_float |  | Optional report-range start time in milliseconds. |
-| `--end-time` | _finite_float |  | Optional report-range end time in milliseconds. |
+| `--start-time` | epoch_ms\|date |  | Report-range start: UNIX epoch ms or ISO-8601 date (UTC). |
+| `--end-time` | epoch_ms\|date |  | Report-range end: UNIX epoch ms or ISO-8601 date (UTC). |
 | `--zone-id` | int |  | Optional Warcraft Logs zone filter. |
 | `--game-zone-id` | int |  | Optional game zone filter. |
 
@@ -322,15 +322,15 @@ Sample recent kills of one boss across reports and summarize them.
 | `--zone-id` | int | required | Warcraft Logs zone ID to sample reports from. |
 | `--boss-id` | int |  | Encounter ID to match. |
 | `--boss-name` | str |  | Boss name to match within sampled fights. |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--spec-name` | str |  | Optional sampled participant spec filter applied before ranking sampled kills. |
-| `--kill-time-min` | _finite_float |  | Optional minimum kill time in seconds. |
-| `--kill-time-max` | _finite_float |  | Optional maximum kill time in seconds. |
-| `--top` | int range [1<=x<=100] | 10 | Maximum returned kill rows after ranking. |
+| `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
+| `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
+| `--limit / --top` | int range [1<=x<=100] | 10 | Maximum returned kill rows after ranking. |
 | `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
 | `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
-| `--start-time` | _finite_float |  | Optional report-range start time in milliseconds. |
-| `--end-time` | _finite_float |  | Optional report-range end time in milliseconds. |
+| `--start-time` | epoch_ms\|date |  | Report-range start: UNIX epoch ms or ISO-8601 date (UTC). |
+| `--end-time` | epoch_ms\|date |  | Report-range end: UNIX epoch ms or ISO-8601 date (UTC). |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
 | `--guild-realm` | str |  | Optional guild-realm scope for report discovery. |
 | `--guild-name` | str |  | Optional guild-name scope for report discovery. |
@@ -346,15 +346,15 @@ Sample recent kills of one boss and return the fastest ones.
 | `--zone-id` | int | required | Warcraft Logs zone ID to sample reports from. |
 | `--boss-id` | int |  | Encounter ID to match. |
 | `--boss-name` | str |  | Boss name to match within sampled fights. |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--spec-name` | str |  | Optional sampled participant spec filter applied before ranking sampled kills. |
-| `--kill-time-min` | _finite_float |  | Optional minimum kill time in seconds. |
-| `--kill-time-max` | _finite_float |  | Optional maximum kill time in seconds. |
-| `--top` | int range [1<=x<=100] | 10 | Maximum returned kill rows after ranking. |
+| `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
+| `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
+| `--limit / --top` | int range [1<=x<=100] | 10 | Maximum returned kill rows after ranking. |
 | `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
 | `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
-| `--start-time` | _finite_float |  | Optional report-range start time in milliseconds. |
-| `--end-time` | _finite_float |  | Optional report-range end time in milliseconds. |
+| `--start-time` | epoch_ms\|date |  | Report-range start: UNIX epoch ms or ISO-8601 date (UTC). |
+| `--end-time` | epoch_ms\|date |  | Report-range end: UNIX epoch ms or ISO-8601 date (UTC). |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
 | `--guild-realm` | str |  | Optional guild-realm scope for report discovery. |
 | `--guild-name` | str |  | Optional guild-name scope for report discovery. |
@@ -371,14 +371,14 @@ Sample recent kills of one boss that include a given spec.
 | `--spec-name` | str |  | Required participant spec slug. Sampled kills are filtered to fights containing this spec. |
 | `--boss-id` | int |  | Encounter ID to match. |
 | `--boss-name` | str |  | Boss name to match within sampled fights. |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
-| `--kill-time-min` | _finite_float |  | Optional minimum kill time in seconds. |
-| `--kill-time-max` | _finite_float |  | Optional maximum kill time in seconds. |
-| `--top` | int range [1<=x<=100] | 10 | Maximum returned kill rows after ranking. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
+| `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
+| `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
+| `--limit / --top` | int range [1<=x<=100] | 10 | Maximum returned kill rows after ranking. |
 | `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
 | `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
-| `--start-time` | _finite_float |  | Optional report-range start time in milliseconds. |
-| `--end-time` | _finite_float |  | Optional report-range end time in milliseconds. |
+| `--start-time` | epoch_ms\|date |  | Report-range start: UNIX epoch ms or ISO-8601 date (UTC). |
+| `--end-time` | epoch_ms\|date |  | Report-range end: UNIX epoch ms or ISO-8601 date (UTC). |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
 | `--guild-realm` | str |  | Optional guild-realm scope for report discovery. |
 | `--guild-name` | str |  | Optional guild-name scope for report discovery. |
@@ -394,15 +394,15 @@ Count spec usage across a sample of recent kills of one boss.
 | `--zone-id` | int | required | Warcraft Logs zone ID to sample reports from. |
 | `--boss-id` | int |  | Encounter ID to match. |
 | `--boss-name` | str |  | Boss name to match within sampled fights. |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--spec-name` | str |  | Optional sampled participant spec filter applied before aggregation. |
-| `--kill-time-min` | _finite_float |  | Optional minimum kill time in seconds. |
-| `--kill-time-max` | _finite_float |  | Optional maximum kill time in seconds. |
-| `--top` | int range [1<=x<=100] | 10 | Maximum returned spec rows after ranking. |
+| `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
+| `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
+| `--limit / --top` | int range [1<=x<=100] | 10 | Maximum returned spec rows after ranking. |
 | `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
 | `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
-| `--start-time` | _finite_float |  | Optional report-range start time in milliseconds. |
-| `--end-time` | _finite_float |  | Optional report-range end time in milliseconds. |
+| `--start-time` | epoch_ms\|date |  | Report-range start: UNIX epoch ms or ISO-8601 date (UTC). |
+| `--end-time` | epoch_ms\|date |  | Report-range end: UNIX epoch ms or ISO-8601 date (UTC). |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
 | `--guild-realm` | str |  | Optional guild-realm scope for report discovery. |
 | `--guild-name` | str |  | Optional guild-name scope for report discovery. |
@@ -419,16 +419,16 @@ Summarize how often one ability is cast across a sample of recent kills.
 | `--ability-id` | int | required | Ability game ID to summarize across the sampled kill cohort. |
 | `--boss-id` | int |  | Encounter ID to match. |
 | `--boss-name` | str |  | Boss name to match within sampled fights. |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--spec-name` | str |  | Optional sampled participant spec filter applied before aggregation. |
-| `--kill-time-min` | _finite_float |  | Optional minimum kill time in seconds. |
-| `--kill-time-max` | _finite_float |  | Optional maximum kill time in seconds. |
+| `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
+| `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
 | `--preview-limit` | int range [1<=x<=100] | 10 | Maximum sampled kill rows to include in the preview payload. |
 | `--event-limit` | int range [1<=x<=5000] | 200 | Maximum cast events to request per sampled kill. |
 | `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
 | `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
-| `--start-time` | _finite_float |  | Optional report-range start time in milliseconds. |
-| `--end-time` | _finite_float |  | Optional report-range end time in milliseconds. |
+| `--start-time` | epoch_ms\|date |  | Report-range start: UNIX epoch ms or ISO-8601 date (UTC). |
+| `--end-time` | epoch_ms\|date |  | Report-range end: UNIX epoch ms or ISO-8601 date (UTC). |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
 | `--guild-realm` | str |  | Optional guild-realm scope for report discovery. |
 | `--guild-name` | str |  | Optional guild-name scope for report discovery. |
@@ -444,15 +444,15 @@ Sample raid compositions from recent kills of one boss.
 | `--zone-id` | int | required | Warcraft Logs zone ID to sample reports from. |
 | `--boss-id` | int |  | Encounter ID to match. |
 | `--boss-name` | str |  | Boss name to match within sampled fights. |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--spec-name` | str |  | Optional sampled participant spec filter applied before aggregation. |
-| `--kill-time-min` | _finite_float |  | Optional minimum kill time in seconds. |
-| `--kill-time-max` | _finite_float |  | Optional maximum kill time in seconds. |
-| `--top` | int range [1<=x<=100] | 10 | Maximum returned sampled kill rows after ranking. |
+| `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
+| `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
+| `--limit / --top` | int range [1<=x<=100] | 10 | Maximum returned sampled kill rows after ranking. |
 | `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
 | `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
-| `--start-time` | _finite_float |  | Optional report-range start time in milliseconds. |
-| `--end-time` | _finite_float |  | Optional report-range end time in milliseconds. |
+| `--start-time` | epoch_ms\|date |  | Report-range start: UNIX epoch ms or ISO-8601 date (UTC). |
+| `--end-time` | epoch_ms\|date |  | Report-range end: UNIX epoch ms or ISO-8601 date (UTC). |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
 | `--guild-realm` | str |  | Optional guild-realm scope for report discovery. |
 | `--guild-name` | str |  | Optional guild-name scope for report discovery. |
@@ -529,12 +529,12 @@ Summarize casts in one report fight, grouped by ability, source, or target.
 | `--fight-id` | int |  | Override or supply a fight ID when the report reference does not include one. |
 | `--source-id` | int |  | Optional source actor filter. |
 | `--target-id` | int |  | Optional target actor filter. |
-| `--ability-id` | _finite_float |  | Optional ability game ID filter. |
-| `--hostility-type` | str |  | Optional hostility filter. |
-| `--limit` | int range [1<=x<=10000] | 200 | Maximum cast events to request from Warcraft Logs. |
+| `--ability-id` | float |  | Optional ability game ID filter. |
+| `--hostility-type` | text |  | Optional hostility filter. One of: Friendlies, Enemies. |
+| `--event-limit / --limit` | int range [1<=x<=10000] | 200 | Maximum cast events to request from Warcraft Logs. |
 | `--preview-limit` | int range [1<=x<=200] | 20 | Maximum preview cast rows to return. |
-| `--window-start-ms` | _finite_float |  | Optional encounter-relative start offset in milliseconds. |
-| `--window-end-ms` | _finite_float |  | Optional encounter-relative end offset in milliseconds. |
+| `--window-start-ms` | float |  | Optional encounter-relative start offset in milliseconds. |
+| `--window-end-ms` | float |  | Optional encounter-relative end offset in milliseconds. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
 
@@ -555,13 +555,13 @@ Summarize buffs applied during one report fight.
 | `--fight-id` | int |  | Override or supply a fight ID when the report reference does not include one. |
 | `--source-id` | int |  | Optional source actor filter. |
 | `--target-id` | int |  | Optional target actor filter. |
-| `--ability-id` | _finite_float |  | Optional ability game ID filter. |
-| `--hostility-type` | str |  | Optional hostility filter. |
-| `--view-by` | str | source | Optional table view grouping. |
+| `--ability-id` | float |  | Optional ability game ID filter. |
+| `--hostility-type` | text |  | Optional hostility filter. One of: Friendlies, Enemies. |
+| `--view-by` | text | Source | Table view grouping. One of: Default, Ability, Source, Target. |
 | `--wipe-cutoff` | int |  | Optional wipe cutoff. |
 | `--preview-limit` | int range [1<=x<=200] | 20 | Maximum preview buff rows to return. |
-| `--window-start-ms` | _finite_float |  | Optional encounter-relative start offset in milliseconds. |
-| `--window-end-ms` | _finite_float |  | Optional encounter-relative end offset in milliseconds. |
+| `--window-start-ms` | float |  | Optional encounter-relative start offset in milliseconds. |
+| `--window-end-ms` | float |  | Optional encounter-relative end offset in milliseconds. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
 
@@ -583,10 +583,10 @@ Summarize aura uptime in one report fight, optionally over an explicit window.
 | `--fight-id` | int |  | Override or supply a fight ID when the report reference does not include one. |
 | `--source-id` | int |  | Optional source actor filter. |
 | `--target-id` | int |  | Optional target actor filter. |
-| `--hostility-type` | str |  | Optional hostility filter. |
+| `--hostility-type` | text |  | Optional hostility filter. One of: Friendlies, Enemies. |
 | `--wipe-cutoff` | int |  | Optional wipe cutoff. |
-| `--window-start-ms` | _finite_float |  | Optional encounter-relative start offset in milliseconds. |
-| `--window-end-ms` | _finite_float |  | Optional encounter-relative end offset in milliseconds. |
+| `--window-start-ms` | float |  | Optional encounter-relative start offset in milliseconds. |
+| `--window-end-ms` | float |  | Optional encounter-relative end offset in milliseconds. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
 | `--include-raw` | boolean | false | Attach the untyped Warcraft Logs table entry to every row. Off by default: the raw entries carry full gear/pet/ability detail and dominate the payload size. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
@@ -607,15 +607,15 @@ Compare aura uptime between two explicit windows of the same report fight.
 | --- | --- | --- | --- |
 | `--ability-id` | int | required | Required aura ability game ID. |
 | `--fight-id` | int |  | Override or supply a fight ID when the report reference does not include one. |
-| `--left-window-start-ms` | _finite_float |  | Encounter-relative start offset for the left comparison window. |
-| `--left-window-end-ms` | _finite_float |  | Encounter-relative end offset for the left comparison window. |
-| `--right-window-start-ms` | _finite_float |  | Encounter-relative start offset for the right comparison window. |
-| `--right-window-end-ms` | _finite_float |  | Encounter-relative end offset for the right comparison window. |
+| `--left-window-start-ms` | float |  | Encounter-relative start offset for the left comparison window. |
+| `--left-window-end-ms` | float |  | Encounter-relative end offset for the left comparison window. |
+| `--right-window-start-ms` | float |  | Encounter-relative start offset for the right comparison window. |
+| `--right-window-end-ms` | float |  | Encounter-relative end offset for the right comparison window. |
 | `--left-label` | str | left | Label for the left comparison window. |
 | `--right-label` | str | right | Label for the right comparison window. |
 | `--source-id` | int |  | Optional source actor filter applied to both windows. |
 | `--target-id` | int |  | Optional target actor filter applied to both windows. |
-| `--hostility-type` | str |  | Optional hostility filter applied to both windows. |
+| `--hostility-type` | text |  | Optional hostility filter applied to both windows. One of: Friendlies, Enemies. |
 | `--wipe-cutoff` | int |  | Optional wipe cutoff applied to both windows. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
@@ -637,11 +637,11 @@ Summarize damage in one report fight by source actor.
 | `--fight-id` | int |  | Override or supply a fight ID when the report reference does not include one. |
 | `--source-id` | int |  | Optional source actor filter. |
 | `--target-id` | int |  | Optional target actor filter. |
-| `--ability-id` | _finite_float |  | Optional ability game ID filter. |
-| `--hostility-type` | str |  | Optional hostility filter. |
+| `--ability-id` | float |  | Optional ability game ID filter. |
+| `--hostility-type` | text |  | Optional hostility filter. One of: Friendlies, Enemies. |
 | `--wipe-cutoff` | int |  | Optional wipe cutoff. |
-| `--window-start-ms` | _finite_float |  | Optional encounter-relative start offset in milliseconds. |
-| `--window-end-ms` | _finite_float |  | Optional encounter-relative end offset in milliseconds. |
+| `--window-start-ms` | float |  | Optional encounter-relative start offset in milliseconds. |
+| `--window-end-ms` | float |  | Optional encounter-relative end offset in milliseconds. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
 | `--include-raw` | boolean | false | Attach the untyped Warcraft Logs table entry to every row. Off by default: the raw entries carry full gear/pet/ability detail and dominate the payload size. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
@@ -663,11 +663,11 @@ Summarize damage in one report fight by target actor.
 | `--fight-id` | int |  | Override or supply a fight ID when the report reference does not include one. |
 | `--source-id` | int |  | Optional source actor filter. |
 | `--target-id` | int |  | Optional target actor filter. |
-| `--ability-id` | _finite_float |  | Optional ability game ID filter. |
-| `--hostility-type` | str |  | Optional hostility filter. |
+| `--ability-id` | float |  | Optional ability game ID filter. |
+| `--hostility-type` | text |  | Optional hostility filter. One of: Friendlies, Enemies. |
 | `--wipe-cutoff` | int |  | Optional wipe cutoff. |
-| `--window-start-ms` | _finite_float |  | Optional encounter-relative start offset in milliseconds. |
-| `--window-end-ms` | _finite_float |  | Optional encounter-relative end offset in milliseconds. |
+| `--window-start-ms` | float |  | Optional encounter-relative start offset in milliseconds. |
+| `--window-end-ms` | float |  | Optional encounter-relative end offset in milliseconds. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
 | `--include-raw` | boolean | false | Attach the untyped Warcraft Logs table entry to every row. Off by default: the raw entries carry full gear/pet/ability detail and dominate the payload size. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
@@ -689,12 +689,12 @@ Return the raw damage table for one report fight.
 | `--fight-id` | int |  | Override or supply a fight ID when the report reference does not include one. |
 | `--source-id` | int |  | Optional source actor filter. |
 | `--target-id` | int |  | Optional target actor filter. |
-| `--ability-id` | _finite_float |  | Optional ability game ID filter. |
-| `--hostility-type` | str |  | Optional hostility filter. |
-| `--view-by` | str | source | Optional table view grouping. |
+| `--ability-id` | float |  | Optional ability game ID filter. |
+| `--hostility-type` | text |  | Optional hostility filter. One of: Friendlies, Enemies. |
+| `--view-by` | text | Source | Table view grouping. One of: Default, Ability, Source, Target. |
 | `--wipe-cutoff` | int |  | Optional wipe cutoff. |
-| `--window-start-ms` | _finite_float |  | Optional encounter-relative start offset in milliseconds. |
-| `--window-end-ms` | _finite_float |  | Optional encounter-relative end offset in milliseconds. |
+| `--window-start-ms` | float |  | Optional encounter-relative start offset in milliseconds. |
+| `--window-end-ms` | float |  | Optional encounter-relative end offset in milliseconds. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
 
@@ -709,14 +709,14 @@ Bucket kill durations across a sample of recent kills of one boss.
 | `--zone-id` | int | required | Warcraft Logs zone ID to sample reports from. |
 | `--boss-id` | int |  | Encounter ID to match. |
 | `--boss-name` | str |  | Boss name to match within sampled fights. |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--spec-name` | str |  | Optional sampled participant spec filter applied before aggregation. |
-| `--kill-time-min` | _finite_float |  | Optional minimum kill time in seconds. |
-| `--kill-time-max` | _finite_float |  | Optional maximum kill time in seconds. |
+| `--kill-time-min` | float |  | Optional minimum kill time in seconds. |
+| `--kill-time-max` | float |  | Optional maximum kill time in seconds. |
 | `--report-pages` | int range [1<=x<=10] | 1 | How many report-list pages to sample. |
 | `--reports-per-page` | int range [1<=x<=100] | 25 | Reports to fetch per sampled page. |
-| `--start-time` | _finite_float |  | Optional report-range start time in milliseconds. |
-| `--end-time` | _finite_float |  | Optional report-range end time in milliseconds. |
+| `--start-time` | epoch_ms\|date |  | Report-range start: UNIX epoch ms or ISO-8601 date (UTC). |
+| `--end-time` | epoch_ms\|date |  | Report-range end: UNIX epoch ms or ISO-8601 date (UTC). |
 | `--guild-region` | str |  | Optional guild-region scope for report discovery. |
 | `--guild-realm` | str |  | Optional guild-realm scope for report discovery. |
 | `--guild-name` | str |  | Optional guild-name scope for report discovery. |
@@ -736,7 +736,7 @@ List the fights in one report.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
 
 ## warcraftlogs graphql
@@ -758,9 +758,9 @@ Run a raw Warcraft Logs GraphQL query, or introspect the schema with --introspec
 | `--report-code` | str |  | Inject report code into declared $code variables. |
 | `--fight-id` | int (repeatable) |  | Optional fight ID filter. Repeat as needed. |
 | `--encounter-id` | int |  | Inject declared $encounterID variables. |
-| `--start-time` | _finite_float |  | Inject declared $startTime variables. |
-| `--end-time` | _finite_float |  | Inject declared $endTime variables. |
-| `--difficulty` | int |  | Inject declared $difficulty variables. |
+| `--start-time` | float |  | Inject declared $startTime variables. |
+| `--end-time` | float |  | Inject declared $endTime variables. |
+| `--difficulty` | difficulty |  | Inject declared $difficulty variables. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--zone-id` | int |  | Inject declared $zoneID variables. |
 | `--source-id` | int |  | Inject declared $sourceID variables. |
 | `--target-id` | int |  | Inject declared $targetID variables. |
@@ -780,18 +780,18 @@ Return raw report events for one fight (--fight-id) or one explicit --start-time
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--ability-id` | _finite_float |  | Optional ability game ID filter. |
-| `--data-type` | str |  | Event data type (e.g. casts, damage-done, healing). Strongly recommended; without it Warcraft Logs returns events.data: null even on valid scoped slices. |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
+| `--ability-id` | float |  | Optional ability game ID filter. |
+| `--data-type` | text |  | Event data type. Strongly recommended; without it Warcraft Logs returns events.data: null even on valid scoped slices. One of: All, Buffs, Casts, CombatantInfo, DamageDone, DamageTaken, Deaths, Debuffs, Dispels, Healing, Interrupts, Resources, Summons, Threat. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--encounter-id` | int |  | Optional encounter ID filter. |
-| `--end-time` | _finite_float |  | Optional event-range end timestamp. |
+| `--end-time` | float |  | Optional event-range end, in milliseconds from the report start. |
 | `--fight-id` | int (repeatable) |  | Optional fight ID filter. Repeat as needed. |
 | `--filter-expression` | str |  | Optional Warcraft Logs filter expression. |
-| `--hostility-type` | str |  | Optional hostility filter. |
-| `--kill-type` | str |  | Optional kill filter. |
+| `--hostility-type` | text |  | Optional hostility filter. One of: Friendlies, Enemies. |
+| `--kill-type` | text |  | Optional kill filter. One of: All, Encounters, Kills, Trash, Wipes. |
 | `--limit` | int range [1<=x<=10000] |  | Optional page event limit. |
 | `--source-id` | int |  | Optional source actor ID filter. |
-| `--start-time` | _finite_float |  | Optional event-range start timestamp. |
+| `--start-time` | float |  | Optional event-range start, in milliseconds from the report start. |
 | `--target-id` | int |  | Optional target actor ID filter. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
@@ -810,20 +810,20 @@ Return a raw report table for one narrowed slice of a report.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--ability-id` | _finite_float |  | Optional ability game ID filter. |
-| `--data-type` | str |  | Optional table data type. |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
+| `--ability-id` | float |  | Optional ability game ID filter. |
+| `--data-type` | text |  | Optional table data type. One of: Summary, Buffs, Casts, DamageDone, DamageTaken, Deaths, Debuffs, Dispels, Healing, Interrupts, Resources, Summons, Survivability, Threat. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--encounter-id` | int |  | Optional encounter ID filter. |
-| `--end-time` | _finite_float |  | Optional event-range end timestamp. |
+| `--end-time` | float |  | Optional event-range end, in milliseconds from the report start. |
 | `--fight-id` | int (repeatable) |  | Optional fight ID filter. Repeat as needed. |
 | `--filter-expression` | str |  | Optional Warcraft Logs filter expression. |
-| `--hostility-type` | str |  | Optional hostility filter. |
-| `--kill-type` | str |  | Optional kill filter. |
+| `--hostility-type` | text |  | Optional hostility filter. One of: Friendlies, Enemies. |
+| `--kill-type` | text |  | Optional kill filter. One of: All, Encounters, Kills, Trash, Wipes. |
 | `--source-id` | int |  | Optional source actor ID filter. |
-| `--start-time` | _finite_float |  | Optional event-range start timestamp. |
+| `--start-time` | float |  | Optional event-range start, in milliseconds from the report start. |
 | `--target-id` | int |  | Optional target actor ID filter. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
-| `--view-by` | str |  | Optional view grouping. |
+| `--view-by` | text |  | Optional view grouping. One of: Default, Ability, Source, Target. |
 | `--wipe-cutoff` | int |  | Optional wipe cutoff. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
 
@@ -841,20 +841,20 @@ Return a raw report graph series for one narrowed slice of a report.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--ability-id` | _finite_float |  | Optional ability game ID filter. |
-| `--data-type` | str |  | Optional graph data type. |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
+| `--ability-id` | float |  | Optional ability game ID filter. |
+| `--data-type` | text |  | Optional graph data type. One of: Summary, Buffs, Casts, DamageDone, DamageTaken, Deaths, Debuffs, Dispels, Healing, Interrupts, Resources, Summons, Survivability, Threat. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--encounter-id` | int |  | Optional encounter ID filter. |
-| `--end-time` | _finite_float |  | Optional event-range end timestamp. |
+| `--end-time` | float |  | Optional event-range end, in milliseconds from the report start. |
 | `--fight-id` | int (repeatable) |  | Optional fight ID filter. Repeat as needed. |
 | `--filter-expression` | str |  | Optional Warcraft Logs filter expression. |
-| `--hostility-type` | str |  | Optional hostility filter. |
-| `--kill-type` | str |  | Optional kill filter. |
+| `--hostility-type` | text |  | Optional hostility filter. One of: Friendlies, Enemies. |
+| `--kill-type` | text |  | Optional kill filter. One of: All, Encounters, Kills, Trash, Wipes. |
 | `--source-id` | int |  | Optional source actor ID filter. |
-| `--start-time` | _finite_float |  | Optional event-range start timestamp. |
+| `--start-time` | float |  | Optional event-range start, in milliseconds from the report start. |
 | `--target-id` | int |  | Optional target actor ID filter. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
-| `--view-by` | str |  | Optional view grouping. |
+| `--view-by` | text |  | Optional view grouping. One of: Default, Ability, Source, Target. |
 | `--wipe-cutoff` | int |  | Optional wipe cutoff. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
 
@@ -891,13 +891,13 @@ Return a report's player details for one fight (--fight-id) or one explicit --st
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--encounter-id` | int |  | Optional encounter ID filter. |
-| `--end-time` | _finite_float |  | Optional event-range end timestamp. |
+| `--end-time` | float |  | Optional event-range end, in milliseconds from the report start. |
 | `--fight-id` | int (repeatable) |  | Optional fight ID filter. Repeat as needed. |
 | `--include-combatant-info / --no-include-combatant-info` | boolean |  | Optional combatant detail toggle. |
-| `--kill-type` | str |  | Optional kill filter. |
-| `--start-time` | _finite_float |  | Optional event-range start timestamp. |
+| `--kill-type` | text |  | Optional kill filter. One of: All, Encounters, Kills, Trash, Wipes. |
+| `--start-time` | float |  | Optional event-range start, in milliseconds from the report start. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
 
@@ -915,12 +915,12 @@ Return the rankings attached to one report's fights.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--compare` | str |  | Optional compare mode such as rankings or parses. |
-| `--difficulty` | int |  | Optional difficulty ID filter. |
+| `--compare` | text |  | Optional compare mode. One of: Rankings, Parses. |
+| `--difficulty` | difficulty |  | Optional difficulty filter. An id or name: lfr = 1, normal = 3, heroic = 4, mythic = 5 (`warcraftlogs zone <id>` lists a zone's). |
 | `--encounter-id` | int |  | Optional encounter ID filter. |
 | `--fight-id` | int (repeatable) |  | Optional fight ID filter. Repeat as needed. |
-| `--player-metric` | str |  | Optional player metric such as dps or hps. |
-| `--timeframe` | str |  | Optional timeframe such as today or historical. |
+| `--player-metric` | str |  | Player metric such as dps or hps for every role. Defaults to Warcraft Logs' default (dps for raid fights, score for Mythic+), with healers on hps in raid fights. |
+| `--timeframe` | text |  | Optional ranking timeframe. One of: Today, Historical. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
 
 ## warcraftlogs auth

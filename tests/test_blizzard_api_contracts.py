@@ -140,6 +140,19 @@ def test_character_command_uses_profile_namespace(monkeypatch: pytest.MonkeyPatc
     assert payload["data"]["name"] == "Imonthegcd"
 
 
+def test_character_takes_region_realm_name_like_the_other_profile_clis(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `blizzard character us illidan Name` failed with "Got unexpected extra argument(s)".
+    _install_recorder(monkeypatch)
+    result = runner.invoke(app, ["character", "eu", "illidan", "Imonthegcd"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert (payload["provenance"]["namespace"], payload["data"]["name"]) == ("profile-eu", "Imonthegcd")
+
+    clash = runner.invoke(app, ["character", "eu", "illidan", "Imonthegcd", "--region", "us"])
+    assert clash.exit_code == 2, clash.output
+    assert json.loads(clash.stderr)["error"]["code"] == "invalid_query"
+
+
 def test_region_option_routes_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_recorder(monkeypatch)
     result = runner.invoke(app, ["realm", "draenor", "--region", "eu"])

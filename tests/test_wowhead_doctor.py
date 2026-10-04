@@ -163,3 +163,41 @@ def test_wowhead_doctor_marks_degraded_when_only_one_probe_fails(monkeypatch) ->
     data = json.loads(result.stdout)["data"]
     assert data["status"] == "degraded"
     assert data["failed_probes"] == ["search_suggestions"]
+
+
+def test_doctor_reports_an_unreachable_redis_as_degraded(monkeypatch) -> None:
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "redis")
+    monkeypatch.setenv("WOWHEAD_REDIS_URL", "redis://127.0.0.1:1/0")
+    monkeypatch.setattr(
+        "wowhead_cli.provider.cache_backend_health",
+        lambda settings: {"available": False, "error": "Error 61 connecting to 127.0.0.1:1."},
+    )
+
+    result = runner.invoke(app, ["doctor", "--no-live"])
+
+    data = json.loads(result.stdout)["data"]
+    assert data["status"] == "degraded"
+    assert data["failed_probes"] == ["cache"]
+    assert (data["cache"]["available"], data["cache"]["error"]) == (False, "Error 61 connecting to 127.0.0.1:1.")
+
+
+def test_cache_inspect_summary_ranks_and_counts_redis_namespaces(monkeypatch) -> None:
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "redis")
+    monkeypatch.setenv("WOWHEAD_REDIS_URL", "redis://cache.example:6379/0")
+    monkeypatch.setattr(
+        "wowhead_cli.main.inspect_redis_cache",
+        lambda redis_url, *, prefix, **kwargs: {
+            "kind": "redis",
+            "available": True,
+            "count": 7,
+            "namespaces": {"entity_page_html": 1, "entity_response": 1, "search_suggestions": 4, "tooltip_meta": 1},
+            "error": None,
+        },
+    )
+
+    result = runner.invoke(app, ["cache-inspect", "--summary", "--namespace-limit", "2"])
+
+    assert json.loads(result.stdout)["data"]["stats"]["top_namespaces"] == [
+        {"namespace": "search_suggestions", "total": 4},
+        {"namespace": "entity_page_html", "total": 1},
+    ]

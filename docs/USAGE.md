@@ -114,11 +114,12 @@ warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/warrior_fu
   - it uses Warcraft Logs `report-events --data-type casts` for the selected player's exact cast timestamps
   - it uses Lorrgs `spec-spells`, `boss-spells`, and optional `spec-ranking` samples to label cooldowns and compare top-parse phase timing. The comparison uses `--difficulty` when passed, otherwise the Warcraft Logs fight's own difficulty (heroic or mythic, echoed as `query.difficulty`); a fight at any other difficulty gets no comparison and a note saying why
   - it emits phase windows, selected-phase player casts, selected-phase boss casts, tracked spell metadata, top-parse samples, source commands, and notes; it does not synthesize strategy advice
-  - the top-parse comparison needs a Lorrgs boss slug, which only a Lorrgs-cached report supplies; for any other report pass `--boss-slug`. When the comparison does not run, `comparison.reason` names why and a note names the flag that fixes it
-  - Lorrgs only serves reports it has already cached. For any other report — or when Lorrgs itself is unreachable — pass `--actor-id` and `--spec-slug` and the command degrades instead of failing: the packet still carries the Warcraft Logs cast timeline, with `lorrgs.status: "unavailable"`. `lorrgs.message` names the real reason (only a `not_found` is reported as "not cached"; a timeout or transport failure says so) and `lorrgs.source` keeps the provider's own error
-  - in that degraded mode the phase windows come from the Warcraft Logs fight's phase transitions (`phase.source: "warcraftlogs"`, `"lorrgs"` otherwise): windows are numbered P1, P2, ... in order as on the Lorrgs path, and each carries the encounter phase's `phase_id` and `name`. A fight with no phase transitions, or a failed lookup, has no windows, so `--phase` cannot be applied: `phase.requested` echoes the phase you asked for, `phase.selected` is `null`, `cooldowns.player_casts` covers the whole fight, and `notes` says so. Without `--actor-id` and `--spec-slug` the command fails instead, naming the Lorrgs error and the two flags; while Lorrgs itself is down, also pass `--spell-id` for each cooldown (named `spell:<id>` without Lorrgs metadata)
-  - Lorrgs can also cache a fight without its players; the command then degrades the same way (`lorrgs.reason: "lorrgs_fight_has_no_players"`) or, without `--actor-id` and `--spec-slug`, fails with that code (exit 4)
-  - in degraded mode the player's name and class come from the Warcraft Logs roster of the selected fight (`report-player-details --fight-id`), an `--actor-id` that fight lacks fails `actor_id_not_found` (exit 4) even when the player is elsewhere in the report, and `player.deaths` is `null` because deaths come only from the Lorrgs timeline
+  - the top-parse comparison needs a Lorrgs boss slug: a Lorrgs-cached report names it, otherwise it is the Lorrgs boss whose id is the Warcraft Logs fight's encounter id; `--boss-slug` overrides both. When the comparison does not run, `comparison.reason` names why and a note names the flag that fixes it
+  - Lorrgs' `other-externals` (Power Infusion, Bloodlust and the like, which Lorrgs records on top parses as buffs received) that the player did not cast in the fight are left out of the comparison and listed in `cooldowns.received_auras`; one the player cast (a priest's own Power Infusion) and any `--spell-id` stay compared, so an external the player owns but never pressed is not reported as missed, and the analyzed fight is skipped when it is itself a top parse (`comparison.excluded_analyzed_fight`)
+  - Lorrgs only serves reports it has already cached. For any other report — or when Lorrgs itself is unreachable — the command degrades instead of failing: the packet still carries the Warcraft Logs cast timeline, with `lorrgs.status: "unavailable"`, and the actor (`--actor-id` or `--actor-name`) and spec come from the Warcraft Logs roster of the fight (`--spec-slug` only when the roster names no spec). `lorrgs.message` names the real reason (only a `not_found` is reported as "not cached"; a timeout or transport failure says so) and `lorrgs.source` keeps the provider's own error
+  - in that degraded mode the phase windows come from the Warcraft Logs fight's phase transitions (`phase.source: "warcraftlogs"`, `"lorrgs"` otherwise): windows are numbered P1, P2, ... in order as on the Lorrgs path, and each carries the encounter phase's `phase_id` and `name`. A fight with no phase transitions, or a failed lookup, has no windows, so `--phase` cannot be applied: `phase.requested` echoes the phase you asked for, `phase.selected` is `null`, `cooldowns.player_casts` covers the whole fight, and `notes` says so. Without an actor flag the command fails `missing_actor` (exit 2), naming the Lorrgs error and listing the fight's roster in `error.details.available_players`; when the roster names no spec it fails `spec_slug_missing` (exit 2). While Lorrgs itself is down, also pass `--spell-id` for each cooldown (named `spell:<id>` without Lorrgs metadata)
+  - Lorrgs can also cache a fight without its players; the command then degrades the same way (`lorrgs.reason: "lorrgs_fight_has_no_players"`)
+  - in degraded mode the player's name, class and spec come from the Warcraft Logs roster of the selected fight (`report-player-details --fight-id`), an `--actor-id` or `--actor-name` that fight lacks fails `actor_id_not_found` / `actor_name_not_found` (exit 4) even when the player is elsewhere in the report, and `player.deaths` is `null` because deaths come only from the Lorrgs timeline
   - a missing fight (`missing_fight`) or a missing actor selection (`missing_actor`) is a usage error (exit 2)
   - a `--spec-slug` of another class than the player's fails `invalid_query` (exit 2) instead of comparing the wrong spec
 - `warcraft guild` normalizes region/realm/name input (an Oceanic region alias such as `oce` is looked up as `us`, the region Oceanic realms belong to; `actor-profile --region` does the same) and returns the Raider.IO guild snapshot (identity, raid progression, roster preview, citations) as `sources.raiderio.summary`, with the call's provenance as `sources.raiderio.provenance`; `warcraft raiderio guild` returns the raw Raider.IO envelope. There is no `active_raid`: `sources.raiderio.summary.raids[]` carries every raid Raider.IO returned, each joined to its own ranks by `raid_slug`. Raider.IO orders those rows by slug and carries no raid start/end window, so naming one "active" would be a guess — cross-reference `raiderio raids`, whose rows carry per-region `starts`/`ends`, when you need the currently running tier.
@@ -159,7 +160,7 @@ warcraft simc analysis-packet <simc-root>/ActionPriorityLists/default/warrior_fu
 - the merged `warcraft search` list interleaves the providers' own lists using a wrapper ranking layer that combines provider score, query intent, provider family, and result kind; it never reorders two rows from the same provider, because a provider's own order is its ranking
 - flattened wrapper results include `wrapper_ranking` so agents can inspect why a provider/result surfaced first
 - when no included provider searches the query (for example `--expansion fresh`, which leaves only Warcraft Logs and its explicit report references), `search` and `resolve` fail `no_searching_provider` (exit 2) with the included and excluded providers in `error.details`, instead of an empty page
-- `warcraft resolve` ranks each provider's match exactly as `warcraft search` ranks that provider's top row, skips any match its own provider rated `low` (a tie it could not break never blocks another provider's answer), and answers with the top-ranked remaining one only when its own provider resolved it and the query's intent does not rank its family down (or its title is exactly the query); otherwise it reports `resolved: false` with the top-ranked remaining candidate (a `low` match only when every match is `low`) as `best_unresolved_candidate`, whose `unresolved_reason` is `single_word_query_not_named_exactly` when its provider capped it under the one-word rule (read from the provider's `confidence_cap`), `provider_family_ranked_down_by_query_intent` when its provider resolved it but the query asked for another kind of source, and `provider_did_not_resolve` otherwise (a capped or `medium` row keeps its rank, so it can hide another provider's resolved answer: `mount` leaves Wowhead's capped "Mount Hyjal" above the wiki's "Mount"; every such answer is listed in `provider_resolved_candidates` with its `next_command`). `fallback_search_commands` follows the same order, so the `low` matches' searches come last. Its `--limit` only sizes `--ranking-debug`
+- `warcraft resolve` ranks each provider's match exactly as `warcraft search` ranks that provider's top row, skips any match its own provider rated `low` (a tie it could not break never blocks another provider's answer), and answers with the top-ranked remaining one only when its own provider resolved it and the query's intent does not rank its family down (or its title is exactly the query); otherwise it reports `resolved: false` with the top-ranked candidate as `best_unresolved_candidate` (a `low` match keeps its rank in the hints: it often means two right pages tied, so an off-intent `medium` match does not lead them), whose `unresolved_reason` is `single_word_query_not_named_exactly` when its provider capped it under the one-word rule (read from the provider's `confidence_cap`), `provider_family_ranked_down_by_query_intent` when its provider resolved it but the query asked for another kind of source, and `provider_did_not_resolve` otherwise (a capped or `medium` row keeps its rank, so it can hide another provider's resolved answer: `mount` leaves Wowhead's capped "Mount Hyjal" above the wiki's "Mount"; every such answer is listed in `provider_resolved_candidates` with its `next_command`). `fallback_search_commands` follows the same order. Its `--limit` only sizes `--ranking-debug`. `search` and `resolve` ask the providers concurrently, so a query waits for the slowest provider rather than all of them in turn, and still list them in registry order
 - `warcraft search --brief` and `warcraft resolve --brief` shrink candidate rows to the wrapper decision surface and drop the per-provider payloads; `--compact` is the global output flag only (before the subcommand) and truncates long prose strings in any payload. The two no longer share a name: `--compact` after the subcommand is a usage error (exit 2)
 - `--brief` never hides a provider failure: `failed_providers`, `failed_provider_count`, and `answered_provider_count` stay in both shapes
 - `warcraft search` reports `count` as the rows on the merged page and `truncated` as whether `--limit` cut the merged candidates (`merge_policy.candidate_row_count`); `merge_policy.provider_total_matches` keeps each provider's own `total_matches`, under `--brief` too (`null` for a stub or a provider in `failed_providers`). Each provider's scores are rescaled against that provider's own best row before the merge, with a floor so a provider whose best row is weak is not promoted for topping its own empty field. Rows whose rescaled wrapper scores tie are ordered by provider name, never by the raw provider-local scores, which are not comparable
@@ -363,14 +364,20 @@ even if it made no lookups:
 
 ```json
 "cache": {"backend": "file", "lookups": 3, "hits": 1, "hit": true, "all_hits": false,
-          "oldest_hit_age_seconds": 312, "oldest_hit_ttl_seconds": 900}
+          "oldest_hit_age_seconds": 312, "oldest_hit_ttl_seconds": 900, "errors": 0}
 ```
 
 - `hit` is true when any lookup was answered from the cache; `all_hits` when every lookup was, so
   nothing came off the wire.
 - `oldest_hit_age_seconds` is the age of the oldest entry replayed, and `oldest_hit_ttl_seconds` how
-  old that entry may get before it expires. Both are null without a hit, and with the Redis backend,
-  which records no store time.
+  old that entry may get before it expires. Both are null without a hit, and whenever any hit came
+  from the Redis backend, which records no store time (so a `mixed` aggregate never reports only the
+  file hits' age).
+- `errors` counts cache reads and writes that never reached the backend: a Redis that is down, hung
+  or refusing the credentials. Each such lookup is also a miss, so `errors > 0` with `hits: 0` is a
+  broken cache, not a cold one. After the first failure the process skips that Redis, so a dead
+  Redis costs one short timeout (1s to connect, 2s per call) per invocation; each provider's
+  `doctor` reports why.
 - `warcraft` reports the aggregate over every provider it called; each embedded provider envelope
   carries its own block wherever the command embeds it (for example `data.providers[].payload`, or
   `data.provider_results[].export` in `guide-compare-query`). `backend` is `mixed` when those
@@ -397,13 +404,31 @@ WOWHEAD_COMMENT_REPLIES_CACHE_TTL_SECONDS=1800
 WOWHEAD_ENTITY_CACHE_TTL_SECONDS=3600
 ```
 
-Optional Redis support:
+Every cached provider reads the same variables under its own prefix (`WOWHEAD_`, `RAIDERIO_`,
+`WARCRAFTLOGS_`, `BLIZZARD_`, `CURSEFORGE_`, `ICY_VEINS_`, `METHOD_`, `LORRGS_`, `RAIDBOTS_`,
+`WARCRAFT_WIKI_`); each provider's `doctor` reports the resolved `cache` block, including
+`cache_dir` and the Redis `prefix`.
+
+Optional Redis support (needs the `redis` extra: `pip install 'warcraft[redis]'`, or
+`uv sync --all-extras` in a checkout; without it a Redis backend fails `invalid_cache_config`):
 
 ```bash
 WOWHEAD_CACHE_BACKEND=redis
 WOWHEAD_REDIS_URL=redis://host:6379/3
 WOWHEAD_REDIS_PREFIX=wowhead_cli
 ```
+
+With a Redis backend, every provider's `doctor` pings it and reports `status: degraded` with
+`cache.available: false` and the reason in `cache.error` when Redis is down, rejects the
+credentials, the URL is invalid or the `redis` extra is missing (`wowhead doctor` also lists `cache`
+in `failed_probes`).
+
+Bypassing the cache for fresh data:
+- For one run, turn a provider's cache off: `WOWHEAD_CACHE_BACKEND=none wowhead entity item 19019`
+  (also `off` or `disabled`). Nothing is read or written, and `provenance.cache` is absent.
+- To drop stored entries, only `wowhead` has `cache-inspect` / `cache-clear`. For any other provider,
+  delete the `cache_dir` its `doctor` reports (or a namespace directory inside it), or on Redis
+  delete its keys: `redis-cli --scan --pattern '<prefix>:<namespace>:*' | xargs redis-cli del`.
 
 Current active cache layers:
 - transport cache for raw tooltip, page, search, and comment responses

@@ -31,7 +31,7 @@ Global flags go before the subcommand: `--pretty`, `--compact`, `--compact-max-c
 | `inspect-report` | `--no-raw` | Omit the raw `data.json` payload. Recommended for large Top Gear/Droptimizer reports. |
 | `input` | — | No command flags. |
 | `explain-input` | `--text TEXT` | Read inline SimC addon/profile text. |
-| `explain-input` | `--file PATH` | Read SimC text from a file. With neither flag, the text is read from stdin. |
+| `explain-input` | `--file PATH` | Read SimC text from a file (`-` reads stdin). With neither flag, the text is read from stdin. |
 
 ```bash
 raidbots --pretty inspect-report https://www.raidbots.com/simbot/report/abc123 --no-raw
@@ -72,7 +72,7 @@ Failures write the error envelope to stderr. Codes follow
 | `invalid_report` | 1 | The report payload is not SimC json2. |
 | `invalid_cache_config` | 1 | `RAIDBOTS_CACHE_*` environment values are unusable. |
 | `invalid_query` | 2 | Bad `explain-input` flags, empty SimC text, text with no SimC `key=value` line, no `--text`/`--file` while stdin is a terminal, or upstream HTTP 400. |
-| `not_found` | 4 | No readable report: upstream HTTP 404, HTTP 403 from the report storage bucket, or an HTTP 200 that carries the Raidbots web page instead of report content (wrong, expired, or private report). Raidbots takes no credentials, so 403 never means bad credentials. |
+| `not_found` | 4 | An `explain-input --file` that does not exist, or no readable report: upstream HTTP 404, HTTP 403 from the report storage bucket, or an HTTP 200 that carries the Raidbots web page instead of report content (wrong, expired, or private report). Raidbots takes no credentials, so 403 never means bad credentials. |
 | `network_error`, `timeout`, `rate_limited`, `upstream_error` | 5 | Transport failure, HTTP 429, or any other upstream status. |
 
 ## Configuration

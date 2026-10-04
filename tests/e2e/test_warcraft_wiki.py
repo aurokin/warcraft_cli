@@ -238,6 +238,10 @@ def test_api_commands_resolve_the_pinned_function(require, command: str) -> None
         ("Enum.ItemQuality", "Enum.ItemQuality", "api_enum"),
         # One page per console variable; `api` once answered every CVar name not_found.
         ("autoLootDefault", "CVar autoLootDefault", "cvar"),
+        # Widget, template and addon-format pages; `api` once answered them not_found.
+        ("UIOBJECT Button", "UIOBJECT Button", "framework_page"),
+        ("SecureActionButtonTemplate", "SecureActionButtonTemplate", "framework_page"),
+        ("TOC format", "TOC format", "framework_page"),
     ],
 )
 def test_api_resolves_the_reference_pages_that_are_not_functions(
@@ -329,6 +333,16 @@ def test_event_returns_the_page_that_documents_that_event(require, event_name: s
     assert result.data["resolved_from"] == "direct_fetch", "the exact page must be fetched, not searched for"
     assert result.data["article"]["page_url"].endswith(f"/wiki/{expected_title.replace(' ', '_')}")
     assert result.data["content"]["text"].strip(), "the event reference page has no text"
+
+
+def test_event_arguments_are_the_combat_log_base_parameters_not_an_example_trace(require) -> None:
+    """CLEU's parameters are its "Base Parameters" section; its nested "Payload" is an example trace."""
+    require(PROVIDER)
+    result = run(BINARY, "event", "COMBAT_LOG_EVENT_UNFILTERED")
+
+    arguments = result.data["reference"]["arguments"] or ""
+    assert "sourceGUID" in arguments, result.describe()
+    assert "SWING_DAMAGE" not in arguments, result.describe()
 
 
 def test_event_full_returns_the_whole_event_page(require) -> None:

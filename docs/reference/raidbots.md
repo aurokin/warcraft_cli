@@ -29,7 +29,7 @@ Fetch and parse a Raidbots report into a kind-aware summary with freshness and c
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `reference` | str | required | Raidbots report URL or bare report ID. |
+| `reference` | url_or_id | required | Raidbots report URL or bare report ID. |
 
 **Options**
 
@@ -45,15 +45,15 @@ Fetch a report's SimC input and suggest the local `simc` commands that consume i
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `reference` | str | required | Raidbots report URL or bare report ID. |
+| `reference` | url_or_id | required | Raidbots report URL or bare report ID. |
 
 ## raidbots explain-input
 
-Classify SimC addon/profile text locally and explain the Raidbots-to-simc handoff. No network.
+Classify SimC addon/profile text locally and explain the Raidbots-to-simc handoff. No network. Reads stdin when neither --text nor --file is given.
 
 **Options**
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--text` | str |  | Inline SimC addon/profile text. |
-| `--file` | str |  | Path to a file containing SimC addon/profile text. |
+| `--file` | str |  | Path to a file containing SimC addon/profile text; `-` reads stdin. |

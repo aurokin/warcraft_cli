@@ -37,7 +37,9 @@ from the callback. `--scope` (repeatable) selects the OAuth scopes: `view-user-p
 `current_user()` for user access). Pass `--no-live` for local readiness only. `doctor`'s `status` is
 `ready` when public API access is, and `degraded` otherwise (no client credentials, or a failed
 probe): every data command needs that access, and each capability then names the reason. `doctor` also reports
-`installed`, `language`, and the resolved `cache` configuration (backend, directory, TTLs).
+`installed`, `language`, and the resolved `cache` configuration (backend, directory, TTLs); a Redis
+backend that does not answer is `cache.available: false` with the reason in `cache.error`, and makes
+`status` `degraded`.
 
 ## Site profiles
 
@@ -117,8 +119,31 @@ shorthand (`Death Knight`, `death-knight`, `dk`; `Beast Mastery`, `hunter-beastm
 `bm hunter`) and send Warcraft Logs' own `DeathKnight`/`BeastMastery`. Warcraft Logs needs a class
 with a spec on `encounter-rankings`, so a spec spelling that names one class (`bm hunter`, `fdk`,
 `ret`) supplies it when `--class-name` is absent; a bare `frost` still needs `--class-name`, and a
-`--spec-name` of another class than `--class-name` is `invalid_query` (exit 2). Float flags (`--start-time`,
-`--ability-id`, `--kill-time-min` and the rest) reject `nan` and `inf` as `invalid_argument` (exit 2).
+`--spec-name` of another class than `--class-name` is `invalid_query` (exit 2). Float flags (`--ability-id`,
+`--kill-time-min` and the rest) reject `nan` and `inf` as `invalid_argument` (exit 2).
+
+`--difficulty` takes an id or a retail name: `lfr` = 1, `normal` = 3, `heroic` = 4, `mythic` = 5
+(`warcraftlogs zone <id>` lists a zone's difficulties). The GraphQL enum flags (`--hostility-type`,
+`--kill-type`, `--view-by`, `--data-type`, `--compare`, `--timeframe`, `--leaderboard`,
+`--hard-mode-level`) list their values in `--help`, ignore case and hyphens (`damage-done`), and
+reject any other value as `invalid_argument` (exit 2) with the valid values, before a request.
+`--start-time`/`--end-time` mean two things: on `reports`, `guild-reports` and the sampled commands
+they bound the report list and take UNIX epoch milliseconds or an ISO-8601 date (`2026-09-01` or
+`20260901`, UTC unless it carries an offset); on `report-events`, `report-table`, `report-graph` and
+`report-player-details` they are milliseconds from the report's start.
+
+The row cap is `--limit` everywhere: `encounter-rankings`, `character-rankings` and the sampled
+commands still take `--top`, which shipped first, and `report-encounter-casts` names its event page
+`--event-limit` (as `ability-usage-summary` does), still taking `--limit`.
+
+Raid rankings rank healers on healing unless told otherwise; when no metric is sent Warcraft Logs
+ranks every role on dps in a raid and on score in Mythic+. Without `--metric`, `encounter-rankings`
+sends `playerscore` in a Mythic+ zone and, in a raid zone, `hps` for a healer `--spec-name`
+(Discipline, Holy, Mistweaver, Preservation, Restoration) and `dps` otherwise; `query.metric` names
+the metric that ranked the rows. `report-rankings` without `--player-metric` sends Warcraft Logs'
+`default` (dps for raid fights, score for Mythic+ runs) and, when a ranked fight is a raid fight,
+ranks those fights' healers on `hps` (a second request); `query.player_metric` and
+`query.healer_metric` echo both. A `--player-metric` applies to every role in one request.
 
 Auth: `auth status`, `auth client`, `auth token`, `auth login`, `auth pkce-login`, `auth whoami`,
 `auth logout`.
@@ -158,7 +183,7 @@ Encounter analytics (one report, one fight): `report-encounter`, `report-encount
 The aura and damage summaries emit typed rows only. `--include-raw` attaches the untyped Warcraft
 Logs table entry per row, which is where the gear, pet and per-ability detail lives; one fight goes
 from roughly 43 KB to 560 KB with it on. `report-encounter-casts` aggregates only the events one
-`--limit` page returns, so it sets `casts.truncated` and a note when Warcraft Logs hands back a
+`--event-limit` page returns, so it sets `casts.truncated` and a note when Warcraft Logs hands back a
 `next_page_timestamp`.
 
 Cast counts (`report-encounter-casts` and `ability-usage-summary`) count only `cast` events. The
@@ -192,7 +217,8 @@ labelled by their full path (`"command": "auth status"`) on success and failure 
 
 Rejected input exits `2`: `missing_boss`, `missing_query`, `missing_scope`, `missing_spec`,
 `invalid_query` (including a flag value Warcraft Logs' GraphQL schema rejects, such as
-`--data-type nope` or `--metric nope`), `invalid_variables`, `ambiguous_boss`, `boss_scope_mismatch`, and the OAuth
+`--metric nope`), `invalid_argument` (a flag value the CLI rejects itself, such as `--data-type nope`
+or `--difficulty mythc`), `invalid_variables`, `ambiguous_boss`, `boss_scope_mismatch`, and the OAuth
 callback mismatches `missing_state`, `state_mismatch`, `redirect_uri_mismatch`. Auth problems exit
 `3`, including `site_profile_mismatch` when the saved user token belongs to another `--site`.
 Malformed upstream or local data exits `1`: `missing_talent_tree`, `invalid_response`,

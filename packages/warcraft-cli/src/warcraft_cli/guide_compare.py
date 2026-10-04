@@ -9,6 +9,8 @@ simc. Provider calls arrive as injected ``ProviderCalls`` so the commands keep t
 from __future__ import annotations
 
 import json
+import re
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,6 +25,7 @@ from warcraft_core.identity import build_reference_transport_packet_payload, par
 from warcraft_core.paths import data_root
 from warcraft_core.shapes import as_dict, as_list, unique_strings
 from warcraft_core.timestamps import iso_now_utc, parse_iso8601_utc
+from warcraft_core.wow_specs import WowSpec, lookup_class, lookup_spec
 
 from warcraft_cli.provider_contract import candidate_score
 from warcraft_cli.providers import (
@@ -75,21 +78,30 @@ def _guide_compare_freshness(exported_at: Any, *, max_age_hours: int) -> dict[st
     return {"status": "fresh", "reason": "within_max_age", "age_hours": age_hours, "max_age_hours": max_age_hours}
 
 
-def _guide_build_handoff_freshness(source_kind: str, source_manifest: dict[str, Any] | None) -> dict[str, Any]:
-    updated_at = source_manifest.get("updated_at") if isinstance(source_manifest, dict) else None
-    parsed_updated_at = parse_iso8601_utc(updated_at)
+def _iso_z(value: datetime) -> str:
+    return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _guide_build_handoff_freshness(
+    source_kind: str, source_manifest: dict[str, Any] | None, bundle_inputs: list[tuple[Path, dict[str, Any]]]
+) -> dict[str, Any]:
+    """When the handed-off builds were sampled: the bundle's export, or the oldest bundle's for a root.
+
+    A root's manifest is rewritten on every run, even one that reuses every bundle, so its
+    ``updated_at`` (kept as ``manifest_updated_at``) says nothing about how old the builds are.
+    """
     if source_kind == "orchestration_root":
-        if parsed_updated_at is None:
-            return {
-                "status": "unknown",
-                "reason": "missing_orchestration_updated_at",
-                "sampled_at": None,
-                "cache_ttl_seconds": None,
-            }
+        exports = [
+            parsed
+            for _path, bundle in bundle_inputs
+            if (parsed := parse_iso8601_utc(as_dict(bundle.get("manifest")).get("exported_at"))) is not None
+        ]
+        updated_at = parse_iso8601_utc(as_dict(source_manifest).get("updated_at"))
         return {
-            "status": "known",
-            "reason": "orchestration_manifest_updated_at",
-            "sampled_at": parsed_updated_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            "status": "known" if exports else "unknown",
+            "reason": "oldest_bundle_exported_at" if exports else "bundles_have_no_export_timestamp",
+            "sampled_at": _iso_z(min(exports)) if exports else None,
+            "manifest_updated_at": _iso_z(updated_at) if updated_at is not None else None,
             "cache_ttl_seconds": None,
         }
     exported_at = source_manifest.get("exported_at") if isinstance(source_manifest, dict) else None
@@ -104,7 +116,7 @@ def _guide_build_handoff_freshness(source_kind: str, source_manifest: dict[str, 
     return {
         "status": "known",
         "reason": "bundle_manifest_exported_at",
-        "sampled_at": parsed_exported_at.replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "sampled_at": _iso_z(parsed_exported_at),
         "cache_ttl_seconds": None,
     }
 
@@ -156,11 +168,17 @@ def _guide_comparison_packet(
             "provider": descriptor.get("provider"),
             "path": descriptor.get("path"),
             "exported_at": descriptor.get("exported_at"),
+            "content_updated_at": descriptor.get("content_updated_at"),
             "freshness": _guide_compare_freshness(descriptor.get("exported_at"), max_age_hours=max_age_hours),
         }
         for descriptor in bundle_descriptors
     ]
     freshness_rollup = _guide_compare_freshness_rollup(bundle_freshness, max_age_hours=max_age_hours)
+    subjects = [
+        {"provider": row.get("provider"), "title": row.get("title"), **_guide_subject(row.get("title"))}
+        for row in bundle_descriptors
+    ]
+    subject_keys = {(row["class"], row["spec"]) for row in subjects}
     return {
         **comparison,
         "freshness": freshness_rollup,
@@ -174,8 +192,45 @@ def _guide_comparison_packet(
             },
             "freshness": freshness_rollup,
             "bundle_freshness": bundle_freshness,
+            # The class and spec each guide's title names (spec null for a class hub). `mixed` means the
+            # bundles are about different subjects, so shared sections and builds compare unlike guides.
+            "subjects": subjects,
+            "subject_agreement": "unknown"
+            if any(row["class"] is None for row in subjects)
+            else "agree" if len(subject_keys) == 1 else "mixed",
+            # Bundles that hold no build references. One that cannot hold any (a wowhead guide-export) is
+            # left out of `build_references.shared`; one that can but has none keeps every build partial.
+            "bundles_without_build_references": [
+                as_dict(bundle.get("manifest")).get("provider") for _path, bundle in bundle_inputs if not bundle.get("build_references")
+            ],
         },
     }
+
+
+def _guide_subject(title: Any) -> dict[str, str | None]:
+    """The class and spec a guide title names: `Retribution Paladin DPS Guide` is paladin/retribution,
+    `Paladin Guide` is the paladin class hub (spec null); both null when the title names no one class."""
+    words = re.findall(r"[a-z]+", str(title or "").lower())
+    specs: set[WowSpec] = set()
+    classes: set[str] = set()
+    used: set[int] = set()
+    # Longest spellings first, each word read once: `Demon Hunter` is not also a hunter.
+    for size in (3, 2, 1):
+        for index in range(len(words) - size + 1):
+            span = set(range(index, index + size))
+            text = " ".join(words[index : index + size])
+            if span & used:
+                continue
+            spec, class_key = lookup_spec(text), lookup_class(text)
+            if spec is not None:
+                specs.add(spec)
+                class_key = spec.class_key
+            if class_key is not None:
+                used |= span
+                classes.add(class_key)
+    if len(classes) != 1:
+        return {"class": None, "spec": None}
+    return {"class": next(iter(classes)), "spec": next(iter(specs)).key if len(specs) == 1 else None}
 
 
 def _load_guide_compare_manifest(root: Path) -> dict[str, Any] | None:
@@ -203,10 +258,12 @@ def _write_guide_compare_manifest(
             continue
         candidate = as_dict(row.get("candidate"))
         freshness = as_dict(row.get("freshness"))
+        bundle_path = Path(str(row.get("bundle_path")))
         providers.append(
             {
                 "provider": row.get("provider"),
-                "bundle_path": row.get("bundle_path"),
+                # Relative to the root, so a copied or moved root reads its own bundles.
+                "bundle_path": str(bundle_path.relative_to(root)) if bundle_path.is_relative_to(root) else str(bundle_path),
                 "candidate_ref": candidate.get("ref"),
                 "candidate_name": candidate.get("name"),
                 "selection_source": candidate.get("selection_source"),
@@ -231,6 +288,12 @@ def _write_guide_compare_manifest(
 
 
 
+def manifest_bundle_path(root: Path, bundle_path: str) -> Path:
+    """A manifest's ``bundle_path`` resolved against its root; older manifests stored absolute paths."""
+    path = Path(bundle_path).expanduser()
+    return path if path.is_absolute() else root / path
+
+
 def load_guide_build_source(source_path: Path) -> tuple[str, list[tuple[Path, dict[str, Any]]], dict[str, Any] | None]:
     manifest_path = source_path / "manifest.json"
     if not manifest_path.exists():
@@ -252,7 +315,7 @@ def load_guide_build_source(source_path: Path) -> tuple[str, list[tuple[Path, di
             bundle_path_raw = row.get("bundle_path")
             if not isinstance(bundle_path_raw, str) or not bundle_path_raw.strip():
                 continue
-            bundle_path = Path(bundle_path_raw).expanduser()
+            bundle_path = manifest_bundle_path(source_path, bundle_path_raw)
             bundle_inputs.append((bundle_path, load_article_bundle(bundle_path)))
         return "orchestration_root", bundle_inputs, raw_manifest
     return "bundle", [(source_path, load_article_bundle(source_path))], raw_manifest
@@ -292,7 +355,20 @@ def _collect_build_reference_handoff_rows(
                 }
                 continue
             record["sources"].append(source_entry)
-    return sorted(grouped.values(), key=lambda row: str(((row.get("reference") or {}).get("url")) or ""))
+    rows = sorted(grouped.values(), key=lambda row: str(((row.get("reference") or {}).get("url")) or ""))
+    return _interleave_providers(rows, bundle_inputs)
+
+
+def _interleave_providers(rows: list[dict[str, Any]], bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> list[dict[str, Any]]:
+    """``rows`` taken one per provider in turn (bundle order), so ``--limit`` never drops a whole provider."""
+    order = {as_dict(bundle.get("manifest")).get("provider"): index for index, (_path, bundle) in enumerate(bundle_inputs)}
+    taken: Counter[Any] = Counter()
+    keyed: list[tuple[int, int, dict[str, Any]]] = []
+    for row in rows:
+        provider = row["sources"][0]["provider"]
+        keyed.append((taken[provider], order.get(provider, len(order)), row))
+        taken[provider] += 1
+    return [row for _turn, _order, row in sorted(keyed, key=lambda item: item[:2])]
 
 
 def _resolve_handoff_build_code(reference: dict[str, Any], build_url: str) -> str | None:
@@ -621,7 +697,7 @@ def guide_builds_simc_payload(
             "selection_contract": "embedded_build_references_only",
             "source_providers": source_providers,
         },
-        "freshness": _guide_build_handoff_freshness(source_kind, source_manifest),
+        "freshness": _guide_build_handoff_freshness(source_kind, source_manifest, bundle_inputs),
         "citations": _handoff_citations(selected_rows, bundle_inputs),
         "bundle_count": len(bundle_inputs),
         "bundle_health": bundle_health,
@@ -631,7 +707,9 @@ def guide_builds_simc_payload(
         "apl_path": apl_path,
         "summary": {
             "returned_build_count": len(build_rows),
-            "excluded_build_count": max(0, len(handoff_rows) - len(selected_rows)) + len(excluded_rows),
+            "excluded_build_count": len(excluded_rows),
+            # Builds past --limit: neither returned nor excluded.
+            "truncated_build_count": len(handoff_rows) - len(selected_rows),
             "identify_success_count": identify_success_count,
             "decode_success_count": decode_success_count,
             "describe_success_count": describe_success_count,
@@ -764,13 +842,14 @@ def _resolve_guide_compare_candidate(
 
     Returns ``(candidate, decline)``; ``decline`` is the provider row when there is no candidate,
     naming why each step declined. Both calls take each provider's default limit; the search margin
-    reads only the top two rows.
+    reads only the top two rows. Both ask for guides only, so a provider that also serves spells and
+    items (Wowhead's `frost mage` is a spell too) answers with its guide.
     """
-    resolved = calls.resolve(provider_name, query, expansion=expansion)
+    resolved = calls.resolve(provider_name, query, expansion=expansion, entity_types=("guide",))
     candidate, resolve_reason = _resolved_guide_match(provider_name, provider_payload_data(resolved.get("payload")))
     if candidate is not None:
         return candidate, {}
-    searched = calls.search(provider_name, query, expansion=expansion)
+    searched = calls.search(provider_name, query, expansion=expansion, entity_types=("guide",))
     candidate, search_reason = _search_fallback_guide_match(provider_name, provider_payload_data(searched.get("payload")))
     if candidate is not None:
         return candidate, {}
@@ -810,7 +889,7 @@ def _guide_compare_reusable(
         return False
     same_candidate = (
         str(existing_row.get("candidate_ref") or "") == str(candidate["ref"])
-        and str(existing_row.get("bundle_path") or "") == str(export_dir)
+        and manifest_bundle_path(export_dir.parent, str(existing_row.get("bundle_path") or "")) == export_dir
     )
     return same_candidate and freshness.get("status") == "fresh" and export_dir.exists()
 
@@ -1081,7 +1160,10 @@ def guide_compare_query_payload(options: GuideCompareQueryOptions, calls: Provid
     if len(eligible) < 2:
         # Decided before any provider call: this flag combination can never export two guides.
         message = (
-            f"guide-compare-query needs at least two guide providers, but only {len(eligible)} of the selected "
+            f"guide-compare-query needs at least two guide providers, but only {len(options.providers)} "
+            f"({', '.join(options.providers)}) was selected."
+            if len(options.providers) < 2
+            else f"guide-compare-query needs at least two guide providers, but only {len(eligible)} of the selected "
             f"providers ({', '.join(options.providers)}) serve expansion {options.requested_expansion or 'retail'}."
         )
         details = {"selected_providers": list(options.providers), "provider_results": provider_rows}

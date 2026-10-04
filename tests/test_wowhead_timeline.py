@@ -169,6 +169,27 @@ def test_blue_tracker_command_filters_by_author_region_and_forum(monkeypatch) ->
     assert payload["data"]["facets"]["authors"] == ["Blizzard"]
 
 
+def test_blue_tracker_region_reads_na_as_us(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.blue_tracker_page_html", lambda self, page=1: SAMPLE_BLUE_TRACKER_HTML)
+
+    result = runner.invoke(app, ["blue-tracker", "--region", "na"])
+
+    payload = json.loads(result.stdout)
+    assert payload["data"]["filters"]["regions"] == ["us"]
+    assert [row["id"] for row in payload["data"]["results"]] == [610900]
+
+
+def test_blue_tracker_rejects_a_region_it_never_files_posts_under(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.blue_tracker_page_html", lambda self, page=1: SAMPLE_BLUE_TRACKER_HTML)
+
+    result = runner.invoke(app, ["blue-tracker", "--region", "us,xx"])
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"] == {
+        "code": "invalid_argument",
+        "message": "Unknown --region xx. The blue tracker has: eu, us.",
+    }
+
 
 def test_blue_tracker_command_rejects_invalid_date_range(monkeypatch) -> None:
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.blue_tracker_page_html", lambda self, page=1: SAMPLE_BLUE_TRACKER_HTML)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Protocol
@@ -211,13 +211,18 @@ def article_doctor_payload(
     settings: CacheSettingsView,
     *,
     redis_url: str | None,
+    cache_health: Mapping[str, Any],
     sitemap_ttl: int,
     page_ttl: int,
     supported_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """``doctor`` data for a sitemap-backed article provider; ``redis_url`` must already be redacted."""
+    """``doctor`` data for a sitemap-backed article provider; ``redis_url`` must already be redacted.
+
+    ``cache_health`` is ``warcraft_api.cache.cache_backend_health``'s ``{available, error}``; a cache
+    that does not answer makes the provider ``degraded``.
+    """
     payload: dict[str, Any] = {
-        "status": "ready",
+        "status": "ready" if cache_health.get("available") is not False else "degraded",
         "installed": True,
         "language": "python",
         "capabilities": {
@@ -238,5 +243,6 @@ def article_doctor_payload(
         "redis_url": redis_url,
         "prefix": settings.prefix,
         "ttls": {"sitemap": sitemap_ttl, "page_html": page_ttl},
+        **cache_health,
     }
     return payload

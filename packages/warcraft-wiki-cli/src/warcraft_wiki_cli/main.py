@@ -127,7 +127,7 @@ def article_query(
     ctx: typer.Context,
     bundle: str = typer.Argument(..., help="Exported bundle directory produced by article-export."),
     query: str = typer.Argument(..., help="Query text to match against the exported article bundle."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum matches to return per kind."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum matches per kind and in the top list."),
     kind: list[str] = typer.Option(
         [],
         "--kind",

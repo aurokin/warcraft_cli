@@ -169,7 +169,7 @@ def test_write_guide_export_assets_and_manifest_helpers(tmp_path: Path) -> None:
         "gatherer_entities": {"items": [{"entity_type": "item", "id": 249277, "name": "Bellamy's Final Judgement"}]},
         "comments": {"items": [{"id": 91, "user": "A", "body": "Solid guide"}]},
         "analysis_surfaces": {"items": [{"surface_tags": ["overview"], "section_title": "Overview"}]},
-        "structured_data": {"@type": "Article"},
+        "structured_data": {"@type": "Article", "dateModified": "2026-08-20T13:42:22-05:00"},
     }
 
     files_written, assets = write_guide_export_assets(
@@ -205,6 +205,7 @@ def test_write_guide_export_assets_and_manifest_helpers(tmp_path: Path) -> None:
     assert manifest["counts"]["analysis_surfaces"] == 1
     assert manifest["counts"]["hydrated_entities"] == 1
     assert manifest["hydration"]["source_counts"]["entity_cache"] == 1
+    assert manifest["content_updated_at"] == "2026-08-20T13:42:22-05:00"
 
 
 
@@ -980,3 +981,21 @@ def test_guide_query_reads_exported_assets(monkeypatch, tmp_path) -> None:
     result = runner.invoke(app, ["guide-query", str(selector_dir), "anything", "--linked-source", "bad-source"])
     assert result.exit_code != 0
     assert "Unsupported linked source filter" in result.output
+
+
+@pytest.mark.parametrize(
+    "command",
+    [["guide-query", "{path}", "anything"], ["guide-bundle-inspect", "{path}"], ["guide-bundle-refresh", "{path}"]],
+)
+def test_bundle_commands_fail_not_found_for_a_missing_path_and_invalid_bundle_for_an_unreadable_one(
+    tmp_path: Path, command: list[str]
+) -> None:
+    missing = runner.invoke(app, [arg.format(path=tmp_path / "missing-bundle") for arg in command])
+    assert missing.exit_code == 4
+    assert json.loads(missing.stderr)["error"]["code"] == "not_found"
+
+    unreadable = tmp_path / "not-a-bundle"
+    unreadable.mkdir()
+    broken = runner.invoke(app, [arg.format(path=unreadable) for arg in command])
+    assert broken.exit_code == 1
+    assert json.loads(broken.stderr)["error"]["code"] == "invalid_bundle"

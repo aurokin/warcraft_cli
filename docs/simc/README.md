@@ -83,8 +83,13 @@ These codes are worth knowing:
   an empty value, or the class or spec names none of SimC's specs (an unknown class, or a pair such as
   `mage holy`); the message lists the valid values. It is also the answer when `--apl-path` names a
   spec's APL (for example `monk_brewmaster.simc`) that the build does not decode as: a build is never
-  described against another spec's rotation. Class and spec are read case-insensitively and
-  `Death Knight` or `death_knight` mean `deathknight`. Identification decodes the build once per spec in the checkout's generated
+  described against another spec's rotation, whether the build's spec came from its hash, a talent-calc
+  URL or `--actor-class`/`--spec`. The APL is checked against the spec the build is identified as, so a
+  hash that contradicts its talent-calc URL path is checked as the spec the hash decodes as. Class and spec are read case-insensitively in any provider's spelling
+  (the shared class/spec table): `Death Knight`, `death_knight` and `dk` mean `deathknight`, and `bm`
+  means `beast_mastery`. A spec spelling that names one class fills in a missing `--actor-class`
+  (`--spec bm` is hunter beast_mastery); one that names another class's spec (`--actor-class mage --spec fdk`)
+  fails with `invalid_query`. Identification decodes the build once per spec in the checkout's generated
   specialization data (every playable spec, healers included) and keeps the one it decodes as; an
   `--actor-class` or `--spec` hint alone narrows the probe to that class's or spec's specs, and the
   message names what was probed (`decodes as none of the 3 deathknight specs`). When several specs
@@ -114,14 +119,30 @@ exit code there.
 ## APL analysis
 
 - A relative APL path names the file under the current directory when one is there, and otherwise the
-  file under the checkout (`ActionPriorityLists/default/monk_windwalker.simc`). Profile, harness and
-  report paths are always relative to the current directory.
+  file under the checkout (`ActionPriorityLists/default/monk_windwalker.simc`). A bare file name the
+  checkout root does not hold names a spec APL in `ActionPriorityLists/default/`, so `monk_windwalker.simc`
+  reads `ActionPriorityLists/default/monk_windwalker.simc`. Profile, harness and report paths are always
+  relative to the current directory.
 - Conditions are read with SimC's operators and precedence. `talent.X`, `talent.X.enabled`,
   `talent.X.disabled`, `talent.X.rank` and comparisons on them come from the decoded build (a rank is
   exact only when the decode reported it); `hero_tree.X` comes from the hero tree SimC activated;
   `active_enemies` and `spell_targets.*` are the target count. Everything else is runtime state. A line
   is `dead` or `eligible` only when those facts prove it, and a condition the parser cannot read in
   full is `unknown`, never `dead`.
+- A line whose action is itself a talent the spec can take but the build did not (Frost's `comet_storm`
+  without Comet Storm) is `dead` whatever its condition, with the reason `talent.<action>=false [action]`:
+  SimC creates no action for an untaken talent. The talent universe is the checkout's
+  `trait_data.inc`. A talent on a choice node whose other entry the build takes is left alone, because
+  SimC can run the action as the taken entry (Brewmaster's `celestial_brew` becomes Celestial Infusion).
+- `inactive-actions` (by default, `--talent-only`) and `describe-build`'s `inactive_talent_branches`
+  list the dead lines that are dead because of the build: lines that are no longer dead once the build's
+  talents and hero tree are treated as unknown, at the same target count. A line dead only because of the
+  target count is not listed; pass `--all-dead` for every dead line.
+- `apl-branch-compare` compares the start list's `run_action_list` lines and its `call_action_list` lines
+  into rotation lists (helper lists excluded) in `decision_changes`. `dispatch_changed` is true when the
+  guaranteed `run_action_list` target or the focus path differs, so a rotation that switches through
+  `call_action_list` (Beast Mastery's `st` to `cleave`) counts; `left_dispatch`/`right_dispatch` stay the
+  guaranteed `run_action_list` target, null for an APL that dispatches only through `call_action_list`.
 - The focus list follows a guaranteed `run_action_list`, then a guaranteed `call_action_list` when it is
   the only live rotation dispatch and its list holds more live rows than the caller's own actions.
   Helper lists (cooldowns, trinkets, racials, variables, ...) and utility actions (auto attacks,
@@ -174,7 +195,8 @@ class, so `--enable`/`--disable` fail with `unknown_talent` even for a real tale
 
 Raw-only transport packets are not accepted as direct build input: upgrade them with
 `simc validate-talent-transport --build-packet <path> --out <path>` first. Malformed packets fail with
-`invalid_build_packet` on every command that reads one.
+`invalid_build_packet` on every command that reads one; a `--build-packet`, `--build-file` or
+`--profile-path` that does not exist fails `not_found` (exit 4).
 
 ## Build references
 
@@ -325,7 +347,7 @@ decoded build differs.
 `find-action` and `trace-action` search the spell dumps case-insensitively and read `_` as a space
 there, so a token (`rising_sun_kick`) and a display name (`"Rising Sun Kick"`) both find
 `Name : Rising Sun Kick`. `--class` takes any spelling of a class (`deathknight`, `"Death Knight"`)
-and keeps that class's own module files and spell dumps; an unknown class fails with `invalid_query`
+or shorthand (`dk`, `dh`) and keeps that class's own module files and spell dumps; an unknown class fails with `invalid_query`
 and lists the valid ones. `inspect` on a file that is not text fails with `invalid_query`.
 
 `apl-branch-compare` takes the right-hand build only from the `--right-*` options once any right-hand
@@ -356,15 +378,27 @@ and `run_settings.target_error_percent` is that error as a percentage of mean DP
 for consumer work and only reach for `high-accuracy` when the user asks for it. Do not hard-code thread
 counts in guidance; inspect the machine first.
 
-`run_settings.iterations_requested` is the count the CLI asked SimC for. SimC splits the iterations
-across threads, so `iterations_completed` can come out a little lower or higher. A profile with several actors reports the first
+`run_settings.iterations_requested` is the count the CLI asked SimC for. `iterations_completed` is the
+number of sampled iterations, which for a fixed iteration count is one less than requested: SimC
+discards each run's first iteration, whatever the thread count. A profile with several actors reports the first
 in `player`/`metrics`, the rest in `other_actors` (each with `player` and `metrics`), and the total in
 `actor_count`. A profile that defines profilesets (a Top Gear or Droptimizer input) reports their
 ranked rows in `profilesets` (`metric`, `result_count`, `results` best mean first); otherwise
-`profilesets` is null. An unknown `--preset` or an empty profile fails with `invalid_query` (exit 2).
+`profilesets` is null. A profile that sets `calculate_scale_factors=1` (optionally with
+`scale_only=intellect,crit_rating,haste_rating,mastery_rating,versatility_rating`) reports SimC's stat
+weights for the first actor in `scale_factors`: `factors` is DPS per point of each stat and `deltas` the
+stat amount each was measured with. A stat left out of `scale_only` reads 0 there, which means not
+measured, not worthless. Without it `scale_factors` is null. Scale factors run one extra sim per stat, so
+expect the run to take that much longer. An unknown `--preset` or an empty profile fails with
+`invalid_query` (exit 2).
 
-`disclosures` lists what limits the result. A profile that sets `load_default_gear=1`, as every
-`build-harness` profile does (and `build-harness` says so in its own `disclosures`), wears SimC's low
+`disclosures` lists what limits the result. A `build-harness` profile sims the build's own `talents=`
+(it no longer sets `load_default_talents=1`, which made SimC apply the spec's default talents instead).
+A harness written with no talents keeps `load_default_talents=1` and sims the spec's default talents.
+`build-harness`, `sim` and `compare-apls` say so in `disclosures` whenever a profile sets
+`load_default_talents=1`, which also flags a harness written by an earlier version: regenerate it with
+`build-harness` before comparing.
+A profile that sets `load_default_gear=1`, as every `build-harness` profile does (and `build-harness` says so in its own `disclosures`), wears SimC's low
 item level default gear, so its absolute DPS is far below a geared character's; only comparisons on the
 same profile are meaningful. To sim a guide build on current-tier gear, copy the checkout's
 `profiles/<tier>/<Tier>_<Class>_<Spec>.simc` (for example `profiles/MID2/MID2_Mage_Frost.simc`), replace

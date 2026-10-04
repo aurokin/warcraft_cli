@@ -16,7 +16,7 @@ confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verif
 - readiness + auth/region posture: `warcraft blizzard doctor`
 - a realm: `warcraft blizzard realm <slug>` (e.g. `illidan`)
 - an item: `warcraft blizzard item <id>` (e.g. `19019`)
-- a character: `warcraft blizzard character <realm> <name>` (retail only)
+- a character: `warcraft blizzard character <realm> <name>` (retail only; `<region> <realm> <name>` works too)
 - realms may be a slug or a display name (`malganis`, `Mal'Ganis`, `Tarren Mill`), including a
   native-script name (`Ревущий фьорд`, `아즈샤라`), which is looked up in the realm index
 
@@ -35,8 +35,10 @@ confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verif
   there is no `warcraft blizzard-api` command
 - `provenance.cache.hit` says the answer was replayed from cache; it can be up to
   `provenance.cache.oldest_hit_ttl_seconds` old (a day for items, 15 minutes for realms and characters)
-- use `--game-version classic` (or the `--classic` shorthand) for classic namespaces; character
-  profiles are retail-only
+- use `--game-version classic` (or the `--classic` shorthand), after the subcommand
+  (`warcraft blizzard item 19019 --classic`), for the current progression Classic namespace
+  (Mists of Pandaria Classic today); Classic Era and Season of Discovery are not available, and
+  character profiles are retail-only
 - `--locale` passes through (default `en_US`)
 - a bad `--region` or `--game-version`, a blank realm or a blank character name is rejected
   offline with exit 2 (usage): fix the input instead of retrying

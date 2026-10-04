@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
-from warcraft_api.cache import redacted_redis_url
+from warcraft_api.cache import cache_backend_health, redacted_redis_url
 from warcraft_content.article_bundle import article_export_dir, bundle_query_payload
 from warcraft_content.article_discovery import (
     article_candidate,
@@ -445,6 +445,7 @@ class MethodProvider:
         payload = article_doctor_payload(
             settings,
             redis_url=redacted_redis_url(settings.redis_url),
+            cache_health=cache_backend_health(settings),
             sitemap_ttl=sitemap_ttl,
             page_ttl=page_ttl,
             supported_scope=SUPPORTED_SCOPE,

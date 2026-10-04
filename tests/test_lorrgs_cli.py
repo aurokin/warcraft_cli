@@ -139,7 +139,7 @@ class FakeLorrgsClient:
     ) -> dict[str, object]:
         self.calls.append(("user_report_fights", {"report_id": report_id, "fight": fight, "player": player, "data_type": data_type}))
         return {
-            "payload": {"fights": [{"fight_id": int(fight), "players": []}]},
+            "payload": {"fights": [{"fight_id": int(fight_id), "players": []} for fight_id in fight.split(".")]},
             "source_url": f"https://api2.lorrgs.io/api/user_reports/{report_id}/fights?fight={fight}",
         }
 
@@ -259,6 +259,15 @@ def test_comp_ranking_repeatable_filters(monkeypatch) -> None:
             "killtime_max": 180,
         },
     ) in FakeLorrgsClient.calls
+
+
+@pytest.mark.parametrize("spelling", ["--kill-time", "--killtime"])
+def test_comp_ranking_takes_the_kill_time_spelling_warcraftlogs_uses(monkeypatch, spelling: str) -> None:
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["comp-ranking", "chimaerus-the-undreamt-god", f"{spelling}-min", "120", f"{spelling}-max", "180"])
+
+    assert result.exit_code == 0, result.output
+    assert (json.loads(result.stdout)["query"]["killtime_min"], json.loads(result.stdout)["query"]["killtime_max"]) == (120, 180)
 
 
 def test_comp_ranking_says_when_lorrgs_returned_no_reports(monkeypatch) -> None:
@@ -639,6 +648,17 @@ def test_user_report_fights_can_take_fight_from_url(monkeypatch) -> None:
         "user_report_fights",
         {"report_id": "bG3xDYPqKjLm8XaR", "fight": "22", "player": None, "data_type": "damage-done"},
     ) in FakeLorrgsClient.calls
+
+
+def test_user_report_fights_takes_repeatable_fight_ids_like_warcraftlogs(monkeypatch) -> None:
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["user-report-fights", "bG3xDYPqKjLm8XaR", "--fight-id", "2", "--fight-id", "4"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["query"]["fight"] == "2.4"
+
+    both = runner.invoke(app, ["user-report-fights", "bG3xDYPqKjLm8XaR", "--fight", "2", "--fight-id", "4"])
+    assert both.exit_code == 2, both.output
+    assert json.loads(both.stderr)["error"]["code"] == "invalid_query"
 
 
 def test_user_report_fights_passes_the_player_filter_upstream(monkeypatch) -> None:
