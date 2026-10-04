@@ -48,26 +48,8 @@ Thin or unproven surfaces. Do not build a workflow on them without checking `doc
 
 ## Next
 
-- Ship the wheel install path end to end: attach the built wheel to each GitHub release and verify `pipx install <wheel-url>` and `uvx --from <wheel-url> warcraft doctor` on a clean machine.
 - Decide whether Blizzard's expanded typed reads earn the `supported` tier while discovery remains deferred. Decide separately whether CurseForge's narrow addon reads earn that tier or leave the product.
-- Finish the expansion story for the deferred surfaces: Warcraft Logs classic/fresh cache isolation and `simc` expansion semantics.
-
-## Implemented, awaiting release
-
-The current `[Unreleased]` changes complete three previously deferred capabilities:
-
-- Blizzard PvP seasons, leaderboards and character ratings; character collections; connected-realm
-  auction and retail commodity snapshots with source freshness. Classic trade-good prices remain
-  unavailable through Blizzard, and price history is still outside this provider's scope.
-- Icy Veins calculator builds converted into import strings for guide-to-SimC handoffs, with source
-  URLs and class/spec identity. PvP selections remain in the calculator URL because import strings
-  cannot carry them.
-- Wowhead classic calculator inspection for tree points and MoP tier choices. SimC continues to
-  decode retail builds only; glyphs, runes and selection-order segments remain raw.
-
-These changes do not promote providers or un-gate the candidates below. Lorrgs' conservative boss
-composition resolution also keeps queries with extra words unresolved without changing wrapper
-ranking policy.
+- Define wrapper-level `simc` expansion semantics. Warcraft Logs already isolates cache keys by retail/classic/fresh site; its remaining live verification is separate from that implementation.
 
 ## Deferred Candidates
 

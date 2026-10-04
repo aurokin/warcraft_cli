@@ -28,30 +28,37 @@ Internal refactors, doc-only edits, and test-only changes don't need a changelog
 
    This runs `scripts/bump_version.py`, which validates the new version is semver, errors if the current versions across the workspace disagree, and rewrites every workspace `pyproject.toml` in place. It does not stage or commit.
 
-   If dependencies changed in this release, refresh the lockfile too so the CI install (`uv sync --frozen`) resolves the same set:
+   Refresh the lockfile after every version bump, even when dependencies are unchanged. It records the editable root package version, and release CI installs with `uv sync --frozen`:
 
    ```bash
    uv lock
+   uv lock --check
+   make check
+   make build
    ```
 4. **Review and commit.**
 
    ```bash
    git diff
-   git add CHANGELOG.md README.md docs/ROADMAP.md pyproject.toml packages/*/pyproject.toml uv.lock
-   git commit -m "Release vX.Y.Z"
+   git add CHANGELOG.md README.md docs/ROADMAP.md docs/RELEASE.md Makefile pyproject.toml packages/*/pyproject.toml uv.lock
+   git commit -m "Release vX.Y.Z" -m "Co-Authored-By: OpenAI Codex <noreply@openai.com>"
    git push
    ```
 5. **Tag and publish.**
 
+   Copy the exact `## [X.Y.Z]` section, stopping before the next version heading, into a scratch notes file such as `/tmp/warcraft-release-notes.md`. Review that file before publishing; the release body must match the changelog section.
+
    ```bash
    git tag vX.Y.Z
    git push origin vX.Y.Z
-   gh release create vX.Y.Z --notes-file <(awk '/^## \[X\.Y\.Z\]/,/^## \[/{print}' CHANGELOG.md | sed '$d')
+   if gh release view vX.Y.Z >/dev/null 2>&1; then
+     gh release edit vX.Y.Z --notes-file /tmp/warcraft-release-notes.md
+   else
+     gh release create vX.Y.Z --notes-file /tmp/warcraft-release-notes.md
+   fi
    ```
 
-   Or simpler: copy the `## [X.Y.Z]` section into a scratch file and pass it via `--notes-file`. The GitHub release body should match the changelog section verbatim so the two never drift.
-
-   Pushing the tag triggers `.github/workflows/release.yml`, which runs `make check` on the tagged commit and only then builds the wheel and attaches it to the release; a red check publishes nothing. It works in either order: run before `gh release create` and the wheel lands on the release the workflow creates; run after and the wheel is added to the existing release.
+   Pushing the tag triggers `.github/workflows/release.yml`, which runs `make check` on the tagged commit and only then builds and attaches the wheel. A failed check publishes no wheel. The workflow can create the release before the notes command runs, so edit an existing release or create one when absent. Wait for the workflow to finish and confirm the attachment before checking installation.
 
 6. **Verify the published wheel.**
 

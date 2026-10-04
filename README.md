@@ -8,10 +8,12 @@ A monorepo of World of Warcraft data CLIs built for AI agents. The `warcraft` wr
 git clone https://github.com/aurokin/warcraft_cli && cd warcraft_cli
 uv sync --all-extras     # or: make install, or: pip install -e '.[dev,redis]'
 make dev-deploy-no-link  # refresh the checkout-local .venv for branch work
+source .warcraft/worktree-env.sh
 ```
 
-Releases after v0.5.0 attach a wheel to the GitHub release (`pipx install <wheel-url>`,
-`uvx --from <wheel-url> warcraft doctor`); v0.5.0 and earlier have none.
+The release workflow attaches a wheel to the [GitHub release](https://github.com/aurokin/warcraft_cli/releases)
+after checks pass. Use the published asset URL with `pipx install <wheel-url>` or
+`uvx --from <wheel-url> warcraft doctor`; v0.5.0 and earlier have no wheel.
 
 ## Providers
 
@@ -23,11 +25,11 @@ Releases after v0.5.0 attach a wheel to the GitHub release (`pipx install <wheel
 | `simc` | core | local SimulationCraft inspection and runs | [docs/simc](docs/simc/README.md) |
 | `raiderio` | supported | character/guild profiles, Mythic+ analytics | [docs/raiderio](docs/raiderio/README.md) |
 | `warcraft-wiki` | supported | reference, lore, API/event articles | [docs/warcraft-wiki](docs/warcraft-wiki/README.md) |
-| `icy-veins` | supported | guide extraction and local guide query | [docs/icy-veins](docs/icy-veins/README.md) |
+| `icy-veins` | supported | guides, local queries, calculator build imports | [docs/icy-veins](docs/icy-veins/README.md) |
 | `method` | supported | guide extraction and local guide query | [docs/method](docs/method/README.md) |
 | `lorrgs` | supported | top-parse cooldown timelines, comp rankings | [docs/lorrgs](docs/lorrgs/README.md) |
 | `raidbots` | experimental | public report consumption, SimC handoff | [docs/raidbots](docs/raidbots/README.md) |
-| `blizzard` | experimental (verified live for us/eu/kr/tw) | Battle.net Game Data and Profile reads | [docs/blizzard-api](docs/blizzard-api/README.md) |
+| `blizzard` | experimental (verified live for us/eu/kr/tw) | official profiles, PvP, collections and market snapshots | [docs/blizzard-api](docs/blizzard-api/README.md) |
 | `curseforge` | experimental (verified live) | addon metadata and changelogs | [docs/curseforge](docs/curseforge/README.md) |
 
 ## Quick Start
