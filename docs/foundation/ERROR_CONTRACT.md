@@ -21,7 +21,7 @@ envelope with that collection emptied and `data.stream: {"field", "count"}` nami
 | `kind` | string | Payload kind inside `data` (`search_results`, `resolve_match`, `entity`, `doctor`, `error`, ...) |
 | `schema_version` | string | Envelope schema version. Currently `"1"`. |
 | `query` | string, object, or null | On success, the normalized input when the command reports one, otherwise `null` (many commands that take a report, build or file answer with `null` here and describe their input inside `data`); on failure, see [Error object](#error-object) |
-| `provenance` | object | Source URLs, fetch timestamps, upstream warnings about the source (for example `warcraftlogs graphql`'s `graphql_warnings`), `compacted_paths` under `--compact`, and on success `cache` (`{backend, lookups, hits, hit, all_hits, oldest_hit_age_seconds, oldest_hit_ttl_seconds}`) whenever the command built a cache store; see [USAGE.md](../USAGE.md#reading-cache-state-provenancecache). A missing `cache` means nothing, and `--fields` keeps it only when asked for. `{}` when the command reports none; some commands keep their source URLs in `data` instead (for example `wowhead entity`'s `data.entity.page_url` and `data.citations`). |
+| `provenance` | object | Source URLs, fetch timestamps, upstream warnings about the source (for example `warcraftlogs graphql`'s `graphql_warnings`), `compacted_paths` under `--compact`, and on success `cache` (`{backend, lookups, hits, hit, all_hits, oldest_hit_age_seconds, oldest_hit_ttl_seconds, errors}`) whenever the command built a cache store; see [USAGE.md](../USAGE.md#reading-cache-state-provenancecache). A missing `cache` means nothing, and `--fields` keeps it only when asked for. `{}` when the command reports none; some commands keep their source URLs in `data` instead (for example `wowhead entity`'s `data.entity.page_url` and `data.citations`). |
 | `data` | object | Provider payload. `{}` on failure. |
 | `error` | object | Present only when `ok` is `false`: `{"code": str, "message": str, "details"?: object}` |
 
@@ -117,7 +117,9 @@ escapes a command becomes an error envelope on stderr and never a traceback:
 - `httpx.TimeoutException` -> `timeout`, exit 5
 - `httpx.HTTPStatusError` -> `auth_failed` (401/403, exit 3), `not_found` (404, exit 4), `rate_limited` (429, exit 5), otherwise `upstream_error` (exit 5); `details` carries `status_code` and `url`. Providers that translate status errors themselves use the same mapping (`warcraft_core.exit_codes.error_code_for_http_status`)
 - any other `httpx.RequestError` -> `network_error`, exit 5
-- argument-parsing failures (unknown flag, rejected option value, missing argument) -> `invalid_argument`, exit 2
+- argument-parsing failures (unknown flag, rejected option value, missing argument) -> `invalid_argument`, exit 2.
+  A global flag typed after the subcommand says to move it and sets `details.global_flag`; a group
+  called without a valid subcommand lists its subcommands in the message and in `details.commands`
 - any other exception -> `internal_error` with `"<ExceptionType>: <message>"`, exit 1
 
 There is no failure mode that writes human text instead of the envelope: `--help` is the only

@@ -78,6 +78,25 @@ class TraitTable:
         """The choice nodes among the nodes these entries sit on."""
         return frozenset(self.choice_node_by_entry[entry] for entry in entries if entry in self.choice_node_by_entry)
 
+    def untaken_talents(self, taken: set[str], *, class_id: int, spec_id: int, include_hero: bool) -> set[str]:
+        """Tokens of the talents this spec can take that ``taken`` lacks: SimC creates no action for them.
+
+        A talent on a choice node whose other entry is taken is left out, because SimC can resolve its
+        action to the taken entry: Brewmaster's ``celestial_brew`` becomes Celestial Infusion.
+        """
+        token_by_entry = {
+            entry: token
+            for (entry_class, token), entries in self.entries_by_name.items()
+            if entry_class == class_id
+            for entry in entries
+            if self._available(entry, class_id, spec_id)
+            and self.tree_by_entry[entry] != "selection"
+            and (include_hero or self.tree_by_entry[entry] != "hero")
+        }
+        taken_choices = {self.choice_node_by_entry.get(entry) for entry, token in token_by_entry.items() if token in taken}
+        aliased = {token for entry, token in token_by_entry.items() if self.choice_node_by_entry.get(entry, -1) in taken_choices}
+        return set(token_by_entry.values()) - taken - aliased
+
     def tree_for_name(self, name: str, *, class_id: int, spec_id: int) -> str | None:
         """The tree a talent name belongs to for this spec, or None when it has none or spans several trees."""
         trees = {self.tree_by_entry[entry] for entry in self.entries_for_name(name, class_id=class_id, spec_id=spec_id)}

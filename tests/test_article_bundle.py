@@ -588,3 +588,38 @@ def test_bundle_keeps_the_redirect_for_later_readers(tmp_path: Path) -> None:
         [(method_dir, load_article_bundle(method_dir)), (icy_dir, load_article_bundle(icy_dir))]
     )
     assert [bundle["redirect"] for bundle in comparison["bundles"]] == [redirect, None]
+
+
+def test_compare_shares_a_build_across_the_bundles_that_can_hold_builds(tmp_path: Path) -> None:
+    """A wowhead guide-export lists no build references file, so it no longer keeps every build partial."""
+    first, second, wowhead = tmp_path / "method-a", tmp_path / "method-b", tmp_path / "wowhead"
+    write_article_bundle(_method_like_payload(), provider="method", export_dir=first)
+    write_article_bundle(_method_like_payload(), provider="method", export_dir=second)
+    write_article_bundle(_icy_like_payload(), provider="wowhead", export_dir=wowhead)
+    guide_export = load_article_bundle(wowhead)
+    guide_export["manifest"]["files"].pop("build_references_jsonl")
+    guide_export["manifest"]["content_updated_at"] = "2026-08-20T13:42:22-05:00"
+
+    comparison = compare_article_bundles(
+        [(first, load_article_bundle(first)), (second, load_article_bundle(second)), (wowhead, guide_export)]
+    )
+
+    assert comparison["build_references"]["shared"] == [comparison["build_references"]["items"][0]["reference_key"]]
+    assert [bundle["content_updated_at"] for bundle in comparison["bundles"]] == [
+        "Last Updated: 26th Feb, 2026",
+        "Last Updated: 26th Feb, 2026",
+        "2026-08-20T13:42:22-05:00",
+    ]
+
+
+def test_compare_keeps_a_build_partial_when_only_one_bundle_can_hold_builds(tmp_path: Path) -> None:
+    method, wowhead = tmp_path / "method", tmp_path / "wowhead"
+    write_article_bundle(_method_like_payload(), provider="method", export_dir=method)
+    write_article_bundle(_icy_like_payload(), provider="wowhead", export_dir=wowhead)
+    guide_export = load_article_bundle(wowhead)
+    guide_export["manifest"]["files"].pop("build_references_jsonl")
+
+    comparison = compare_article_bundles([(method, load_article_bundle(method)), (wowhead, guide_export)])
+
+    assert comparison["build_references"]["shared"] == []
+    assert comparison["build_references"]["partial"]

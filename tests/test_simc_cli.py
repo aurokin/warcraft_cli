@@ -10,8 +10,16 @@ from unittest.mock import patch
 import pytest
 import simc_cli.compare as simc_compare
 import simc_cli.main as simc_main
-from simc_cli.build_input import BuildIdentity, BuildResolution, BuildSpec, DecodedTalent, HeroTree, SimcBuildError
-from simc_cli.compare import DEFAULT_GEAR_DISCLOSURE
+from simc_cli.build_input import (
+    BuildIdentity,
+    BuildResolution,
+    BuildSpec,
+    DecodedTalent,
+    HeroTree,
+    SimcBuildError,
+    UnknownClassSpecError,
+)
+from simc_cli.compare import DEFAULT_GEAR_DISCLOSURE, DEFAULT_TALENTS_DISCLOSURE, profile_disclosures
 from simc_cli.main import app as simc_app
 from simc_cli.prune import PruneContext
 from simc_cli.repo import RepoPaths
@@ -470,6 +478,22 @@ def test_simc_identify_build_accepts_build_packet(monkeypatch, tmp_path: Path) -
     assert payload["data"]["build_spec"]["transport_packet"]["path"] == str(packet_path)
     assert payload["data"]["build_spec"]["transport_packet"]["transport_form"] == "wowhead_talent_calc_url"
     assert payload["data"]["build_spec"]["transport_packet"]["transport_status"] == "exact"
+
+
+def test_simc_a_packet_build_read_against_another_specs_apl_is_a_usage_error(monkeypatch, tmp_path: Path) -> None:
+    """The wrong-APL refusal came back as invalid_build_packet (exit 1) for a packet, blaming a valid packet."""
+    packet_path = tmp_path / "build-packet.json"
+    packet_path.write_text('{"kind":"talent_transport_packet"}')
+
+    def refuse(_paths, **_kwargs):  # noqa: ANN001, ANN003
+        raise UnknownClassSpecError("The build is mage frost, but mage_fire is the mage fire APL.")
+
+    monkeypatch.setattr("simc_cli.main._load_identified_build_spec", refuse)
+
+    result = runner.invoke(simc_app, ["identify-build", "--build-packet", str(packet_path)])
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
 
 
 def test_simc_identify_build_accepts_wow_export_transport_form_from_build_packet(monkeypatch, tmp_path: Path) -> None:
@@ -3441,7 +3465,10 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
     build_payload = json.loads(build_result.stdout)
     assert build_payload["kind"] == "build_harness"
     assert build_payload["data"]["path"] == str(harness_path)
-    assert harness_path.exists()
+    # SimC parses talents= only when load_default_talents is off, so the harness must not set it.
+    harness_lines = harness_path.read_text().splitlines()
+    assert "talents=ABC123" in harness_lines
+    assert not any(line.startswith("load_default_talents=") for line in harness_lines)
     # The harness wears SimC's default gear, so its absolute DPS is not a real character's.
     assert build_payload["data"]["disclosures"] == [DEFAULT_GEAR_DISCLOSURE]
 
@@ -3496,6 +3523,7 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
     assert [row["label"] for row in compare_stdout["ranking"]] == ["base", "wowhead"]
     assert compare_stdout["comparisons"][0]["dps_delta"] == -1.0
     assert compare_stdout["sampling"]["action_sequence_iterations"] == 1
+    assert compare_stdout["disclosures"] == [DEFAULT_GEAR_DISCLOSURE]
 
     report_result = runner.invoke(simc_app, ["variant-report", str(tmp_path / "report.json")])
     assert report_result.exit_code == 0
@@ -3514,6 +3542,31 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
     clean_payload = json.loads(clean_result.stdout)
     assert clean_payload["kind"] == "verify_clean"
     assert clean_payload["data"]["git"]["dirty"] is False
+
+
+def test_simc_build_harness_without_talents_loads_the_default_talents_and_says_so(monkeypatch, tmp_path: Path) -> None:
+    """With no talents= line and no load_default_talents=1, SimC sims an almost empty talent tree."""
+    harness_path = tmp_path / "frost.simc"
+    monkeypatch.setattr(
+        "simc_cli.main._load_identified_build_spec_or_fail",
+        lambda *args, **kwargs: (
+            BuildSpec(actor_class="mage", spec="frost"),
+            BuildIdentity(actor_class="mage", spec="frost", confidence="high", source="direct", candidate_count=1),
+        ),
+    )
+
+    result = runner.invoke(simc_app, ["build-harness", "--actor-class", "mage", "--spec", "frost", "--out", str(harness_path)])
+
+    assert result.exit_code == 0
+    assert "load_default_talents=1" in harness_path.read_text().splitlines()
+    assert json.loads(result.stdout)["data"]["disclosures"] == [DEFAULT_GEAR_DISCLOSURE, DEFAULT_TALENTS_DISCLOSURE]
+
+
+def test_profile_disclosures_flag_a_harness_that_still_loads_the_default_talents() -> None:
+    """A harness written before the fix carries talents= and load_default_talents=1, and SimC sims the defaults."""
+    old_harness = 'mage="h"\nspec=frost\ntalents=ABC123\nload_default_gear=1\nload_default_talents=1\n'
+
+    assert profile_disclosures(old_harness) == [DEFAULT_GEAR_DISCLOSURE, DEFAULT_TALENTS_DISCLOSURE]
 
 
 def test_simc_build_harness_rejects_buildless_wowhead_talent_calc_url() -> None:
@@ -4258,25 +4311,25 @@ WINDWALKER_APL = "actions=call_action_list,name=st,if=active_enemies=1\nactions.
 
 
 @pytest.mark.parametrize(
-    ("build_args", "code"),
+    ("build_args", "expected"),
     [
-        (["--talents", "https://example.com/foo"], "unsupported_build_reference"),
-        (["--profile-path", "/nonexistent/profile.simc"], "invalid_query"),
-        (["--talents="], "invalid_query"),
+        (["--talents", "https://example.com/foo"], (2, "unsupported_build_reference")),
+        (["--profile-path", "/nonexistent/profile.simc"], (4, "not_found")),
+        (["--talents="], (2, "invalid_query")),
     ],
 )
 @pytest.mark.parametrize("command", ["priority", "apl-prune", "analysis-packet", "apl-branch-compare"])
 def test_apl_analysis_commands_report_bad_build_input_as_a_usage_error(
-    tmp_path: Path, command: str, build_args: list[str], code: str
+    tmp_path: Path, command: str, build_args: list[str], expected: tuple[int, str]
 ) -> None:
     """These commands used to report a bad build input as `<command>_failed`, exit 1, while
-    decode-build reported the same input as a usage error."""
+    decode-build reported the same input as a usage error (a missing build file as not_found)."""
     apl = tmp_path / "monk_windwalker.simc"
     apl.write_text(WINDWALKER_APL)
 
     exit_code, payload = _invoke(tmp_path, command, str(apl), *build_args)
 
-    assert (exit_code, payload["error"]["code"]) == (2, code)
+    assert (exit_code, payload["error"]["code"]) == expected
 
 
 def test_apl_analysis_rejects_talents_it_cannot_tie_to_a_class_and_spec(monkeypatch, tmp_path: Path) -> None:
@@ -4515,6 +4568,20 @@ def test_sim_stop_reason_does_not_claim_the_target_error_ended_the_run() -> None
     assert summary.run_settings["target_error_percent"] == 0.098
 
 
+def test_sim_report_keeps_the_stat_weights_simc_computed() -> None:
+    """With calculate_scale_factors=1 SimC writes players[0].scale_factors; the summary used to drop them."""
+    player = {
+        "collected_data": {"dps": {"mean": 1000.0}},
+        "scale_factors": {"Int": 48.4, "Crit": 25.2},
+        "scale_deltas": {"Int": 154.0, "Crit": 154.0},
+    }
+    summary = summarize_sim_report({"sim": {"options": {}, "players": [player]}})
+    unscaled = summarize_sim_report({"sim": {"options": {}, "players": [{"collected_data": {}}]}})
+
+    assert summary.scale_factors == {"factors": {"Int": 48.4, "Crit": 25.2}, "deltas": {"Int": 154.0, "Crit": 154.0}}
+    assert unscaled.scale_factors is None
+
+
 def _fake_ripgrep(monkeypatch, stdout_for: dict[str, str] | None = None) -> list[list[str]]:
     """Record each ripgrep argv; a call searching a path named in ``stdout_for`` prints that output."""
     calls: list[list[str]] = []
@@ -4601,6 +4668,26 @@ def test_find_action_rejects_an_unknown_class(monkeypatch, tmp_path: Path) -> No
     assert exit_code == 2
     assert payload["error"]["code"] == "invalid_query"
     assert "deathknight" in payload["error"]["message"]
+
+
+def test_find_action_takes_the_class_shorthand_other_providers_take(monkeypatch, tmp_path: Path) -> None:
+    """`--class dh` was rejected as an unknown class."""
+    _fake_ripgrep(monkeypatch)
+
+    exit_code, payload = _invoke(tmp_path, "find-action", "x", "--class", "dh")
+
+    assert exit_code == 0, payload
+
+
+def test_a_bare_apl_file_name_reads_the_spec_apl_in_the_checkout(tmp_path: Path) -> None:
+    """`mage_arcane.simc` was looked up at the checkout root and failed not_found; spec APLs live in ActionPriorityLists/default."""
+    apl = _checkout(tmp_path / "simc") / "ActionPriorityLists" / "default" / "monk_windwalker.simc"
+    apl.write_text(WINDWALKER_APL)
+
+    exit_code, payload = _invoke(tmp_path, "apl-lists", "monk_windwalker.simc")
+
+    assert exit_code == 0, payload
+    assert payload["data"]["apl"]["relative_to_repo"] == "ActionPriorityLists/default/monk_windwalker.simc"
 
 
 def _sim_json2(players: list[dict[str, Any]], **sim: Any) -> dict[str, Any]:
@@ -4694,3 +4781,23 @@ def test_decode_build_refuses_a_classic_era_talent_calc_build(tmp_path: Path, ur
     assert (exit_code, payload["error"]["code"]) == (2, "unsupported_build_reference")
     assert payload["error"]["details"]["reference_type"] == "wowhead_talent_calc_url_non_retail"
     assert "retail builds only" in payload["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["decode-build", "--build-packet", "{missing}"],
+        ["decode-build", "--profile-path", "{missing}"],
+        ["describe-build", "--build-file", "{missing}"],
+        ["validate-talent-transport", "--build-packet", "{missing}"],
+    ],
+)
+def test_simc_build_inputs_fail_not_found_for_a_missing_file(tmp_path: Path, args: list[str]) -> None:
+    """A missing build file is not_found (exit 4), as for `simc sim <missing>`, not a malformed input."""
+    missing = str(tmp_path / "missing.json")
+    result = runner.invoke(simc_app, [*_checkout_args(tmp_path), *(arg.format(missing=missing) for arg in args)])
+
+    assert result.exit_code == 4
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "not_found"
+    assert missing in error["message"]

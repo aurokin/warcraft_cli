@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextvars
 import io
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
@@ -381,12 +383,13 @@ def _unresolved_next_steps(candidates: list[dict[str, Any]], *, resolved: bool) 
     ``fallback_search_command``; without these the wrapper's resolve is a dead end even when a
     provider clearly found the thing. ``candidates`` holds only the providers that returned a match,
     so a provider that found nothing never hands over a search certain to come back empty. They are
-    in ranking order with the matches their provider rated ``low`` moved to the end: the wrapper
-    skipped those guesses for the answer, so ``best_unresolved_candidate`` (which names why it is not
-    the answer) and the first fallback search come from the match that blocked it, and a low guess
-    leads only when every match is low. A match its provider resolved but a better-ranked unresolved
-    match blocked is listed in ``provider_resolved_candidates`` with its ``next_command``, because a
-    resolved answer has no fallback search.
+    in ranking order (wrapper score, intent fit included; the provider's confidence only breaks a
+    tie), so ``best_unresolved_candidate`` (which names why it is not the answer) and the first
+    fallback search are the match ``warcraft search`` ranks first. A provider's ``low`` often means
+    two right pages tied, so it does not push an on-intent match behind an off-intent ``medium`` one
+    here, although it does keep that match from being the answer. A match its provider resolved but
+    a better-ranked unresolved match blocked is listed in ``provider_resolved_candidates`` with its
+    ``next_command``, because a resolved answer has no fallback search.
     """
     if resolved:
         return {
@@ -421,6 +424,20 @@ def _provider_warnings(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for key, value in as_dict(as_dict(row.get("payload")).get("provenance")).items()
         if key.endswith("_warning") and isinstance(value, str) and value
     ]
+
+
+def _fan_out(
+    registrations: list[ProviderRegistration], call: Callable[[ProviderRegistration], dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """``call`` for every provider at once, so a query waits for the slowest provider rather than all of
+    them in turn; the results come back in ``registrations`` order.
+
+    Each worker runs in its own copy of this context, so the provider's cache lookups still reach the
+    command's cache ledger (``warcraft_core.cache_ledger``).
+    """
+    with ThreadPoolExecutor(max_workers=max(1, len(registrations))) as pool:
+        futures = [pool.submit(contextvars.copy_context().run, call, registration) for registration in registrations]
+        return [future.result() for future in futures]
 
 
 def _fanout_health(providers: list[dict[str, Any]]) -> dict[str, Any]:
@@ -531,8 +548,11 @@ def search(
     excluded_providers = [*excluded_providers, *surface_excluded]
     providers: list[dict[str, Any]] = []
     flattened: list[dict[str, Any]] = []
-    for registration in included_registrations:
-        result = provider_search(registration.name, query, limit=limit, expansion=requested_expansion)
+    results = _fan_out(
+        included_registrations,
+        lambda registration: provider_search(registration.name, query, limit=limit, expansion=requested_expansion),
+    )
+    for registration, result in zip(included_registrations, results, strict=True):
         provider_payload = result.get("payload")
         provider_row = {
             "provider": registration.name,
@@ -618,8 +638,8 @@ def resolve(
 
     The answer is the candidate `warcraft search` would rank first, skipping any its own provider
     rated `low`, and only when that provider resolved it at `high` confidence; otherwise the command
-    reports `resolved: false` with the top-ranked remaining candidate as `best_unresolved_candidate`
-    and lists any lower match a provider resolved under `provider_resolved_candidates`.
+    reports `resolved: false` with the top-ranked candidate as `best_unresolved_candidate` and lists
+    any lower match a provider resolved under `provider_resolved_candidates`.
     """
     _require_query(ctx, query)
     requested_expansion = _requested_expansion(ctx)
@@ -632,8 +652,10 @@ def resolve(
     excluded_providers = [*excluded_providers, *surface_excluded]
     providers: list[dict[str, Any]] = []
     ranked: list[dict[str, Any]] = []
-    for registration in included_registrations:
-        result = provider_resolve(registration.name, query, expansion=requested_expansion)
+    results = _fan_out(
+        included_registrations, lambda registration: provider_resolve(registration.name, query, expansion=requested_expansion)
+    )
+    for registration, result in zip(included_registrations, results, strict=True):
         provider_payload = result.get("payload")
         provider_row = {
             "provider": registration.name,
@@ -654,7 +676,6 @@ def resolve(
     # A match its own provider rated low (a tie it could not break, a weak guess) never stands in
     # front of another provider's answer; a medium one still does: it found something unconfirmed.
     contenders = [row for row in ranked if confidence_rank(row.get("confidence")) > confidence_rank("low")]
-    skipped = [row for row in ranked if row not in contenders]
     top = contenders[0] if contenders else None
     best = top if top is not None and resolve_answer_accepted(top) else None
     match = compact_resolve_match(best) if brief else as_dict(best).get("match")
@@ -673,7 +694,7 @@ def resolve(
         "next_command": as_dict(best).get("next_command"),
         "confidence": as_dict(best).get("confidence"),
         **_fanout_health(providers),
-        **_unresolved_next_steps([*contenders, *skipped], resolved=best is not None),
+        **_unresolved_next_steps(ranked, resolved=best is not None),
         "providers": [] if brief else providers,
     }
     if ranking_debug:

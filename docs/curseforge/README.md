@@ -31,7 +31,8 @@ Every command accepts the shared output flags, which go **before** the subcomman
 Reports install state, API-key auth posture (`api_key` flow, `CURSEFORGE_API_KEY`, credential source
 and lookup order), the `experimental` tier, the cache configuration, and capability metadata:
 `doctor` is `ready`, `addon` is `ready` with a key and `requires_api_key` without one, and `search`
-and `resolve` are `coming_soon`. `status` is `ready` with a key and `degraded` without one.
+and `resolve` are `coming_soon`. `status` is `ready` with a key and `degraded` without one, or when a Redis cache backend does not
+answer (`cache.available: false`).
 
 ### `curseforge addon <slug-or-id>`
 
@@ -40,6 +41,10 @@ Resolves one WoW addon and returns its metadata, latest files, and latest change
 - A numeric argument is a mod id, validated to be a WoW project via `gameId`. Anything else is a
   `gameId=1` slug search whose result is matched to the exact slug client-side, so an ignored or
   renamed server-side filter can never bind the wrong mod.
+- A slug with no exact match (`weakauras`, whose slug is `weakauras-2`) is `addon_not_found` (exit 4)
+  whose `error.details.candidates` lists up to five addons a name search finds for it, most popular
+  first (`slug`, `id`, `name`), and whose message names their slugs; retry with
+  `curseforge addon <slug>`. The candidates are best effort and empty when that search fails.
 - `data.metadata` is the raw CurseForge mod record. `data.latest_files` is its `latestFiles` sorted
   newest first by `fileDate`; CurseForge's own order (kept in `metadata.latestFiles`) can put
   years-old betas first. The list mixes game flavors and release types (`releaseType` 1 release,

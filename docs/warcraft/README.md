@@ -76,8 +76,9 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   resolved it (at `high` confidence) and the query's intent does not rank that
   provider's family down (a guide query is never answered by Lorrgs spec metadata, a guild query
   never by a wiki article); a match whose title is exactly the query (the item `Guild Tabard`) is
-  exempt. Otherwise `resolved` is `false`, the top-ranked remaining candidate (a `low` match only when
-  every match is `low`) is `data.best_unresolved_candidate`, and the candidate itself carries
+  exempt. Otherwise `resolved` is `false`, the top-ranked candidate is `data.best_unresolved_candidate`
+  (a `low` match keeps its rank here: it often means two right pages tied, so an off-intent `medium`
+  match does not lead the hints), and the candidate itself carries
   `unresolved_reason` (`data.best_unresolved_candidate.unresolved_reason`:
   `provider_did_not_resolve`, `provider_family_ranked_down_by_query_intent`, or
   `single_word_query_not_named_exactly` when its provider capped a one-word query's answer at `medium`
@@ -85,8 +86,8 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   resolved is in `data.provider_resolved_candidates` with its `next_command`, so an answer a
   better-ranked `medium` match blocked stays one command away; `--ranking-debug` lists every match
   with its `resolved` flag. `data` also lists the `fallback_search_command`s of the providers that
-  returned a candidate, in ranking order with the `low` matches last (none when no provider found
-  anything).
+  returned a candidate, in ranking order (none when no provider found anything). `search` and
+  `resolve` ask the providers concurrently and list them in registry order.
   `--limit` only sizes `--ranking-debug`: providers are never asked for fewer candidates, because
   their confidence is judged against the rivals a small limit would hide. The envelope's `provider`
   is `warcraft`; `data.selected_provider` is the match's provider or `null`.
@@ -111,12 +112,19 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   the rule, the report's fight count, and whether the scope was truncated. A report with no fights
   fails `report_has_no_fights` (exit 4), and a name missing from the fights read fails
   `actor_not_found` (exit 4) with `error.details.fight_scope`, so a miss inside a truncated scope
-  says the other fights were not searched.
+  says the other fights were not searched. Warcraft Logs names a server by its space-stripped name;
+  for a localized one (`Ревущийфьорд`) the Raider.IO lookup uses the realm slug from the report's own
+  realm rows (`howling-fjord`). Raider.IO's spec is the character's current active spec
+  (`sources.raiderio.spec_source: "active_spec"`), so a log played in another spec reports
+  `reconciliation.reasons: ["spec_mismatch"]` as expected; only `class_mismatch` casts doubt on the join.
 - `warcraft cooldown-packet` — compose Lorrgs phase windows with Warcraft Logs cast events for
   phase-scoped cooldown analysis. Lorrgs only serves reports it has already cached; for any other
-  report — or when Lorrgs itself is unreachable — pass `--actor-id` and `--spec-slug` (and, while
-  Lorrgs is down, `--spell-id` for each cooldown; they are then named `spell:<id>`) and the packet
-  still returns the Warcraft Logs cast timeline with `lorrgs.status: "unavailable"`.
+  report — or when Lorrgs itself is unreachable — the packet still returns the Warcraft Logs cast
+  timeline with `lorrgs.status: "unavailable"`. The actor (`--actor-id` or `--actor-name`) is found in
+  the Warcraft Logs roster of the fight, which also supplies the spec, so `--spec-slug` is needed only
+  when the roster names none (`spec_slug_missing`, exit 2); without either actor flag the command fails
+  `missing_actor` (exit 2) with the roster in `error.details.available_players`. While Lorrgs is down,
+  also pass `--spell-id` for each cooldown (they are then named `spell:<id>`).
   `lorrgs.message` names the real reason (only a `not_found` is reported as "not cached"). The phase
   windows then come from the Warcraft Logs fight's phase transitions (`phase.source:
   "warcraftlogs"`; `"lorrgs"` when Lorrgs served the fight): windows are numbered P1, P2, ... in
@@ -128,8 +136,8 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   that could not be applied.
   A fight Lorrgs cached without its players degrades the same way (`lorrgs.reason:
   "lorrgs_fight_has_no_players"`). Without Lorrgs the player's name and class come from the Warcraft
-  Logs roster of the selected fight, so an `--actor-id` that fight lacks fails `actor_id_not_found`
-  (exit 4) even when the player is elsewhere in the report, and `player.deaths` is `null` (deaths
+  Logs roster of the selected fight, so an `--actor-id` (or `--actor-name`) that fight lacks fails
+  `actor_id_not_found` (or `actor_name_not_found`, exit 4) even when the player is elsewhere in the report, and `player.deaths` is `null` (deaths
   come only from the Lorrgs timeline). `--spec-slug` takes any provider's spelling
   (`frost-death-knight`, `BeastMastery`, `balance-druid`) and becomes the Lorrgs slug in `query.spec_slug`;
   a bare spec two classes share (`frost`) takes the player's class. A `--spec-slug` of another
@@ -137,8 +145,16 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   `cooldowns.player_casts.other_source_cast_count` counts rows from anyone else. When Lorrgs omits a
   fight's duration, the last phase window has `end_ms: null` (open-ended).
   The top-parse comparison uses `--difficulty` when passed, otherwise the Warcraft Logs fight's own
-  difficulty (heroic or mythic, echoed as `query.difficulty`). It needs a Lorrgs boss slug, which
-  only a Lorrgs-cached report supplies; for any other report pass `--boss-slug`. When the comparison
+  difficulty (heroic or mythic, echoed as `query.difficulty`). It needs a Lorrgs boss slug: a
+  Lorrgs-cached report names it, otherwise the Lorrgs boss whose id is the Warcraft Logs fight's
+  encounter id (`sources.lorrgs_bosses`); `--boss-slug` overrides both. Lorrgs' `other-externals`
+  (Power Infusion, Bloodlust, Ironbark and the like) are recorded on top parses as buffs received, so
+  the ones the player did not cast in the fight are left out of `tracked_spells` and the comparison
+  and listed in `cooldowns.received_auras`; one the player cast (a priest's Power Infusion) and any
+  `--spell-id` stay compared. An external the player owns but never pressed is therefore not reported
+  as missed. When the analyzed
+  fight is itself a top parse it is skipped (`comparison.excluded_analyzed_fight: true`), so the
+  player is never compared with themselves. When the comparison
   does not run, `comparison.reason` says why (`no_boss_slug`, `unranked_difficulty`,
   `lorrgs_spec_ranking_failed`, `disabled_by_sample_limit`) and a note names the flag that fixes it.
   Lorrgs ranking fights often carry no phase markers. When the encounter has several phases (the
@@ -156,17 +172,29 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   missing from the Lorrgs or Warcraft Logs roster fails `actor_id_not_found` / `actor_name_not_found`
   (exit 4).
 - `warcraft guide-compare` — compare two or more already-exported guide bundles.
+  `comparison_evidence.subjects` names the class and spec each guide's title names (spec `null` for a
+  class hub) and `subject_agreement` is `agree`, `mixed` (different specs, or a class hub next to a
+  spec guide, so shared sections compare unlike guides) or `unknown`.
+  `comparison_evidence.bundles_without_build_references` lists the bundles that hold none. A build
+  is `shared` when every bundle that can hold builds has it: a Wowhead export never holds any and is
+  left out, and at least two bundles must hold builds for any to be shared.
+  `freshness` is export recency; `bundles[].content_updated_at` (also on each
+  `comparison_evidence.bundle_freshness` row) is when the site last changed the guide (Wowhead's
+  `dateModified`, Method's and Icy Veins' last-updated date), `null` when the export did not record it.
 - `warcraft guide-compare-query` — resolve a guide query across wowhead, method, and icy-veins,
-  export the bundles, and compare them. A provider's guide is its resolved guide, else its search top
+  export the bundles, and compare them. Each provider is asked for guides only, so Wowhead answers
+  `frost mage` with its guide rather than the spell. A provider's guide is its resolved guide, else its search top
   hit when that hit is a guide with a strong score and a clear margin; each provider row names why
   it declined (`reason` for the search step, `resolve_reason` for the resolve step; a failed call
   makes the row `status: error`, `reason: provider_failed` with its `error`). It writes
   `manifest.json` only when at least two bundles were exported. Without `--out-root` it writes under
   `<data root>/guide_compare/<query-slug>` (the `paths.data_root` that `warcraft doctor` reports: the
   checkout's `.warcraft/runtime/data` for a checkout install, `<XDG data dir>/warcraft` for a wheel),
-  never into the current directory. Flags that
+  never into the current directory. `manifest.json` stores each `bundle_path` relative to the root, so
+  a copied or moved root reads its own bundles. Flags that
   leave fewer than two providers (a single `--provider`, or a non-retail `--expansion`, since method
-  and icy-veins are retail-only) fail `invalid_argument` (exit 2) before any provider call. Fewer than
+  and icy-veins are retail-only) fail `invalid_argument` (exit 2) before any provider call, naming
+  which of the two it was. Fewer than
   two bundles fails `insufficient_guides` (exit 1), except when every provider that contributed
   nothing failed outright (resolve/search or `guide-export` returned an error): then the run fails
   with those providers' shared code and exit code (a network outage is `network_error`, exit 5),
@@ -179,7 +207,10 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   with simc `describe-build` output. Both report the file they wrote as `written_packet_path`.
   With `--actor-id`, a bare word is read as a Warcraft Logs report code by the providers' own rule
   (16 mixed-case letters and digits, or 8 to 32 with a digit), so a name such as `HavocDemonHunter`
-  fails `unsupported_talent_source` (exit 2) instead of reaching Warcraft Logs.
+  fails `unsupported_talent_source` (exit 2) instead of reaching Warcraft Logs. A Warcraft Logs report
+  ref without `--actor-id` fails `missing_actor_id` (exit 2), naming `report-player-details` to find
+  it. `talent-describe` with an `--apl-path` of another spec than the build's fails `invalid_query`
+  (exit 2), as `simc describe-build` does.
   `producer_result` and `upgrade_result` are `{provider, exit_code, payload}`, the provider's parsed
   envelope only.
   simc reads the packet in memory, so its output cites a packet file only when one holds that
@@ -194,6 +225,11 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   as `--build-text`, a Wowhead talent-calc URL as a validated transport packet held in memory (its
   simc payloads cite no packet file). A reference that can
   go neither way is an `excluded_builds` row naming the reason, not a silently shorter list.
+  `--limit` takes one build per provider in turn (bundle order), so it never drops a whole provider;
+  the builds past it are `summary.truncated_build_count`, apart from `summary.excluded_build_count`.
+  For an orchestration root, `freshness.sampled_at` is the oldest bundle's export time (`reason:
+  "oldest_bundle_exported_at"`); `freshness.manifest_updated_at` is when the root's manifest was last
+  rewritten, which every run does.
   `summary.simc_handoff_status` is `ok`, `partial`, `failed`, `no_build_references`,
   `all_references_excluded` (the bundle had build references but every one is in `excluded_builds`),
   or `all_handoffs_failed`. The requested legs are `identify` plus `decode` (on by default) and

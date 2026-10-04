@@ -14,7 +14,7 @@ Repo-wide expectations for respectful provider use, safe logging, and failure re
 | Practice | Guidance |
 | --- | --- |
 | Default posture | Treat provider APIs and HTML endpoints as rate-limited. Back off when responses are slow, empty, or HTTP 429/503. |
-| Caching | Use built-in CLI caches (`wowhead`, `warcraftlogs`, `raiderio`, etc.) when repeating work. Clear caches only when freshness requires it (`cache-clear`). |
+| Caching | Use built-in CLI caches (`wowhead`, `warcraftlogs`, `raiderio`, etc.) when repeating work. When freshness requires it, bypass a provider's cache for one run with `<PROVIDER>_CACHE_BACKEND=none`; only `wowhead` has `cache-clear` (see [USAGE.md](../USAGE.md#configuration)). |
 | Concurrency | Wowhead `comments --hydrate-missing-replies` exposes `--max-concurrency`; keep values modest (default 4). Avoid unbounded parallel fanout across many CLIs. |
 | Live suites | `make test-e2e` is **operator-triggered**; CI runs only its keyless half and the Wowhead parser canary, weekly. Do not schedule them as high-frequency CI against production without credentials and scope review. |
 | Warcraft Logs | Query `warcraftlogs rate-limit` and inspect `doctor` / auth status before large report-scoped batch jobs. |

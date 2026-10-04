@@ -39,6 +39,7 @@ raiderio --fields data.results --pretty search "liquid"
 | `raids` | |
 | `dungeons` | |
 | `affixes` | |
+| `cutoffs` | |
 | `sample mythic-plus-runs` | |
 | `sample mythic-plus-players` | |
 | `distribution mythic-plus-runs` | |
@@ -63,9 +64,24 @@ current pool is the main season whose window covers now, and the dungeon slugs a
 takes. An expansion id Raider.IO has no Mythic+ seasons for (12 or 99 today) is `invalid_query`
 (exit 2). Warcraft Logs numbers expansions differently: its Midnight id 7 is Battle for Azeroth here.
 
+`raiderio cutoffs [--season SLUG] [--region us]` returns the Mythic+ rating it takes to be in the
+top 0.1%, 1%, 10%, 25% and 40% of one region's season (kind `mythic_plus_cutoffs`), from Raider.IO's
+season-cutoffs endpoint. This is player rating, the score on a character profile, not the run score
+`threshold` works on. `query` names the season and region (the current season when `--season` is
+omitted, read from the leaderboard); each `cutoffs` row has `percentile`, `quantile`, and `all`,
+`horde` and `alliance` blocks with `rating` (the lowest rating inside the percentile),
+`population_count` and `total_population`. `updated_at` is Raider.IO's own refresh time.
+`--region` takes `us`, `eu`, `kr`, `tw`, `cn` or an alias; `world` is `invalid_query`.
+
 Scope flags (all Mythic+ commands): `--season` (slug, or empty/`current` for the Raider.IO current
 default season), `--region` (`world` (default), `us`, `eu`, `kr`, `tw`, `cn`, or an alias such as
 `na`; anything else is `invalid_query`, exit 2), `--dungeon` (default `all`), `--affixes`, `--page`.
+A season slug Raider.IO does not know is `invalid_query` (exit 2) naming `raiderio dungeons`, which
+lists the slugs; Raider.IO answers it with HTTP 500, so the CLI asks Raider.IO again (not its
+cache) whether the current season answers before calling it a typo. If that fails too, or a later
+page of a season whose first page answered fails, the error stays `upstream_error`, exit 5.
+`--page` counts from 0 (`--page 0` is ranks 1-20, `--page 1` ranks 21-40), unlike the `--page` of
+`wowhead` and `warcraftlogs`, which count from 1.
 Runs are read in 20-run pages starting at `--page`, as many as `--limit` needs (1-200; default 20 on
 `leaderboard mythic-plus`, 100 on the sampled commands). The sampled commands also take `--pages`
 (1-10) to read fewer pages than that; `sample.pages_requested` and `pages_fetched` report what was read.
@@ -134,7 +150,9 @@ The payload carries `freshness` (`fetched_at`, `cache_hit`, `cache_ttl_seconds`)
   applies that filter is unverified (the page renders client-side), so the rows, not the page, are
   the realm-scoped record.
 
-An unknown raid slug is a usage error (exit 2) because Raider.IO rejects it as invalid input.
+An unknown raid slug is `invalid_query` (exit 2) naming the slug and `raiderio raids`, which lists
+the valid ones; Raider.IO itself answers only "Invalid request query input". `--page` counts from 0,
+as on the Mythic+ leaderboard.
 
 ## Examples
 
@@ -152,7 +170,8 @@ raiderio leaderboard raids --raid liberation-of-undermine --difficulty mythic --
 raiderio leaderboard raids --raid liberation-of-undermine --region us --realm malganis --limit 10
 raiderio sample mythic-plus-runs --region us --limit 100 --contains-class demon-hunter
 raiderio distribution mythic-plus-runs --metric mythic_level --season current
-raiderio threshold mythic-plus-runs --metric score --value 3000
+raiderio threshold mythic-plus-runs --metric score --value 520
+raiderio cutoffs --region us
 ```
 
 ## Behavior Notes

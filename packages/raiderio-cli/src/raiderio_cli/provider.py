@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
-from warcraft_api.cache import redacted_redis_url
+from warcraft_api.cache import cache_backend_health, redacted_redis_url
 from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND, resolve_data, search_data
 from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, error_envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
@@ -48,6 +48,7 @@ CAPABILITIES = {
     "raid_catalog": "ready",
     "mythic_plus_affixes": "ready",
     "mythic_plus_dungeons": "ready",
+    "mythic_plus_cutoffs": "ready",
 }
 
 
@@ -153,8 +154,10 @@ def ranked_candidates(client: RaiderIOClient, query: str, *, kind: str) -> tuple
 def doctor_report() -> dict[str, Any]:
     """Describe installation state, capabilities, and resolved cache configuration."""
     settings, static_ttl, character_ttl, guild_ttl, mplus_runs_ttl, raid_rankings_ttl = load_raiderio_cache_settings_from_env()
+    health = cache_backend_health(settings)
     return {
-        "status": "ready",
+        # A Redis cache that does not answer is the one thing that degrades the provider.
+        "status": "ready" if health["available"] else "degraded",
         "installed": True,
         "language": "python",
         "auth": {
@@ -175,6 +178,7 @@ def doctor_report() -> dict[str, Any]:
                 "mythic_plus_runs": mplus_runs_ttl,
                 "raid_rankings": raid_rankings_ttl,
             },
+            **health,
         },
     }
 

@@ -955,3 +955,35 @@ def test_resolve_keeps_a_one_word_answer_the_word_names_up_to_a_plural(monkeypat
 
     assert (data["confidence"], data["next_command"]) == ("high", "wowhead entity quest 97945")
     assert "confidence_cap" not in data
+
+
+def test_search_entity_type_keeps_only_rows_of_that_type(monkeypatch) -> None:
+    def fake_search(self, query: str):
+        return {
+            "search": query,
+            "results": [
+                {"type": 3, "id": 19019, "name": "Thunderfury", "typeName": "Item", "popularity": 5},
+                {"type": 1, "id": 12056, "name": "Thunderfury Guardian", "typeName": "NPC", "popularity": 5},
+            ],
+        }
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    result = runner.invoke(app, ["search", "thunderfury", "--entity-type", "npc"])
+
+    data = json.loads(result.stdout)["data"]
+    assert [row["id"] for row in data["results"]] == [12056]
+    assert data["filters"] == {"entity_types": ["npc"]}
+
+
+def test_search_defaults_to_five_results_and_resolve_lists_up_to_fifty(monkeypatch) -> None:
+    rows = [{"type": 3, "id": index, "name": f"Thunder {index}", "typeName": "Item", "popularity": 1} for index in range(1, 61)]
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: {"search": query, "results": rows}
+    )
+
+    searched = json.loads(runner.invoke(app, ["search", "thunder"]).stdout)["data"]
+    resolved = runner.invoke(app, ["resolve", "thunder", "--limit", "50"])
+
+    assert searched["count"] == 5
+    assert resolved.exit_code == 0
+    assert len(json.loads(resolved.stdout)["data"]["candidates"]) == 50

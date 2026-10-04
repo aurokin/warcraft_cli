@@ -2035,6 +2035,8 @@ class WarcraftLogsClient:
             variables=None,
             namespace="rate_limit",
             ttl_seconds=60,
+            # Points spent and the reset time are only worth reading live.
+            use_cache=False,
             force_client=True,
         )
         payload = data.get("rateLimitData")

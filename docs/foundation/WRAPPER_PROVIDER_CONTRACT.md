@@ -428,11 +428,12 @@ unresolved) and the query's intents
 - the wrapper never passes its own `--limit` to a provider's resolve: providers judge confidence
   against their rivals, and a small limit would hide them
 - preserve the chosen provider's `match`, `next_command`, and confidence instead of flattening them
-- when there is no answer, surface the top-ranked match that is not `low` (a `low` one only when
-  every match is `low`) as `best_unresolved_candidate` (flagged `resolved: false`, with
-  `unresolved_reason`), so the hint names the match that blocked the answer, together with the own
-  `fallback_search_command`s of the providers that returned a candidate, in ranking order with the
-  `low` matches last. A provider that found nothing hands over no search, so when no provider found
+- when there is no answer, surface the top-ranked match as `best_unresolved_candidate` (flagged
+  `resolved: false`, with `unresolved_reason`), together with the own `fallback_search_command`s of
+  the providers that returned a candidate, in ranking order. A `low` match keeps its rank in these
+  hints, though it can never be the answer: a provider's `low` often means two right pages tied, and
+  moving it behind an off-intent `medium` match made the hint point away from the query. A provider
+  that found nothing hands over no search, so when no provider found
   anything `fallback_search_command` is `null`. Every lower match its provider resolved is listed in
   `provider_resolved_candidates` with its `next_command`: a resolved answer has no fallback search,
   so without that list an answer a better-ranked `medium` match blocked would be unreachable

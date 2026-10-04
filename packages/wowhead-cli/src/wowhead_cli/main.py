@@ -23,7 +23,7 @@ from warcraft_api.cache import (
     inspect_redis_cache,
     load_cache_settings_from_env,
 )
-from warcraft_content.article_bundle import load_article_bundle, query_article_bundle
+from warcraft_content.article_bundle import ArticleBundleError, load_article_bundle, query_article_bundle
 from warcraft_content.guide_analysis import extract_section_chunk_analysis_surfaces
 from warcraft_core.cli import (
     CompactMaxCharsOption,
@@ -53,6 +53,7 @@ from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS, to_json
 from warcraft_core.output import emit as emit_json
 from warcraft_core.provider import ProviderError
 from warcraft_core.timestamps import iso_now_utc, parse_iso8601_utc
+from warcraft_core.wow_normalization import normalize_region
 from warcraft_core.wow_specs import WOW_SPECS
 
 from wowhead_cli import provider
@@ -75,6 +76,7 @@ from wowhead_cli.entities import (
 )
 from wowhead_cli.entity_types import (
     DEFAULT_HYDRATE_ENTITY_TYPES,
+    ENTITY_TYPE_KEYS,
     HYDRATABLE_ENTITY_TYPES,
     PARSER_ENTITY_TYPES,
 )
@@ -260,10 +262,14 @@ def _prune_zero_counts(value: Any) -> Any:
     return filtered
 
 
+def _cache_namespace_counts(counts: Any) -> dict[str, Any]:
+    # The file store reports per-state counts; Redis reports a bare key count.
+    return counts if isinstance(counts, dict) else {"total": counts}
+
+
 def _cache_namespace_sort_key(item: tuple[str, Any]) -> tuple[int, str]:
     name, counts = item
-    total = counts.get("total") if isinstance(counts, dict) else 0
-    return (-int(total or 0), name)
+    return (-int(_cache_namespace_counts(counts).get("total") or 0), name)
 
 
 def _cache_stats_payload(stats: dict[str, Any], *, summary: bool, namespace_limit: int, hide_zero: bool) -> dict[str, Any]:
@@ -280,8 +286,8 @@ def _cache_stats_payload(stats: dict[str, Any], *, summary: bool, namespace_limi
         top_namespaces: list[dict[str, Any]] = []
         for name, counts in sorted_namespaces[:namespace_limit]:
             row = {"namespace": name}
-            if isinstance(counts, dict):
-                row.update(_prune_zero_counts(counts) if hide_zero else counts)
+            row_counts = _cache_namespace_counts(counts)
+            row.update(_prune_zero_counts(row_counts) if hide_zero else row_counts)
             top_namespaces.append(row)
         payload.pop("namespaces", None)
         payload["namespace_count"] = len(namespaces)
@@ -826,7 +832,13 @@ def _entity_page(client: WowheadClient, entity_type: str, entity_id: int) -> tup
     """Fetch an entity page and its metadata; a failed request raises ``ProviderError``."""
     with provider.transport_errors():
         html = client.entity_page_html(entity_type, entity_id)
-    return html, parse_page_metadata(html, fallback_url=entity_url(entity_type, entity_id, expansion=client.expansion))
+    metadata = parse_page_metadata(html, fallback_url=entity_url(entity_type, entity_id, expansion=client.expansion))
+    canonical_url = metadata.get("canonical_url") or ""
+    # Wowhead sends `/items=19019` to its item listing rather than answering 404; a real page of a
+    # type the table lacks keeps the id in its canonical URL (`/title/private-1`).
+    if entity_type not in ENTITY_TYPE_KEYS and re.search(rf"(?<!\d){entity_id}(?!\d)", urlparse(canonical_url).path) is None:
+        raise provider.unknown_entity_type_error(entity_type, details={"canonical_url": canonical_url})
+    return html, metadata
 
 
 def _fetch_entity_page(
@@ -2788,7 +2800,7 @@ def _resolve_corpus_ref(corpus_ref: str, *, root: Path | None) -> Path:
             raise ValueError(f"Bundle path {expanded} is not a directory.")
         return expanded.resolve()
     if _looks_like_path(raw):
-        raise ValueError(f"Bundle path {expanded} does not exist.")
+        raise ArticleBundleError("not_found", f"Bundle path {expanded} does not exist.")
 
     search_root = (root or guide_export_root()).expanduser()
     corpora = _discover_guide_corpora(search_root, max_age_hours=24)
@@ -3009,7 +3021,7 @@ def cache_clear(
     expired_only: bool = typer.Option(
         False,
         "--expired-only/--all",
-        help="Only clear expired file-cache entries. Ignored by default when clearing all entries.",
+        help="Only clear expired file-cache entries (default --all clears every entry).",
     ),
 ) -> None:
     """Clear cached Wowhead responses for the selected namespaces or for the whole cache."""
@@ -3065,7 +3077,7 @@ def resolve(
         5,
         "--limit",
         min=1,
-        max=20,
+        max=50,
         help="Maximum candidates to list; confidence is judged over all of them.",
     ),
 ) -> None:
@@ -3082,8 +3094,13 @@ def resolve(
 def search(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Search text."),
+    entity_type: list[str] = typer.Option(
+        [],
+        "--entity-type",
+        help="Restrict results to one or more entity types. Repeat or pass comma-separated values.",
+    ),
     limit: int = typer.Option(
-        10,
+        5,
         "--limit",
         min=1,
         max=50,
@@ -3093,7 +3110,7 @@ def search(
     """Search Wowhead suggestions and return ranked entity candidates."""
     cfg = _apply_url_expansion(ctx, query)
     explicit = cfg.expansion.key if cfg.expansion_explicit else None
-    _emit_surface(ctx, lambda: provider.search(query, limit=limit, expansion=explicit))
+    _emit_surface(ctx, lambda: provider.search(query, limit=limit, entity_types=entity_type, expansion=explicit))
 
 
 @dataclass(frozen=True, slots=True)
@@ -3289,6 +3306,23 @@ def _blue_tracker_payload(
     }
 
 
+# Wowhead's blue tracker files every post under one of these regions.
+BLUE_TRACKER_REGIONS = ("eu", "us")
+
+
+def _blue_tracker_regions(ctx: typer.Context, values: list[str]) -> tuple[str, ...]:
+    """The --region values as blue-tracker regions (na reads as us); any other value is a usage error."""
+    regions = tuple(dict.fromkeys(normalize_region(value) for value in normalize_text_filters(values)))
+    unknown = [value for value in regions if value not in BLUE_TRACKER_REGIONS]
+    if unknown:
+        fail(
+            ctx,
+            "invalid_argument",
+            f"Unknown --region {', '.join(unknown)}. The blue tracker has: {', '.join(BLUE_TRACKER_REGIONS)}.",
+        )
+    return regions
+
+
 @app.command("blue-tracker")
 def blue_tracker(
     ctx: typer.Context,
@@ -3301,7 +3335,7 @@ def blue_tracker(
     region: list[str] = typer.Option(
         [],
         "--region",
-        help="Restrict matches to one or more regions such as us or eu. Repeat or pass comma-separated values.",
+        help="Restrict matches to us (or na) and/or eu, the regions the blue tracker covers. Repeat or pass comma-separated values.",
     ),
     forum: list[str] = typer.Option(
         [],
@@ -3356,7 +3390,7 @@ def blue_tracker(
                 date_to=parsed_date_to,
             ),
             selected_authors=normalize_text_filters(author),
-            selected_regions=normalize_text_filters(region),
+            selected_regions=_blue_tracker_regions(ctx, region),
             selected_forums=normalize_text_filters(forum),
         ),
     )
@@ -3634,7 +3668,7 @@ def talent_calc(
         help="Maximum embedded listed builds to return when the page exposes them.",
     ),
 ) -> None:
-    """Decode a Wowhead talent calculator ref into class, spec, and build state."""
+    """Parse a Wowhead talent calculator ref into class, spec, and build code; a classic build code is not decoded."""
     _emit(ctx, _talent_calc_payload(ctx, ref=ref, listed_build_limit=listed_build_limit))
 
 
@@ -4196,6 +4230,8 @@ def guide_query(
     try:
         export_dir = _resolve_corpus_ref(bundle_ref, root=root)
         bundle = load_article_bundle(export_dir)
+    except ArticleBundleError as exc:
+        fail(ctx, exc.code, exc.message)
     except ValueError as exc:
         fail(ctx, "invalid_bundle", str(exc))
     try:
@@ -4516,6 +4552,8 @@ def guide_bundle_inspect(
     try:
         export_dir = _resolve_corpus_ref(bundle_ref, root=root)
         corpus = _load_guide_export(export_dir)
+    except ArticleBundleError as exc:
+        fail(ctx, exc.code, exc.message)
     except (ValueError, json.JSONDecodeError) as exc:
         fail(ctx, "invalid_bundle", str(exc))
     payload = _guide_bundle_inspection_payload(
@@ -4600,6 +4638,8 @@ def guide_bundle_refresh(
     try:
         export_dir = _resolve_corpus_ref(bundle_ref, root=root)
         corpus = _load_guide_export(export_dir)
+    except ArticleBundleError as exc:
+        fail(ctx, exc.code, exc.message)
     except (ValueError, json.JSONDecodeError) as exc:
         fail(ctx, "invalid_bundle", str(exc))
 

@@ -400,3 +400,40 @@ def test_an_added_talent_the_base_lacks_is_in_the_export(repo: RepoPaths, decode
 
     assert exit_code == 0, f"{subject.name} --add {entry}:1: {payload}"
     assert entry in _taken_entries(repo, subject, payload["data"]["result"]["talents_export"])
+
+
+def test_a_harness_sims_the_build_it_was_given(repo: RepoPaths, tmp_path) -> None:  # noqa: ANN001
+    """build-harness used to set load_default_talents=1, which SimC applies instead of talents=.
+
+    Every harness then simmed the spec's default loadout, so two different builds of one spec gave the
+    same seeded DPS. Each harness must carry its own hash and sim to its own number.
+    """
+    by_spec: dict[tuple[str, str], list[BuildSpec]] = {}
+    for _name, build_spec in _stock_profiles(repo):
+        by_spec.setdefault((str(build_spec.actor_class), str(build_spec.spec)), []).append(build_spec)
+    actor_class, spec, first, second = next(
+        (actor_class, spec, builds[0], other)
+        for (actor_class, spec), builds in sorted(by_spec.items())
+        if (repo.root / "ActionPriorityLists" / "default" / f"{actor_class}_{spec}.simc").exists()
+        for other in builds[1:]
+        if other.talents != builds[0].talents
+    )
+    apl = repo.root / "ActionPriorityLists" / "default" / f"{actor_class}_{spec}.simc"
+    runner = CliRunner()
+
+    def seeded_dps(label: str, talents: str) -> float:
+        harness = tmp_path / f"{label}.simc"
+        built = runner.invoke(simc_app, [
+            "--repo-root", str(repo.root), "build-harness", "--actor-class", actor_class, "--spec", spec,
+            "--talents", talents, "--out", str(harness), "--line", "seed=7",
+        ])
+        assert built.exit_code == 0, built.stdout + built.stderr
+        assert f"talents={talents}" in harness.read_text().splitlines()
+        compared = runner.invoke(simc_app, [
+            "--repo-root", str(repo.root), "compare-apls", str(harness), "--base-apl", str(apl),
+            "--iterations", "20", "--threads", "1", "--skip-validate", "--out-dir", str(tmp_path / label),
+        ])
+        assert compared.exit_code == 0, compared.stdout + compared.stderr
+        return float(json.loads(compared.stdout)["data"]["ranking"][0]["dps"])
+
+    assert seeded_dps("first", str(first.talents)) != seeded_dps("second", str(second.talents))

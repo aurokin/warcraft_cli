@@ -491,6 +491,37 @@ def test_typed_direct_article_result_returns_supported_family() -> None:
 
 
 @pytest.mark.parametrize(
+    "title",
+    [
+        "SecureActionButtonTemplate",
+        "UIOBJECT Button",
+        "TOC format",
+        "Secure Execution and Tainting",
+        "Saving variables between game sessions",
+    ],
+)
+def test_api_opens_an_addon_framework_page_by_its_exact_title(title: str) -> None:
+    """Live `warcraft-wiki api` (2026-10) failed not_found on these pages while `article` opened them."""
+
+    class FakeClient:
+        def fetch_article_page(self, ref: str) -> dict[str, object]:
+            if ref != title:
+                raise WarcraftWikiAPIError("missingtitle", "The page you specified doesn't exist.")
+            # Synthetic: the page title is all the classification reads.
+            payload = {"parse": {"title": title, "text": {"*": '<div class="mw-parser-output"><p>Body.</p></div>'}}}
+            return parse_article_page(payload, source_title=title)
+
+    result = _typed_direct_article_result(
+        FakeClient(),
+        direct_refs=_typed_direct_refs(title, surface="api"),
+        allowed_families=_typed_allowed_families("api"),
+    )
+
+    assert result is not None
+    assert result["article"]["title"] == title
+
+
+@pytest.mark.parametrize(
     ("title", "query", "expected"),
     [
         # Separators on either side are noise, so the event's own page still names PLAYER_LOGIN.

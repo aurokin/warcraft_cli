@@ -16,8 +16,8 @@ Three discovery fixtures, because one cannot prove everything:
   any token can read, which is what an agent is usually pointed at. Almost every report journey
   hangs off it. The sampled cross-report analytics are scoped to its guild and to a report-time
   window around it, so the sampled cohort provably contains it instead of racing the firehose.
-- ``guild_anchor`` is the pinned guild's own newest kill. Every one of its reports is *private*, so
-  it is what proves the saved user token opens a report the client token cannot; it is also the
+- ``guild_anchor`` is the pinned guild's own newest kill in a *private* report (the guild logs
+  privately, bar the odd unlisted report), so it is what proves the saved user token opens a report the client token cannot; it is also the
   roster the spec filter's negative case is derived from, and a report Lorrgs has never cached.
 - ``wide_cohort`` is the guild's newest reports of one tier (the current one, or an earlier one while
   the current tier is too new) on a boss it killed more than once, because ordering and duplicate
@@ -61,6 +61,9 @@ RAID_DIFFICULTY_IDS = frozenset({3, 4, 5})
 
 # How many of the guild's most recent current-tier reports discovery scans for an anchor kill.
 DISCOVERY_REPORT_LIMIT = 10
+
+# Most-applied auras tried, in order, for one held in both halves of the anchor kill.
+AURA_CANDIDATE_ATTEMPTS = 5
 
 # Padding around the anchor report's start/end so the sampled report window certainly contains it.
 SAMPLE_WINDOW_PADDING_MS = 60_000
@@ -156,11 +159,13 @@ def current_raid_zone() -> dict[str, Any]:
     return zone
 
 
-def _fight_roster(code: str, fight_id: int) -> tuple[dict[str, Any], ...]:
+def _fight_roster(code: str, fight_id: int, *, required: bool = True) -> tuple[dict[str, Any], ...]:
+    """The fight's players by role. Warcraft Logs keeps no player details for some reports; such a
+    roster fails the journey unless ``required`` is false, when it comes back empty."""
     result = run("warcraftlogs", "report-encounter-players", code, "--fight-id", str(fight_id))
     roles = (result.data["player_details"] or {}).get("roles") or {}
     roster = [{**row, "role": role} for role, rows in roles.items() for row in rows if isinstance(row, dict)]
-    if not roster:
+    if not roster and required:
         raise JourneyFailure(f"fight {fight_id} of {code} has no players\n{result.describe()}")
     return tuple(roster)
 
@@ -199,10 +204,14 @@ def guild_reports(zone_id: int) -> tuple[dict[str, Any], ...]:
 
 @lru_cache(maxsize=1)
 def guild_anchor() -> Anchor:
-    """The newest current-tier kill in the pinned guild's own (private) logs, with its roster."""
+    """The newest current-tier kill in the pinned guild's own private logs, with its roster."""
     zone = current_raid_zone()
     reports = guild_reports(int(zone["id"]))
     for report in reports:
+        # The guild logs privately, but posts the odd report unlisted; only a private one proves the
+        # user-token-only access this anchor exists for.
+        if report.get("visibility") != "private":
+            continue
         code = str(report["code"])
         fights = run("warcraftlogs", "report-fights", code).data["fights"]
         # Only the tier's own bosses: a raid-zone report can also hold a Mythic+ run (difficulty 10),
@@ -213,7 +222,10 @@ def guild_anchor() -> Anchor:
             continue
         # Prefer the hardest difficulty in the report; ties go to the latest pull.
         fight = max(kills, key=lambda row: (row.get("difficulty") or 0, row.get("id") or 0))
-        roster = _fight_roster(code, int(fight["id"]))
+        # Some of the guild's reports carry no player details at all (Lf1hGgRZcXzM9nN6); the next one does.
+        roster = _fight_roster(code, int(fight["id"]), required=False)
+        if not roster:
+            continue
         return Anchor(
             zone=zone,
             code=code,
@@ -426,13 +438,27 @@ def anchor_aura_id() -> int:
     """An aura game id applied again and again during the anchor kill, so both halves of the fight hold it.
 
     The most-applied aura, not the longest-held one: a pre-pull food buff is held all fight but
-    applied once, which gives the two-window comparison nothing to set side by side.
+    applied once, which gives the two-window comparison nothing to set side by side. The most-applied
+    one can still be an encounter mechanic of one phase (Fury of the Dead on Nek'zali), so each
+    candidate must have a holder in the second half too.
     """
-    result = run("warcraftlogs", "report-encounter-buffs", anchor().url, "--view-by", "source", "--preview-limit", "25")
+    found = anchor()
+    result = run("warcraftlogs", "report-encounter-buffs", found.url, "--view-by", "source", "--preview-limit", "25")
     preview = [row for row in (result.data["buffs"] or {}).get("preview") or [] if isinstance((row.get("aura") or {}).get("game_id"), int)]
     if not preview:
         raise JourneyFailure(f"no aura game id in the anchor fight's buff preview\n{result.describe()}")
-    return int(max(preview, key=lambda row: row.get("reported_total_uses") or 0)["aura"]["game_id"])
+    duration = int(found.fight["end_time"]) - int(found.fight["start_time"])
+    half = max(duration // 2, 1000)
+    candidates = sorted(preview, key=lambda row: row.get("reported_total_uses") or 0, reverse=True)
+    for row in candidates[:AURA_CANDIDATE_ATTEMPTS]:
+        game_id = int(row["aura"]["game_id"])
+        second_half = run(
+            "warcraftlogs", "report-encounter-aura-summary", found.url, "--ability-id", str(game_id),
+            "--window-start-ms", str(half), "--window-end-ms", str(duration),
+        )
+        if second_half.data["aura_summary"]["rows"]:
+            return game_id
+    raise JourneyFailure(f"none of the {AURA_CANDIDATE_ATTEMPTS} most-applied auras is held in the anchor kill's second half")
 
 
 @lru_cache(maxsize=1)
@@ -1249,6 +1275,58 @@ def test_raw_report_surfaces_return_scoped_slices(require):
     assert ranked_names <= roster, rankings.describe()
 
 
+def test_healers_are_ranked_on_healing_unless_a_metric_is_named(require):
+    """In a raid Warcraft Logs ranks every role on dps when no metric is sent, so a healer's default parse was a damage parse."""
+    require("warcraftlogs")
+    found = anchor()
+    difficulty = {1: "lfr", 3: "normal", 4: "heroic", 5: "mythic"}.get(found.fight["difficulty"], str(found.fight["difficulty"]))
+    scope = (
+        "encounter-rankings", "--zone-id", str(found.zone["id"]), "--boss-id", str(found.fight["encounter_id"]),
+        "--difficulty", difficulty, "--spec-name", "holy priest", "--limit", "3",
+    )
+    healing = run("warcraftlogs", *scope)
+    damage = run("warcraftlogs", *scope, "--metric", "dps")
+    assert (healing.payload["query"]["metric"], damage.payload["query"]["metric"]) == ("hps", "dps"), healing.describe()
+    assert healing.payload["query"]["difficulty"] == found.fight["difficulty"], healing.describe()
+    top_amount = {name: result.data["rankings"]["rows"][0]["amount"] for name, result in (("hps", healing), ("dps", damage))}
+    assert top_amount["hps"] > top_amount["dps"], top_amount
+
+    def healer_amounts(*extra: str) -> list[float]:
+        result = run("warcraftlogs", "report-rankings", found.code, "--fight-id", str(found.fight_id), *extra)
+        return [character["amount"] for character in result.data["rankings"]["rows"][0]["roles"]["healers"]["characters"]]
+
+    default_healers, damage_healers = healer_amounts(), healer_amounts("--player-metric", "dps")
+    assert default_healers and len(default_healers) == len(damage_healers), (default_healers, damage_healers)
+    assert max(default_healers) > max(damage_healers), (default_healers, damage_healers)
+
+
+def test_mythic_plus_rankings_keep_warcraft_logs_score_order_by_default(require):
+    """In a Mythic+ zone Warcraft Logs ranks on score when no metric is sent; the healer default must not replace it."""
+    require("warcraftlogs")
+    zones = [
+        zone
+        for zone in _rows(run("warcraftlogs", "zones"), "zones")
+        if isinstance(zone, dict) and not zone.get("frozen") and zone.get("encounters")
+        and 10 in {difficulty.get("id") for difficulty in zone.get("difficulties") or []}
+    ]
+    if not zones:
+        raise JourneyFailure("no unfrozen Mythic+ zone (difficulty 10) in `warcraftlogs zones`")
+    zone = max(zones, key=lambda row: row["id"])
+    encounter_id = zone["encounters"][0]["id"]
+    ranked = run(
+        "warcraftlogs", "encounter-rankings", "--zone-id", str(zone["id"]), "--boss-id", str(encounter_id),
+        "--spec-name", "holy priest", "--limit", "3",
+    )
+    assert ranked.payload["query"]["metric"] == "playerscore", ranked.describe()
+    upstream = run(
+        "warcraftlogs", "graphql", "--query",
+        f'query {{ worldData {{ encounter(id: {encounter_id}) {{ characterRankings(className: "Priest", specName: "Holy") }} }} }}',
+    )
+    upstream_rows = upstream.data["worldData"]["encounter"]["characterRankings"]["rankings"][:3]
+    names = [row["name"] for row in ranked.data["rankings"]["rows"]]
+    assert names and names == [row["name"] for row in upstream_rows], (names, upstream_rows)
+
+
 def test_filter_expression_narrows_the_events_a_report_slice_returns(require):
     """``--filter-expression`` is the only way to narrow events server-side; prove it lands.
 
@@ -1981,7 +2059,6 @@ def test_input_warcraft_logs_would_answer_unfiltered_is_a_usage_error(require):
         ("encounter-rankings", "--zone-id", zone, "--boss-id", boss, "--class-name", "nopeclass"),
         ("reports", "--guild-name", pins.GUILD_NAME, "--limit", "1"),
         ("boss-kills", "--zone-id", zone, "--boss-id", boss, "--spec-name", "frsot"),
-        ("report-events", found.code, "--fight-id", str(found.fight_id), "--data-type", "nope"),
         (
             "report-events", found.code, "--fight-id", str(found.fight_id), "--data-type", "casts",
             "--start-time", str(int(found.fight["end_time"]) + 60_000), "--end-time", str(int(found.fight["end_time"]) + 120_000),
@@ -1989,6 +2066,12 @@ def test_input_warcraft_logs_would_answer_unfiltered_is_a_usage_error(require):
     ):
         result = run("warcraftlogs", *args, expect=EXIT_USAGE, error_code="invalid_query")
         assert result.stdout == "", result.describe()
+    # An enum value is checked before any request, and the error lists the values Warcraft Logs takes.
+    bad_enum = run(
+        "warcraftlogs", "report-events", found.code, "--fight-id", str(found.fight_id), "--data-type", "nope",
+        expect=EXIT_USAGE, error_code="invalid_argument",
+    )
+    assert "DamageDone" in bad_enum.payload["error"]["message"], bad_enum.describe()
 
     run("warcraftlogs", "guild-reports", *GUILD[:2], "zzqqnopeguild", expect=EXIT_NOT_FOUND, error_code="not_found")
 

@@ -45,13 +45,13 @@ Return the structured coming-soon stub for free-text search.
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `query` | str | required | Free-text query. Structured discovery is deferred for simc phase 1. |
+| `query` | str | required | Free-text query. Discovery search is not implemented yet. |
 
 **Options**
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 5 | Unused in phase 1. |
+| `--limit` | int range [1<=x<=50] | 5 | Unused until simc search ships. |
 
 ## simc resolve
 
@@ -61,13 +61,13 @@ Return the structured coming-soon stub for free-text resolution.
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `query` | str | required | Free-text query. Structured resolution is deferred for simc phase 1. |
+| `query` | str | required | Free-text query. Conservative resolution is not implemented yet. |
 
 **Options**
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 5 | Unused in phase 1. |
+| `--limit` | int range [1<=x<=50] | 5 | Unused until simc resolve ships. |
 
 ## simc version
 

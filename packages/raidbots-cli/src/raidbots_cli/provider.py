@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from typing import Any, Final, Literal
 
 import httpx
-from warcraft_api.cache import redacted_redis_url
+from warcraft_api.cache import cache_backend_health, redacted_redis_url
 from warcraft_core.discovery import stub_envelope
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import EXIT_USAGE
@@ -140,8 +140,9 @@ def doctor(**options: Any) -> Envelope:
         settings, report_ttl = load_raidbots_cache_settings_from_env()
     except ValueError as exc:
         raise ProviderError("invalid_cache_config", str(exc)) from exc
+    health = cache_backend_health(settings)
     payload: dict[str, Any] = {
-        "status": "ready",
+        "status": "ready" if health["available"] else "degraded",
         "installed": True,
         "language": "python",
         "auth": {"required": False, "deferred": True},
@@ -154,6 +155,7 @@ def doctor(**options: Any) -> Envelope:
             "redis_url": redacted_redis_url(settings.redis_url),
             "prefix": settings.prefix,
             "ttls": {"report": report_ttl},
+            **health,
         },
         "notes": list(NOTES),
     }

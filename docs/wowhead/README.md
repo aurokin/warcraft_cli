@@ -141,7 +141,7 @@ Failures print an error envelope on stderr and exit with the shared code:
 | 1 | generic failure (parse errors, unexpected upstream payloads, bad cache config) |
 | 2 | usage error (bad flag value, rejected filter, invalid date range, a malformed talent-calc or tool reference (`invalid_tool_ref`) or news or blue-tracker reference (`invalid_ref`)) |
 | 3 | authentication failure |
-| 4 | upstream 404 |
+| 4 | upstream 404; an entity type this CLI does not know that Wowhead answers with a 404 or another page (`entity items 19019`, a typo) is `invalid_argument`, exit 2, listing the known types. Wowhead's tooltip endpoint also 404s on some real page types (`entity class 1`, `title`, `skill`), so that message suggests `entity-page`, which reads them |
 | 5 | transport failure (`network_error`), `timeout`, HTTP 429 (`rate_limited`), or other upstream HTTP error (`upstream_error`) |
 
 Every upstream HTTP failure carries `error.details.status_code` and `error.details.url`.
@@ -188,11 +188,11 @@ Discovery and routing:
 
 | Command | Purpose |
 |---------|---------|
-| `search QUERY` | ranked entity candidates from Wowhead search suggestions |
-| `resolve QUERY` | the single most likely entity plus the follow-up command to run |
+| `search QUERY` | ranked entity candidates from Wowhead search suggestions (5 by default, `--limit` up to 50); `--entity-type` keeps only the named types, the same set `resolve --entity-type` takes, and is echoed in `filters.entity_types` |
+| `resolve QUERY` | the single most likely entity plus the follow-up command to run (`--limit` lists up to 50 candidates) |
 | `expansions` | supported expansion profiles and their routing |
 | `expansion-detect URL` | which profile a Wowhead URL belongs to |
-| `doctor` | endpoint reachability, parser shape checks, cache readiness |
+| `doctor` | endpoint reachability, parser shape checks, cache readiness; with the Redis backend it connects to Redis and reports `cache.available` and `cache.error`, and an unreachable or misconfigured Redis makes `status` `degraded` with `cache` in `failed_probes` |
 
 Entities:
 
@@ -218,7 +218,7 @@ Guides:
 | `guide REF` | one guide: analysis surfaces, linked entities, comments, and page metadata; section bodies come from `guide-full`. `REF` is a guide id, or a Wowhead URL or path whose path, after any expansion and locale prefix (`/de/guide/...`), starts `guide/` or `guide=<id>`; any other page (the home page, `/items`, `/item=19019`, a `/guides/<category>` listing, which `guides` reads) is `invalid_argument`, exit 2. An unknown guide id (Wowhead answers HTTP 400) is `not_found`, exit 4 |
 | `guide-full REF` | the same guide with every section, comment, and link hydrated |
 | `guide-export REF` | write a guide bundle (manifest, sections, entities) to `--out`, or `./wowhead_exports/guide-<id>-<slug>/`; the root `index.json` next to the bundle is written only when it is absent or already a bundle index; an export that hydrates nothing removes an earlier `entities/manifest.json`; a linked entity that cannot be hydrated is listed in `hydration.failed` (`entity_type`, `id`, `code`, `message`) instead of failing the export |
-| `guide-query BUNDLE QUERY` | query one guide bundle for matching sections, links, and comments; answers with the `icy-veins`/`method` guide-query payload (`count`, `match_counts`, `matches`, `top`, `failed_pages`) plus `bundle`, `guide`, and `page`. A blank `QUERY` is `invalid_query`, exit 2, here and in `guide-bundle-search` and `guide-bundle-query` |
+| `guide-query BUNDLE QUERY` | query one guide bundle for matching sections, links, and comments; answers with the `icy-veins`/`method` guide-query payload (`count`, `match_counts`, `matches`, `top`, `failed_pages`) plus `bundle`, `guide`, and `page`. A blank `QUERY` is `invalid_query`, exit 2, here and in `guide-bundle-search` and `guide-bundle-query`. A bundle path that does not exist is `not_found` (exit 4) here and in `guide-bundle-inspect`/`guide-bundle-refresh`; one that exists but is not a readable bundle is `invalid_bundle` (exit 1) |
 | `guide-bundle-list` | local bundles with freshness and hydration summaries; a sibling directory whose `manifest.json` cannot be read or decoded is skipped |
 | `guide-bundle-search QUERY` | find local bundles by title, id, or directory name |
 | `guide-bundle-query QUERY` | rank matches across every local bundle, scored by the same engine as `guide-query` |
@@ -237,14 +237,14 @@ Timeline surfaces:
 |---------|---------|
 | `news [QUERY]` | news listing with topic, date-window, author, and type filters; rows may carry expansion-scoped URLs such as `/forever/news/<slug>-<id>`, which `news-post` accepts |
 | `news-post REF` | one news article with body markup, related posts, and citations; a URL must be a `/news/...` or `/news=<id>` page (`invalid_ref` otherwise), and a page with no article body is `parse_failed` |
-| `blue-tracker [QUERY]` | blue-post listing with topic, date-window, author, region, and forum filters; rows mix `/blue-tracker/topic/...` and `/blue-tracker/news/...` shapes, and only topic rows feed `blue-topic` |
+| `blue-tracker [QUERY]` | blue-post listing with topic, date-window, author, region, and forum filters (`--region` takes `us`, `na` read as `us`, or `eu`, the regions Wowhead files blue posts under; any other value is `invalid_argument`); rows mix `/blue-tracker/topic/...` and `/blue-tracker/news/...` shapes, and only topic rows feed `blue-topic` |
 | `blue-topic REF` | one blue-tracker topic with posts, participants, and citations; a URL other than `/blue-tracker/topic/...` is `invalid_ref` |
 
 Tool-state decoders:
 
 | Command | Purpose |
 |---------|---------|
-| `talent-calc REF` | class, spec (`tool.spec_id` is its Blizzard spec id), and build code from a talent calculator ref; a classic-era `/classic/talent-calc/<class>/<build-code>` ref has no spec, so `spec_slug` and `spec_id` are null. An unknown class is `invalid_tool_ref`, as is a build code with a character outside letters, digits, `+`, `-` and `_`; so, on a retail, PTR or beta ref, is a spec of another class (`paladin/frost`) or a build code whose loadout header names another spec. A classic calculator's spec is not checked (MoP Classic's rogue `combat` is valid) and its `spec_id` is null. `listed_builds` holds only the ref's spec's builds (the page embeds every spec's), and is absent for a classic calculator ref and for a ref with no spec, since both have a null `spec_id` |
+| `talent-calc REF` | class, spec (`tool.spec_id` is its Blizzard spec id), and build code from a talent calculator ref; the build code is returned raw, so a classic build is not decoded into talents or points per tree; a classic-era `/classic/talent-calc/<class>/<build-code>` ref has no spec, so `spec_slug` and `spec_id` are null. An unknown class is `invalid_tool_ref`, as is a build code with a character outside letters, digits, `+`, `-` and `_`; so, on a retail, PTR or beta ref, is a spec of another class (`paladin/frost`) or a build code whose loadout header names another spec. A classic calculator's spec is not checked (MoP Classic's rogue `combat` is valid) and its `spec_id` is null. `listed_builds` holds only the ref's spec's builds (the page embeds every spec's), and is absent for a classic calculator ref and for a ref with no spec, since both have a null `spec_id` |
 | `talent-calc-packet REF` | exact talent transport packet from a `<class>/<spec>/<build-code>` ref; `--out PATH` writes just the packet. The packet comes from the build code in `REF`, so a failed page fetch still answers, with `page.canonical_url` null and `page.fetch_error` `{code, message}` |
 | `profession-tree REF` | profession slug and loadout code |
 | `dressing-room REF` | normalized share hash and cited state URL |
@@ -261,7 +261,7 @@ Cache maintenance:
 
 | Command | Purpose |
 |---------|---------|
-| `cache-inspect` | backend configuration and per-namespace entry counts |
+| `cache-inspect` | backend configuration and per-namespace entry counts; `--summary` lists the largest namespaces first, each with its `total` (a Redis namespace reports only that key count) |
 | `cache-clear` | clear cached responses for chosen namespaces or all of them; an unknown `--namespace` is a usage error, `--namespace legacy_unscoped` removes file-cache entries from before cache namespacing, and an unreachable Redis is `network_error` (exit 5) |
 
 Run `wowhead <command> --help` for the full flag list of any command.

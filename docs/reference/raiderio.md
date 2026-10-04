@@ -87,7 +87,7 @@ List the raid slugs (and encounter slugs) Raider.IO knows for one expansion. Eac
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--expansion-id` | int range [x>=1] | 11 | Expansion id: 11 = Midnight, 10 = The War Within, 9 = Dragonflight. |
+| `--expansion-id` | int range [x>=1] | 11 | Raider.IO expansion id: 11 = Midnight, 10 = The War Within, 9 = Dragonflight (Warcraft Logs uses 7 for Midnight). |
 
 ## raiderio affixes
 
@@ -107,7 +107,18 @@ List the Mythic+ seasons Raider.IO knows for one expansion, each with its dungeo
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--expansion-id` | int range [x>=1] | 11 | Expansion id: 11 = Midnight, 10 = The War Within, 9 = Dragonflight. |
+| `--expansion-id` | int range [x>=1] | 11 | Raider.IO expansion id: 11 = Midnight, 10 = The War Within, 9 = Dragonflight (Warcraft Logs uses 7 for Midnight). |
+
+## raiderio cutoffs
+
+Return the Mythic+ rating it takes to be in the top 0.1%, 1%, 10%, 25% and 40% of one region, per faction. This is player rating (the profile's Mythic+ score), unlike ``threshold``, which works on single runs.
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--season` | str |  | Season slug, or 'current' (the default) for the Raider.IO current season. |
+| `--region` | str | us | us, eu, kr, tw, cn, or an alias such as na. |
 
 ## raiderio sample
 
@@ -125,7 +136,7 @@ Return a filtered sample of Mythic+ leaderboard runs with sampling counts and ci
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range [x>=0] | 0 | 20-run page of rankings to start from. |
+| `--page` | int range [x>=0] | 0 | 0-based 20-run page to start from: 0 = ranks 1-20, 1 = ranks 21-40. |
 | `--pages` | int range [1<=x<=10] |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
 | `--limit` | int range [1<=x<=200] | 100 | Maximum runs to retain in the sample. |
 | `--level-min` | int range [x>=0] |  | Retain only runs at or above this Mythic+ level. |
@@ -149,7 +160,7 @@ Return deduped player snapshots built from a filtered sample of Mythic+ runs.
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range [x>=0] | 0 | 20-run page of rankings to start from. |
+| `--page` | int range [x>=0] | 0 | 0-based 20-run page to start from: 0 = ranks 1-20, 1 = ranks 21-40. |
 | `--pages` | int range [1<=x<=10] |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
 | `--limit` | int range [1<=x<=200] | 100 | Maximum runs to retain in the sample. |
 | `--player-limit` | int range [1<=x<=500] | 100 | Maximum player snapshots to retain after deduping. |
@@ -179,7 +190,7 @@ Return a run-level distribution of the sampled runs over one --metric.
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range [x>=0] | 0 | 20-run page of rankings to start from. |
+| `--page` | int range [x>=0] | 0 | 0-based 20-run page to start from: 0 = ranks 1-20, 1 = ranks 21-40. |
 | `--pages` | int range [1<=x<=10] |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
 | `--limit` | int range [1<=x<=200] | 100 | Maximum runs to retain in the sample. |
 | `--level-min` | int range [x>=0] |  | Retain only runs at or above this Mythic+ level. |
@@ -204,7 +215,7 @@ Return a player-level distribution of the sampled participants over one --metric
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range [x>=0] | 0 | 20-run page of rankings to start from. |
+| `--page` | int range [x>=0] | 0 | 0-based 20-run page to start from: 0 = ranks 1-20, 1 = ranks 21-40. |
 | `--pages` | int range [1<=x<=10] |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
 | `--limit` | int range [1<=x<=200] | 100 | Maximum runs to retain in the sample. |
 | `--player-limit` | int range [1<=x<=500] | 100 | Maximum player snapshots to retain after deduping. |
@@ -235,7 +246,7 @@ Estimate the sampled runs nearest a target score or Mythic+ level.
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range [x>=0] | 0 | 20-run page of rankings to start from. |
+| `--page` | int range [x>=0] | 0 | 0-based 20-run page to start from: 0 = ranks 1-20, 1 = ranks 21-40. |
 | `--pages` | int range [1<=x<=10] |  | Most 20-run pages to read. Defaults to as many as --limit needs. |
 | `--limit` | int range [1<=x<=200] | 100 | Maximum runs to retain in the sample. |
 | `--nearest` | int range [1<=x<=50] | 10 | Number of nearest sampled runs to retain. |
@@ -264,7 +275,7 @@ Return the season-scoped top Mythic+ runs with sampling freshness and citations.
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--dungeon` | str | all | Dungeon slug or all. |
 | `--affixes` | str |  | Affix slug, fortified, tyrannical, current, or all. |
-| `--page` | int range [x>=0] | 0 | 20-run page of rankings to start from. |
+| `--page` | int range [x>=0] | 0 | 0-based 20-run page to start from: 0 = ranks 1-20, 1 = ranks 21-40. |
 | `--limit` | int range [1<=x<=200] | 20 | Maximum leaderboard rows to return. |
 
 ## raiderio leaderboard raids
@@ -279,5 +290,5 @@ Return the guild raid rankings for one raid and difficulty with freshness and ci
 | `--difficulty` | str | mythic | normal, heroic, or mythic. |
 | `--region` | str | world | world, us, eu, kr, tw, cn, or an alias such as na. |
 | `--realm` | str |  | Realm slug or display name to narrow to (requires a standard --region). |
-| `--page` | int range [x>=0] | 0 | 20-row page of rankings to start from. |
+| `--page` | int range [x>=0] | 0 | 0-based 20-row page to start from: 0 = ranks 1-20, 1 = ranks 21-40. |
 | `--limit` | int range [1<=x<=200] | 20 | Maximum guild rows to return. |

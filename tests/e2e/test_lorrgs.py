@@ -301,7 +301,8 @@ def test_comp_ranking_returns_ranked_comps_and_honours_the_killtime_filter(catal
             continue
 
         ceiling = math.floor(max(seconds.values())) - 1
-        capped = _comp_ranking(boss_slug, "--killtime-max", str(ceiling))
+        # --kill-time-* is the spelling warcraftlogs uses; the shipped --killtime-* still works.
+        capped = _comp_ranking(boss_slug, "--kill-time-max", str(ceiling))
         assert capped.payload["query"]["killtime_max"] == ceiling, capped.describe()
         _assert_bound_keeps_what_it_should(seconds, capped, low=0, high=ceiling)
 

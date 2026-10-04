@@ -134,6 +134,13 @@ TRANSMOG_PENALTY = 30
 _CLASS_SLUGS = "|".join(slug.removesuffix("-guide") for slug in CLASS_HUB_SLUGS)
 SPEC_GUIDE_SLUG_RE = re.compile(rf"^(?!(?:{_CLASS_SLUGS})-)(?P<spec>[a-z-]+?)-(?:{_CLASS_SLUGS})-")
 SPEC_NAME_BONUS = 6
+# A boss or dungeon page is the answer to "sszorak strategy" or "murder row mythic+", but its title
+# names the place only, so when the query as typed matches nothing, the difficulty and strategy words
+# are left out of it on those pages whose slug starts with the query's other words.
+ENCOUNTER_FAMILIES = frozenset({"raid_encounter", "raid_guide", "dungeon_guide"})
+ENCOUNTER_NEUTRAL_TERMS = frozenset(
+    {"lfr", "normal", "heroic", "mythic", "plus", "strategy", "strategies", "tips", "mechanics", "route", "routes"}
+)
 SPECIALIZED_FAMILY_RULES: tuple[dict[str, Any], ...] = (
     {"family": "easy_mode", "score": 28, "reason": "family_easy_mode", "all_terms": {"easy", "mode"}},
     {"family": "leveling", "score": 24, "reason": "family_leveling", "all_terms": {"leveling"}},
@@ -526,9 +533,37 @@ def _add_site_index_rows(site_index: SiteIndex, rows: list[dict[str, Any]]) -> N
     rows[:] = [row for row in rows if row["slug"] not in renamed]
 
 
-def _scored_candidate(row: dict[str, Any], query: str, terms: set[str], *, stale_before: str | None) -> dict[str, Any] | None:
+def _encounter_name(query: str, *, slug: str, content_family: str | None) -> str | None:
+    """``query`` without its difficulty and strategy words when the rest names this boss or dungeon page.
+
+    "raid tips" names no page (``raid-guide-eranog-...`` only starts with the family word), and a
+    spec's raid variant (``frost-mage-pve-dps-<raid>-raid-guide``) is a spec page, not the raid's.
+    A page whose slug names a difficulty or strategy (``gorefiend-lfr-guide-halls-of-blood``) is
+    matched as typed, so "gorefiend mythic" does not land on it, and "mythic plus" names a dungeon,
+    never a raid.
+    """
+    words = query.split()
+    if (
+        content_family not in ENCOUNTER_FAMILIES
+        or SPEC_GUIDE_SLUG_RE.match(slug)
+        or ENCOUNTER_NEUTRAL_TERMS & set(slug.split("-"))
+        or ("plus" in words and content_family != "dungeon_guide")
+    ):
+        return None
+    named = [word for word in words if word not in ENCOUNTER_NEUTRAL_TERMS]
+    if len(named) == len(words) or not set(named) - {"the", "raid", "dungeon"}:
+        return None
+    name = "-".join(named).removeprefix("the-")
+    return " ".join(named) if f"{slug.removeprefix('the-')}-".startswith(f"{name}-") else None
+
+
+def _scored_candidate(
+    row: dict[str, Any], query: str, terms: set[str], *, stale_before: str | None, encounter_names: bool = False
+) -> dict[str, Any] | None:
     slug = row["slug"]
     content_family = row.get("content_family")
+    if encounter_names and (name := _encounter_name(query, slug=slug, content_family=content_family)) is not None:
+        query, terms = name, singular_words(query_terms(name))
     # Spelled out like the query, so a page titled with shorthand ("Disc Belt Guide") still matches it.
     # A site-menu page also matches on its menu title ("Glory Raid Achievement"), and an indexed page
     # on its headline ("Vorasius Raid Guide in The Voidspire for Midnight Season 1").
@@ -634,14 +669,20 @@ def search_results(client: IcyVeinsClient, query: str, *, today: date) -> Search
             _add_site_index_rows(site_index, rows)
             index_gap = tuple(sorted(menu_slugs - set(site_index.pages)))
     stale_before = _stale_before(newest)
-    matches = [
-        candidate
-        for candidate in (
-            best_scored(_scored_candidate(row, spelling, terms, stale_before=stale_before) for spelling, terms in spellings)
+
+    def ranked(*, encounter_names: bool) -> list[dict[str, Any]]:
+        scored = (
+            best_scored(
+                _scored_candidate(row, spelling, terms, stale_before=stale_before, encounter_names=encounter_names)
+                for spelling, terms in spellings
+            )
             for row in rows
         )
-        if candidate is not None
-    ]
+        return [candidate for candidate in scored if candidate is not None]
+
+    # A query some page matches as typed keeps its ranking: "anduin wrynn mythic" is the mythic journal
+    # alone, not every difficulty's journal.
+    matches = ranked(encounter_names=False) or ranked(encounter_names=True)
     sort_article_candidates(matches)
     # That sort dates rows by the sitemap alone; a site-menu or site-index page wins its ties as the newer page.
     matches.sort(key=_recency, reverse=True)

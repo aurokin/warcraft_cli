@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from simc_cli.apl import AplEntry
 from simc_cli.prune import PruneContext, TruthValue, evaluate_condition_outcome, explanation_for_condition, prune_entries
+from simc_cli.trait_data import parse_trait_table
 
 
 def test_target_count_comparison() -> None:
@@ -127,3 +128,48 @@ def test_a_condition_that_does_not_parse_in_full_is_unknown() -> None:
     assert _state("talent.x)|active_enemies>0", context) == "unknown"
     assert _state("talent.x&(active_enemies>1", context) == "unknown"
     assert _state("talent.x$1", context) == "unknown"
+
+
+def _entry(action: str, condition: str | None = None) -> AplEntry:
+    raw = f"actions+=/{action}" + (f",if={condition}" if condition else "")
+    return AplEntry(line_no=1, list_name="default", op="+=", action=action, raw_args="", condition=condition, raw=raw,
+                    target_list=None, kind="action")
+
+
+def test_an_action_that_is_an_untaken_talent_is_dead_whatever_its_condition() -> None:
+    """Frost's `comet_storm` row has no condition and was reported guaranteed for builds without Comet Storm,
+    which SimC never creates an action for."""
+    context = PruneContext(enabled_talents={"flurry"}, disabled_talents=set(), targets=5, untaken_talents={"comet_storm"})
+
+    pruned = prune_entries([_entry("comet_storm"), _entry("comet_storm", "active_enemies>=3"), _entry("flurry")], context)
+
+    assert [(row.state, row.reason) for row in pruned] == [
+        (TruthValue.FALSE, "talent.comet_storm=false [action]"),
+        (TruthValue.FALSE, "talent.comet_storm=false [action]"),
+        (TruthValue.TRUE, "no condition"),
+    ]
+
+
+# Rows copied from SimC's trait_data.inc: Frost's Flurry and Comet Storm, and Brewmaster's Keg Smash and
+# the Celestial Brew / Celestial Infusion choice node.
+SYNTHETIC_TRAIT_ROWS = """
+  { 2,  8,  80243,  62178, 1,  0,  85246,   44614,      0,      0,  4,  2, 100,  "Flurry", {   64,    0,    0,    0 }, {    0,    0,    0,    0 },   0, 0 },
+  { 2,  8,  80251,  62185, 1, 20,  85254, 1247777,      0,      0, 10,  6, 100,  "Comet Storm", {   64,    0,    0,    0 }, {    0,    0,    0,    0 },   0, 0 },
+  { 2, 10, 124865, 101088, 1,  0, 129703,  121253,      0,      0,  1,  5, 100,  "Keg Smash", {  268,    0,    0,    0 }, {    0,    0,    0,    0 },   0, 0 },
+  { 2, 10, 124841, 101067, 1,  8, 129679,  322507,      0,      0,  5,  3, 100,  "Celestial Brew", {  268,    0,    0,    0 }, {    0,    0,    0,    0 },   0, 2 },
+  { 2, 10, 136146, 101067, 1,  8, 140901, 1241059,      0,      0,  5,  3, 200,  "Celestial Infusion", {  268,    0,    0,    0 }, {    0,    0,    0,    0 },   0, 2 },
+"""
+
+
+def test_untaken_talents_leave_out_the_other_entry_of_a_choice_the_build_made() -> None:
+    """SimC turns Brewmaster's `celestial_brew` action into Celestial Infusion when that choice is taken."""
+    table = parse_trait_table(SYNTHETIC_TRAIT_ROWS)
+
+    frost = table.untaken_talents({"flurry"}, class_id=8, spec_id=64, include_hero=False)
+    brewmaster = table.untaken_talents({"keg_smash", "celestial_infusion"}, class_id=10, spec_id=268, include_hero=False)
+
+    assert frost == {"comet_storm"}
+    assert brewmaster == set()
+    assert table.untaken_talents({"keg_smash"}, class_id=10, spec_id=268, include_hero=False) == {
+        "celestial_brew", "celestial_infusion"
+    }

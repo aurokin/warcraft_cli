@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -109,7 +110,8 @@ def orchestration(tmp_path_factory: pytest.TempPathFactory) -> Orchestration:
     return Orchestration(
         out_root=out_root,
         payload=payload,
-        bundle_paths=tuple(Path(row["bundle_path"]) for row in rows),
+        # The manifest stores each bundle relative to its root, so a copied root reads its own bundles.
+        bundle_paths=tuple(out_root / row["bundle_path"] for row in rows),
         providers=tuple(row["provider"] for row in rows),
     )
 
@@ -159,15 +161,19 @@ def _assert_bundle_on_disk(bundle_path: Path) -> None:
 
 
 def _disk_reference_urls(bundle_paths: tuple[Path, ...]) -> list[str]:
-    """The unique build-reference URLs across the bundles on disk, in URL order (Wowhead exports have none)."""
-    return sorted(
-        {
-            row["url"]
-            for path in bundle_paths
-            if _manifest(path)["provider"] in BUILD_REFERENCE_PROVIDERS
-            for row in _bundle_rows(path, "build-references.jsonl")
-        }
-    )
+    """The unique build-reference URLs across the bundles on disk (Wowhead exports have none), in URL
+    order within each bundle and one bundle at a time in turn, so a --limit keeps every provider."""
+    owner: dict[str, int] = {}
+    for index, path in enumerate(bundle_paths):
+        if _manifest(path)["provider"] in BUILD_REFERENCE_PROVIDERS:
+            for row in _bundle_rows(path, "build-references.jsonl"):
+                owner.setdefault(row["url"], index)
+    turns: Counter[int] = Counter()
+    keyed: list[tuple[int, int, str]] = []
+    for url in sorted(owner):
+        keyed.append((turns[owner[url]], owner[url], url))
+        turns[owner[url]] += 1
+    return [url for _turn, _index, url in sorted(keyed)]
 
 
 def _assert_build_row(build: dict[str, Any], *, providers: set[str], bundle_paths: set[str]) -> None:
@@ -232,7 +238,8 @@ def _assert_handoff_packet(
     assert packet["excluded_builds"] == [], json.dumps(packet["excluded_builds"])[:400]
     assert [build["reference"]["url"] for build in builds] == selected
     assert summary["returned_build_count"] == len(builds)
-    assert summary["excluded_build_count"] == len(urls) - len(builds)
+    assert summary["excluded_build_count"] == 0
+    assert summary["truncated_build_count"] == len(urls) - len(builds)
 
     providers = set(provenance["source_providers"])
     paths = {str(path) for path in bundle_paths}
@@ -356,9 +363,9 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(require, o
     assert set(rows) == set(previous), refreshed.describe()
     for provider, row in rows.items():
         assert row["exported_at"] > previous[provider], f"{provider} was not re-exported"
-    assert [row["bundle_path"] for row in refreshed.data["manifest"]["providers"]] == [
-        str(path) for path in orchestration.bundle_paths
-    ]
+    assert [orchestration.out_root / row["bundle_path"] for row in refreshed.data["manifest"]["providers"]] == list(
+        orchestration.bundle_paths
+    )
 
 
 def test_a_reused_bundle_reports_the_redirect_its_export_saw(require, out_dir: Path) -> None:
@@ -448,7 +455,9 @@ def test_guide_builds_simc_hands_the_orchestration_root_to_simc(
     assert packet["source"]["kind"] == "orchestration_root"
     assert packet["source"]["manifest_kind"] == "guide_compare_orchestration_manifest"
     assert packet["source"]["query"] == GUIDE_QUERY
-    assert packet["freshness"]["reason"] == "orchestration_manifest_updated_at"
+    # Sampled when the oldest bundle was exported; the manifest is rewritten on every run.
+    assert packet["freshness"]["reason"] == "oldest_bundle_exported_at"
+    assert packet["freshness"]["sampled_at"] <= packet["freshness"]["manifest_updated_at"], json.dumps(packet["freshness"])
     _assert_handoff_packet(
         packet,
         result.payload["provenance"],
@@ -518,7 +527,7 @@ def test_a_damage_guide_query_resolves_and_hands_every_build_to_simc(require, ou
     )
     rows = {row["provider"]: row for row in result.data["provider_results"]}
     assert rows["icy-veins"]["candidate"]["selection_source"] == "resolve", json.dumps(rows["icy-veins"])[:600]
-    bundle_paths = tuple(Path(row["bundle_path"]) for row in result.data["manifest"]["providers"])
+    bundle_paths = tuple(out_root / row["bundle_path"] for row in result.data["manifest"]["providers"])
     for bundle_path in bundle_paths:
         _assert_bundle_on_disk(bundle_path)
     packet = result.data["simc_build_handoff"]
@@ -553,7 +562,7 @@ def test_guide_compare_query_can_emit_the_simc_build_handoff(require, monk_apl: 
     payload = result.data
     assert payload["selected_providers"] == ["method", "icy-veins"]
     assert payload["exported_bundle_count"] == 2
-    bundle_paths = tuple(Path(row["bundle_path"]) for row in payload["manifest"]["providers"])
+    bundle_paths = tuple(out_root / row["bundle_path"] for row in payload["manifest"]["providers"])
     assert len(_disk_reference_urls(bundle_paths)) > 5, "the build limit must provably cut something"
     packet = payload["simc_build_handoff"]
     assert packet is not None, result.describe()

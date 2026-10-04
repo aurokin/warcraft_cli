@@ -22,6 +22,7 @@ from warcraft_core.identity import (
     parse_wowhead_talent_calc_ref as parse_shared_wowhead_talent_calc_ref,
 )
 from warcraft_core.talent_transport import specialization_ids, tokenize_talent_name
+from warcraft_core.wow_specs import lookup_class, lookup_spec
 
 from simc_cli.repo import RepoPaths
 from simc_cli.trait_data import SimcNotReadyError, TieredEntry, load_trait_table
@@ -790,9 +791,17 @@ def load_build_spec(
         from_build_text.source_notes.append("inline build text")
 
     merged = merge_build_specs(from_profile, from_build_file, from_build_packet, from_build_text, from_talents_option, explicit)
-    # SimC's spellings: `Death Knight`, `death_knight` and `DeathKnight` all name deathknight.
-    merged.actor_class = normalize_actor_class(merged.actor_class)
-    merged.spec = normalize_spec_name(merged.spec)
+    # Every provider's spelling: `Death Knight`, `DeathKnight` and `dk` all name deathknight, `bm` names beast_mastery.
+    if merged.actor_class:
+        merged.actor_class = lookup_class(merged.actor_class) or normalize_actor_class(merged.actor_class)
+    if merged.spec:
+        known_spec = lookup_spec(merged.spec, class_hint=merged.actor_class)
+        # A spelling that names another class's spec (`--actor-class mage --spec fdk`) stays raw, so the
+        # class/spec check rejects the pair; one that names a single class fills a missing class.
+        if known_spec and merged.actor_class in (None, known_spec.class_key):
+            merged.actor_class, merged.spec = known_spec.class_key, known_spec.key
+        else:
+            merged.spec = normalize_spec_name(merged.spec)
     return merged
 
 
@@ -943,6 +952,24 @@ def _unconfirmed_identity(repo: RepoPaths, build_spec: BuildSpec, caller_spec: B
 
 
 def identify_build(
+    repo: RepoPaths, build_spec: BuildSpec, *, apl_path: str | Path | None = None
+) -> tuple[BuildSpec, BuildIdentity]:
+    identified, identity = _identify_build(repo, build_spec, apl_path=apl_path)
+    if apl_path and identity.actor_class and identity.spec:
+        guess_class, guess_spec = infer_actor_and_spec_from_apl(apl_path)
+        apl_pair = (normalize_actor_class(guess_class), normalize_spec_name(guess_spec))
+        if apl_pair != (identity.actor_class, identity.spec) and apl_pair in _known_specs(repo):
+            # Checked once the hash has had its say: a talent-calc URL path is only a guess the hash
+            # overrides, and reading the build against another spec's APL would describe that spec's
+            # rotation with ok:true.
+            raise UnknownClassSpecError(
+                f"The build is {identity.actor_class} {identity.spec}, but {Path(apl_path).stem} is the "
+                f"{' '.join(map(str, apl_pair))} APL. Pass the APL for the build's own spec."
+            )
+    return identified, identity
+
+
+def _identify_build(
     repo: RepoPaths, build_spec: BuildSpec, *, apl_path: str | Path | None = None
 ) -> tuple[BuildSpec, BuildIdentity]:
     unverified_packet_transport = build_spec.transport_form == "wow_talent_export"

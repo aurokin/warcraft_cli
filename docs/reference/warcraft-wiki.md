@@ -144,6 +144,6 @@ Search an exported wiki article bundle on disk without touching the network.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 5 | Maximum matches to return per kind. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum matches per kind and in the top list. |
 | `--kind` | str (repeatable) |  | Restrict search kinds. Repeat or pass comma-separated values from: sections, navigation, linked_entities. |
 | `--section-title` | str |  | Restrict section matches to a title substring. |

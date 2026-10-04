@@ -84,6 +84,7 @@ def _report() -> dict[str, object]:
         iterations=250,
         threads=4,
         validations=[],
+        disclosures=[],
     )
 
 

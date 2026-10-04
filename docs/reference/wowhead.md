@@ -68,7 +68,7 @@ Clear cached Wowhead responses for the selected namespaces or for the whole cach
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--namespace` | str (repeatable) |  | Restrict clearing to one or more cache namespaces. Repeat or pass comma-separated values. |
-| `--expired-only / --all` | boolean | false | Only clear expired file-cache entries. Ignored by default when clearing all entries. |
+| `--expired-only / --all` | boolean | false | Only clear expired file-cache entries (default --all clears every entry). |
 
 ## wowhead resolve
 
@@ -85,7 +85,7 @@ Resolve a name or URL to the single most likely Wowhead entity plus a follow-up 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--entity-type` | str (repeatable) |  | Restrict resolution to one or more entity types. Repeat or pass comma-separated values. |
-| `--limit` | int range [1<=x<=20] | 5 | Maximum candidates to list; confidence is judged over all of them. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum candidates to list; confidence is judged over all of them. |
 
 ## wowhead search
 
@@ -101,7 +101,8 @@ Search Wowhead suggestions and return ranked entity candidates.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 10 | Maximum number of results to return. |
+| `--entity-type` | str (repeatable) |  | Restrict results to one or more entity types. Repeat or pass comma-separated values. |
+| `--limit` | int range [1<=x<=50] | 5 | Maximum number of results to return. |
 
 ## wowhead news
 
@@ -140,7 +141,7 @@ List Wowhead blue-tracker posts with topic, date-window, and listing-field filte
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--author` | str (repeatable) |  | Restrict matches to one or more blue-post author names. Repeat or pass comma-separated values. |
-| `--region` | str (repeatable) |  | Restrict matches to one or more regions such as us or eu. Repeat or pass comma-separated values. |
+| `--region` | str (repeatable) |  | Restrict matches to us (or na) and/or eu, the regions the blue tracker covers. Repeat or pass comma-separated values. |
 | `--forum` | str (repeatable) |  | Restrict matches to one or more forum names. Repeat or pass comma-separated values. |
 | `--page` | int range [x>=1] | 1 | First Wowhead blue-tracker page to scan. |
 | `--pages` | int range [1<=x<=100] | 1 | Maximum number of pages to scan for matches. |
@@ -199,7 +200,7 @@ List the guides in a Wowhead guide category with author, patch, and updated-wind
 
 ## wowhead talent-calc
 
-Decode a Wowhead talent calculator ref into class, spec, and build state.
+Parse a Wowhead talent calculator ref into class, spec, and build code; a classic build code is not decoded.
 
 **Arguments**
 

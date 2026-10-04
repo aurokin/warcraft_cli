@@ -17,6 +17,7 @@
 - guild raid leaderboard: `raiderio leaderboard raids --raid <slug> --difficulty mythic --region us --limit 20`
 - this week's Mythic+ affixes: `raiderio affixes --region eu`
 - the season's Mythic+ dungeon pool and `--dungeon` slugs: `raiderio dungeons`
+- the Mythic+ rating it takes to reach the top 0.1%, 1%, 10%, 25% or 40% of a region: `raiderio cutoffs --region us`
 
 ## Effective Use
 
@@ -34,12 +35,15 @@
 - use `sample mythic-plus-players` and `distribution mythic-plus-players` when you need participant-level slices instead of raw run rows
 - narrow sampled analytics with filters like `--level-min`, `--contains-spec`, and `--player-region` when you need a tighter slice; `--contains-role` takes `tank`, `healer` or `dps`, `--contains-class`/`--contains-spec` take Raider.IO slugs (`death-knight`, `beast-mastery`, `priest-holy`) or any other provider's spelling (`DeathKnight`, `BeastMastery`, `deathknight-frost`, `balance-druid`), and an unknown role, class, spec or region fails with exit 2 instead of returning an empty sample
 - `--limit` sets how many runs a sample reads (in 20-run pages), so raise `--limit` rather than `--pages` for a bigger sample
+- `--page` counts from 0 here (`--page 1` starts at rank 21), unlike `wowhead` and `warcraftlogs`
+- an unknown `--season` or `--raid` slug is `invalid_query` (exit 2), not something to retry; `raiderio dungeons` lists season slugs and `raiderio raids` raid slugs
+- Raider.IO numbers expansions 11 = Midnight, 10 = The War Within; Warcraft Logs uses 7 for Midnight
 - a character's best key per dungeon this season is `mythic_plus.best_runs` on `raiderio character` (one row per completed dungeon, `num_chests` 0 = not timed); `recent_runs` lists every recent run Raider.IO returns
 - in `character` and `guild` payloads `realm` is the slug and `realm_name` the display name, as in search rows
 - the current dungeon pool is the main season in `raiderio dungeons` whose `starts`/`ends` window covers now
 - a run was timed when `num_chests` is above 0; `logged_run_id` is a Raider.IO id, not a Warcraft Logs report code
 - spec labels in analytics are class-qualified (`priest-holy`, `paladin-holy`) because spec names repeat across classes; pass `--contains-spec priest-holy` to select one class's spec, since `--contains-class` and `--contains-spec` each match any roster entry on their own
-- use `threshold mythic-plus-runs` for sampled estimates around score or key level targets; leaderboard samples cover only the top of the ladder, so a target outside `threshold.sampled_range` comes back with `out_of_sample_range: true`, `estimate: null` and a `note` instead of a guess
+- use `threshold mythic-plus-runs` for sampled estimates around a single run's score or key level; a run score (about 500 at the top) is not a player's Mythic+ rating, so answer "what rating is top 1%" with `raiderio cutoffs`; leaderboard samples cover only the top of the ladder, so a target outside `threshold.sampled_range` comes back with `out_of_sample_range: true`, `estimate: null` and a `note` instead of a guess
 - treat the analytics outputs as sampled leaderboard-derived summaries, not authoritative universal truths
 - check the filtering counts when you narrow a slice so you do not over-trust a tiny sample
 - check player truncation metadata when you use `--player-limit`, so you know whether you are looking at the full deduped participant set

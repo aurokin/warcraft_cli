@@ -407,11 +407,14 @@ def guide_export_manifest(
     files_written: dict[str, str],
 ) -> dict[str, Any]:
     exported_at = iso_now_utc()
+    structured_data = payload.get("structured_data")
     return {
         "provider": "wowhead",
         "export_version": 2,
         "exported_at": exported_at,
         "guide_fetched_at": exported_at,
+        # When Wowhead last edited the guide (its JSON-LD dateModified), apart from when it was exported.
+        "content_updated_at": structured_data.get("dateModified") if isinstance(structured_data, dict) else None,
         "expansion": payload.get("expansion"),
         "output_dir": str(export_dir),
         "guide": payload.get("guide"),

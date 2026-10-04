@@ -256,6 +256,34 @@ def _actor_profile_character(
     return as_dict(provider_payload_data(profile_result.get("payload")).get("character"))
 
 
+def _report_realm_slug(
+    *, code: str, server: Any, allow_unlisted: bool, expansion: str | None, fetch: ProviderFetch
+) -> str | None:
+    """The realm slug of a localized server name, from the report's ranked characters.
+
+    Warcraft Logs names an actor's server by its space-stripped name (``Ревущийфьорд``). Raider.IO
+    takes a run-together Latin name (``wyrmrestaccord``) but not a localized one, so for a non-ASCII
+    name the report's own realm rows supply the slug (``howling-fjord``). ``None`` when they do not.
+    """
+    if not isinstance(server, str) or server.isascii():
+        return None
+    args = ["graphql", "--query", _REPORT_REALMS_QUERY, "--report-code", code]
+    if allow_unlisted:
+        args.append("--allow-unlisted")
+    result = fetch("warcraftlogs", args, expansion=expansion)
+    report = as_dict(as_dict(provider_payload_data(result.get("payload")).get("reportData")).get("report"))
+    realms = (as_dict(row).get("server") for row in as_list(report.get("rankedCharacters")))
+    slug = next((realm["slug"] for realm in realms if isinstance(realm, dict) and realm.get("normalizedName") == server), None)
+    return slug if isinstance(slug, str) and slug else None
+
+
+_REPORT_REALMS_QUERY = (
+    "query ActorProfileRealms($code: String!, $allowUnlisted: Boolean) {"
+    " reportData { report(code: $code, allowUnlisted: $allowUnlisted) {"
+    " rankedCharacters { server { slug normalizedName } } } } }"
+)
+
+
 def _report_code_and_fight(ctx: typer.Context, reference: str, *, name: str, fight_id: int | None) -> tuple[str, int | None]:
     """The report code a Warcraft Logs report URL or bare code names, and the URL's fight when ``--fight-id`` is absent.
 
@@ -322,6 +350,9 @@ def actor_profile_payload(
         "report_actor_identity": actor.get("identity_contract"),
     }
     identity = _actor_profile_identity(ctx, query=query, actor=actor, log_side=log_side, region=region)
+    identity["realm"] = _report_realm_slug(
+        code=code, server=actor.get("server"), allow_unlisted=allow_unlisted, expansion=expansion, fetch=fetch
+    ) or identity["realm"]
     query.update(identity)
     character = _actor_profile_character(
         ctx,
@@ -343,6 +374,9 @@ def actor_profile_payload(
             "raiderio": {
                 "status": "ok",
                 "class_spec_identity": profile_identity,
+                # Raider.IO's spec is the one the character last logged out in, so an off-spec log
+                # reports spec_mismatch; only class_mismatch casts doubt on the join.
+                "spec_source": "active_spec",
                 "profile_url": character.get("profile_url"),
             },
         },

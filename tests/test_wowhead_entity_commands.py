@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 from wowhead_cli.entities import (
     build_linked_entity_preview,
@@ -1222,3 +1223,61 @@ def test_compare_counts_the_entities_in_each_page_relation_tab(monkeypatch) -> N
         ("npc", 226516),
         ("npc", 226518),
     ]
+
+
+def _raise_404(url: str):
+    def fetch(self, entity_type: str, entity_id: int, data_env=None):
+        request = httpx.Request("GET", url.format(type=entity_type, id=entity_id))
+        raise httpx.HTTPStatusError("404", request=request, response=httpx.Response(404, request=request))
+
+    return fetch
+
+
+@pytest.mark.parametrize(
+    ("args", "method", "url", "message_start"),
+    [
+        # The tooltip endpoint 404s on real page types too (`class`, `title`), so it points at entity-page.
+        (
+            ["entity", "class", "1"],
+            "tooltip",
+            "https://nether.wowhead.com/tooltip/{type}/{id}",
+            "Wowhead's tooltip endpoint has no 'class' 1; if the type is right, `wowhead entity-page class 1` may still answer.",
+        ),
+        (
+            ["entity-page", "foo", "1"],
+            "entity_page_html",
+            "https://www.wowhead.com/{type}={id}",
+            "'foo' is not an entity type this CLI knows",
+        ),
+    ],
+)
+def test_a_404_on_an_unknown_entity_type_is_a_usage_error(monkeypatch, args, method, url, message_start) -> None:
+    monkeypatch.setattr(f"wowhead_cli.main.WowheadClient.{method}", _raise_404(url))
+
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 2
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "invalid_argument"
+    assert error["message"].startswith(message_start)
+    assert ". Known entity types: achievement, battle-pet," in error["message"]
+
+
+def test_an_unknown_entity_type_that_lands_on_a_listing_is_a_usage_error(monkeypatch) -> None:
+    """Wowhead redirects `/items=19019` to its item listing instead of answering 404."""
+    listing = '<html><head><link rel="canonical" href="https://www.wowhead.com/items"></head><body></body></html>'
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", lambda self, entity_type, entity_id: listing)
+
+    result = runner.invoke(app, ["entity-page", "items", "19019"])
+
+    assert result.exit_code == 2
+    assert json.loads(result.stderr)["error"]["details"] == {"canonical_url": "https://www.wowhead.com/items"}
+
+
+def test_a_404_on_a_known_entity_type_stays_not_found(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", _raise_404("https://nether.wowhead.com/tooltip/{type}/{id}"))
+
+    result = runner.invoke(app, ["entity", "item", "99999999"])
+
+    assert result.exit_code == 4
+    assert json.loads(result.stderr)["error"]["code"] == "not_found"

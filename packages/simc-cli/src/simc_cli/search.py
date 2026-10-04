@@ -6,8 +6,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from warcraft_core.identity import normalize_actor_class
 from warcraft_core.talent_transport import CLASS_ENUM_NAME_BY_ACTOR_CLASS
+from warcraft_core.wow_specs import lookup_class
 
 from simc_cli.repo import RepoPaths
 
@@ -143,8 +143,8 @@ def find_action(paths: RepoPaths, action: str, wow_class: str | None = None) -> 
         "spell_dump": [paths.spell_dump],
     }
     if wow_class:
-        actor_class = normalize_actor_class(wow_class)
-        if actor_class not in CLASS_ENUM_NAME_BY_ACTOR_CLASS:
+        actor_class = lookup_class(wow_class)
+        if actor_class is None:
             raise UnknownClassError(f"Unknown class '{wow_class}'. Valid classes: {', '.join(sorted(CLASS_ENUM_NAME_BY_ACTOR_CLASS))}.")
         module_name = CLASS_ENUM_NAME_BY_ACTOR_CLASS[actor_class].lower()
         search_roots["class_modules"] = sorted(

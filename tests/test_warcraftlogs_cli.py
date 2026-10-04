@@ -5159,10 +5159,171 @@ def test_warcraftlogs_graphql_rejects_a_query_that_is_not_utf8(tmp_path, source:
 
 @pytest.mark.parametrize("value", ["nan", "inf", "1e400"])
 def test_warcraftlogs_float_options_reject_values_json_cannot_carry(value: str) -> None:
-    result = runner.invoke(warcraftlogs_app, ["reports", "--start-time", value, "--guild-region", "us"])
+    result = runner.invoke(warcraftlogs_app, ["report-events", "abcd1234", "--start-time", value])
 
     assert result.exit_code == 2, result.output
     assert "is not a finite number" in result.output
+
+
+def test_warcraftlogs_graphql_query_file_that_does_not_exist_is_not_found(tmp_path) -> None:
+    result = runner.invoke(warcraftlogs_app, ["graphql", "--query", f"@{tmp_path / 'missing.graphql'}"])
+
+    assert result.exit_code == 4, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "not_found"
+
+
+@pytest.mark.parametrize("value", ["2026-09-01", "20260901", "1788220800000"])
+def test_warcraftlogs_report_range_flags_take_an_iso_date(monkeypatch, value: str) -> None:
+    sent: list[float | None] = []
+
+    class _ReportsClient(_FakeWarcraftLogsClient):
+        def reports(self, **kwargs: Any) -> dict[str, object]:
+            sent.append(kwargs["start_time"])
+            return {"data": []}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _ReportsClient())
+    result = runner.invoke(warcraftlogs_app, ["reports", "--zone-id", "38", "--start-time", value])
+
+    assert result.exit_code == 0, result.output
+    assert sent == [1788220800000.0]
+
+
+@pytest.mark.parametrize(
+    ("args", "listed"),
+    [
+        (["report-table", "abcd1234", "--hostility-type", "foes"], "Friendlies, Enemies"),
+        (["report-events", "abcd1234", "--data-type", "nope"], "CombatantInfo"),
+        (["report-player-details", "abcd1234", "--kill-type", "kill"], "All, Encounters, Kills, Trash, Wipes"),
+        (["report-rankings", "abcd1234", "--timeframe", "week"], "Today, Historical"),
+        (["encounter-rankings", "--zone-id", "38", "--boss-id", "3012", "--leaderboard", "logs"], "Any, LogsOnly"),
+        (["boss-kills", "--zone-id", "38", "--difficulty", "mythc"], "heroic, mythic"),
+        (["reports", "--zone-id", "38", "--start-time", "yesterday"], "ISO-8601"),
+    ],
+)
+def test_warcraftlogs_checked_flags_reject_a_typo_with_the_valid_values_before_any_request(
+    monkeypatch, args: list[str], listed: str
+) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: pytest.fail("no request for a bad flag value"))
+
+    result = runner.invoke(warcraftlogs_app, args)
+
+    assert result.exit_code == 2, result.output
+    # Click's usage panel wraps the message, so check each value rather than the joined list.
+    assert all(value in result.output for value in listed.split(", ")), result.output
+
+
+@pytest.mark.parametrize(("difficulty", "expected"), [("mythic", 5), ("Heroic", 4), ("normal", 3), ("lfr", 1), ("5", 5)])
+def test_warcraftlogs_difficulty_takes_a_name_or_an_id(monkeypatch, difficulty: str, expected: int) -> None:
+    sent: list[int | None] = []
+
+    class _DifficultyClient(_FakeWarcraftLogsClient):
+        def encounter_rankings(self, *, encounter_id: int, options: EncounterRankingsOptions) -> dict[str, object]:
+            sent.append(options.difficulty)
+            return {"id": encounter_id, "name": "Dimensius, the All-Devouring", "characterRankings": {"rankings": []}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _DifficultyClient())
+    result = runner.invoke(
+        warcraftlogs_app, ["encounter-rankings", "--zone-id", "38", "--boss-id", "3012", "--difficulty", difficulty]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert sent == [expected]
+
+
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    [
+        (["--class-name", "priest", "--spec-name", "holy"], "hps"),
+        (["--spec-name", "resto druid"], "hps"),
+        (["--class-name", "priest", "--spec-name", "shadow"], "dps"),
+        (["--class-name", "priest"], "dps"),
+        (["--class-name", "priest", "--spec-name", "holy", "--metric", "dps"], "dps"),
+    ],
+)
+def test_warcraftlogs_encounter_rankings_ranks_healer_specs_on_hps_unless_told(
+    monkeypatch, extra: list[str], expected: str
+) -> None:
+    sent: list[str | None] = []
+
+    class _MetricClient(_FakeWarcraftLogsClient):
+        def encounter_rankings(self, *, encounter_id: int, options: EncounterRankingsOptions) -> dict[str, object]:
+            sent.append(options.metric)
+            return {"id": encounter_id, "name": "Dimensius, the All-Devouring", "characterRankings": {"rankings": []}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _MetricClient())
+    result = runner.invoke(warcraftlogs_app, ["encounter-rankings", "--zone-id", "38", "--boss-id", "3012", *extra])
+
+    assert result.exit_code == 0, result.output
+    assert sent == [expected]
+    assert json.loads(result.stdout)["query"]["metric"] == expected
+
+
+def test_warcraftlogs_encounter_rankings_keeps_score_in_a_mythic_plus_zone(monkeypatch) -> None:
+    sent: list[str | None] = []
+
+    class _DungeonClient(_FakeWarcraftLogsClient):
+        def zone(self, *, zone_id: int) -> dict[str, object]:
+            return {**super().zone(zone_id=zone_id), "difficulties": [{"id": 10, "name": "Dungeon", "sizes": [5]}]}
+
+        def encounter_rankings(self, *, encounter_id: int, options: EncounterRankingsOptions) -> dict[str, object]:
+            sent.append(options.metric)
+            return {"id": encounter_id, "name": "Dimensius, the All-Devouring", "characterRankings": {"rankings": []}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _DungeonClient())
+    result = runner.invoke(
+        warcraftlogs_app, ["encounter-rankings", "--zone-id", "38", "--boss-id", "3012", "--spec-name", "holy priest"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert sent == ["playerscore"]
+    assert json.loads(result.stdout)["query"]["metric"] == "playerscore"
+
+
+def _ranked_fight(fight_id: int, difficulty: int, metric: str) -> dict[str, object]:
+    amount = 500000 if metric == "hps" else 1000
+    return {
+        "fightID": fight_id,
+        "difficulty": difficulty,
+        "roles": {
+            "tanks": {"characters": [{"name": "Tank", "amount": amount}]},
+            "healers": {"characters": [{"name": "Healer", "amount": amount}]},
+            "dps": {"characters": [{"name": "Dps", "amount": amount}]},
+        },
+    }
+
+
+def _report_rankings_run(monkeypatch, difficulties: dict[int, int]) -> tuple[list[str | None], dict[str, Any]]:
+    """Run report-rankings without --player-metric over fights {id: difficulty}; return the metrics sent and the envelope."""
+    sent: list[str | None] = []
+
+    class _RankingsClient(_FakeWarcraftLogsClient):
+        def report_rankings(self, *, code: str, allow_unlisted: bool = False, options: ReportRankingsOptions) -> dict[str, object]:
+            sent.append(options.player_metric)
+            rows = [_ranked_fight(fight_id, difficulty, str(options.player_metric)) for fight_id, difficulty in difficulties.items()]
+            return {"code": code, "rankings": {"data": rows}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _RankingsClient())
+    result = runner.invoke(warcraftlogs_app, ["report-rankings", "abcd1234"])
+    assert result.exit_code == 0, result.output
+    return sent, json.loads(result.stdout)
+
+
+def test_warcraftlogs_report_rankings_ranks_raid_healers_on_hps_by_default(monkeypatch) -> None:
+    sent, payload = _report_rankings_run(monkeypatch, {26: 5, 27: 10})
+
+    raid, dungeon = (row["roles"] for row in payload["data"]["rankings"]["rows"])
+    assert sent == ["default", "hps"]
+    assert {role: raid[role]["characters"][0]["amount"] for role in raid} == {"tanks": 1000, "healers": 500000, "dps": 1000}
+    # A Mythic+ run keeps Warcraft Logs' score ranking for every role, healers included.
+    assert dungeon["healers"]["characters"][0]["amount"] == 1000
+    assert (payload["query"]["player_metric"], payload["query"]["healer_metric"]) == ("default", "hps")
+
+
+def test_warcraftlogs_report_rankings_of_mythic_plus_runs_sends_one_request(monkeypatch) -> None:
+    sent, payload = _report_rankings_run(monkeypatch, {1: 10})
+
+    assert sent == ["default"]
+    assert (payload["query"]["player_metric"], payload["query"]["healer_metric"]) == ("default", "default")
 
 
 def test_warcraftlogs_graphql_introspection_uses_named_operation(monkeypatch) -> None:
@@ -7251,6 +7412,35 @@ def test_warcraftlogs_client_rate_limit_always_uses_client_endpoint(monkeypatch)
     assert payload["limitPerHour"] == 100
     assert captured["url"] == RETAIL_PROFILE.api_url
     assert captured["headers"]["Authorization"] == "Bearer client-token"
+
+
+def test_warcraftlogs_client_rate_limit_never_reads_the_cache(monkeypatch) -> None:
+    """A cached rate limit reported points spent and a reset time up to a minute old."""
+    monkeypatch.setattr("warcraftlogs_cli.client.load_provider_auth_state", lambda provider: {})
+
+    class _ReplayingStore:
+        def get(self, key: str) -> object:
+            return {"rateLimitData": {"limitPerHour": 100, "pointsSpentThisHour": 99, "pointsResetIn": 1}}
+
+        def set(self, key: str, payload: object, *, ttl_seconds: int) -> None:
+            return None
+
+    client = _bare_client()
+    client._site = RETAIL_PROFILE
+    client._cache_store = _ReplayingStore()
+    client._retry_attempts = 1
+    client._http_client = None
+    client._timeout_seconds = 5.0
+    client._access_token = "client-token"
+    client._token_expires_at = time.time() + 3600
+
+    class _Resp:
+        def json(self) -> dict[str, object]:
+            return {"data": {"rateLimitData": {"limitPerHour": 100, "pointsSpentThisHour": 1, "pointsResetIn": 60}}}
+
+    monkeypatch.setattr("warcraftlogs_cli.client.request_with_retries", lambda _http_client, url, **kwargs: _Resp())
+
+    assert client.rate_limit()["pointsSpentThisHour"] == 1
 
 
 def test_warcraftlogs_client_probe_live_public_api_always_uses_client_endpoint(monkeypatch) -> None:

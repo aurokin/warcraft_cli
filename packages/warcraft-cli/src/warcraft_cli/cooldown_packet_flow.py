@@ -22,6 +22,7 @@ from warcraft_cli.cooldown_packet import (
     normalize_lorrgs_casts,
     normalize_warcraftlogs_actor_casts,
     raw_phase_markers,
+    received_aura_spell_ids,
     selected_phase_window,
     source_command,
     spell_catalog,
@@ -122,17 +123,17 @@ def _available_lorrgs_players(fight: dict[str, Any]) -> list[dict[str, Any]]:
     return available
 
 
-def _resolve_lorrgs_player(
-    fight: dict[str, Any],
+def _resolve_player(
+    players: list[dict[str, Any]],
     *,
+    id_key: str,
     actor_id: int | None,
     actor_name: str | None,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    raw_players = fight.get("players")
-    players = [player for player in raw_players if isinstance(player, dict)] if isinstance(raw_players, list) else []
+    """The roster row ``--actor-id`` (matched on ``id_key``) or ``--actor-name`` names, or why none."""
     if actor_id is not None:
         for player in players:
-            if int_or_none(player.get("source_id")) == actor_id:
+            if int_or_none(player.get(id_key)) == actor_id:
                 return player, None
         return None, "actor_id_not_found"
     if actor_name is not None and actor_name.strip():
@@ -214,6 +215,9 @@ class CooldownState:
     spec_slug: str = ""
     boss: dict[str, Any] = field(default_factory=dict)
     boss_slug: str | None = None
+    # The Lorrgs boss list, read only when Lorrgs could not name the fight's boss.
+    bosses_args: list[str] = field(default_factory=list)
+    bosses_result: dict[str, Any] | None = None
     lorrgs_phases: list[Any] = field(default_factory=list)
     phase_windows: list[dict[str, Any]] = field(default_factory=list)
     selected_window: dict[str, Any] | None = None
@@ -231,6 +235,8 @@ class CooldownState:
     spec_spells_result: dict[str, Any] | None = None
     cooldown_catalog: dict[int, dict[str, Any]] = field(default_factory=dict)
     tracked_ids: set[int] = field(default_factory=set)
+    # Lorrgs externals the player did not cast, left out of both sides: top parses hold them as auras received.
+    received_aura_ids: set[int] = field(default_factory=set)
     boss_spells_args: list[str] | None = None
     boss_spells_result: dict[str, Any] | None = None
     boss_catalog: dict[int, dict[str, Any]] = field(default_factory=dict)
@@ -303,18 +309,8 @@ def _resolve_reference(ctx: typer.Context, request: CooldownRequest, state: Cool
         state.lorrgs_fight_args += ["--type", parsed_ref.report_type]
 
 
-_LORRGS_FALLBACK_ADVICE = (
-    "Re-run with --actor-id <report source id> and --spec-slug <lorrgs spec slug> to build the "
-    "Warcraft Logs half of the packet without Lorrgs phase context."
-)
-_LORRGS_UNCACHED_ADVICE = (
-    "Lorrgs only serves reports it has already cached, which most guild and private reports are not. "
-    f"{_LORRGS_FALLBACK_ADVICE} Or load the report at https://lorrgs.io first."
-)
-
-
-def _lorrgs_lookup_failure(error: Any) -> tuple[str, str]:
-    """Why Lorrgs could not supply the fight, as ``(message, advice)``.
+def _lorrgs_lookup_failure(error: Any) -> str:
+    """Why Lorrgs could not supply the fight.
 
     Lorrgs maps 401/403/404 alike to ``not_found``, so only that code means "this report is not
     cached". A timeout, a rate limit or a transport failure must report itself instead of blaming
@@ -323,107 +319,70 @@ def _lorrgs_lookup_failure(error: Any) -> tuple[str, str]:
     details = as_dict(error)
     if str(details.get("code") or "") == "not_found":
         return (
-            "Lorrgs has no cached copy of this report, so phase markers are unavailable.",
-            _LORRGS_UNCACHED_ADVICE,
+            "Lorrgs has no cached copy of this report, so phase markers are unavailable. Lorrgs only serves "
+            "reports it has already cached; load the report at https://lorrgs.io to add them."
         )
     reason = str(details.get("message") or "").strip() or "Lorrgs returned no usable payload"
     reason = reason if reason.endswith((".", "!", "?")) else f"{reason}."
-    return (
-        f"Lorrgs could not serve this report, so phase markers are unavailable: {reason}",
-        # Lorrgs itself is failing, so its spec spell list is likely unavailable too.
-        f"{_LORRGS_FALLBACK_ADVICE} Also pass --spell-id for each cooldown to track.",
-    )
+    return f"Lorrgs could not serve this report, so phase markers are unavailable: {reason}"
 
 
-def _degrade_without_lorrgs(
-    ctx: typer.Context,
-    request: CooldownRequest,
-    state: CooldownState,
-    *,
-    code: str,
-    message: str,
-    advice: str,
-    source: Any,
-    exit_code: int,
-) -> None:
-    """Continue without the cached Lorrgs report when the caller supplied what Lorrgs would have.
-
-    Lorrgs supplies phase markers, the actor's report-local source id, and the spec slug. Only the
-    last two can come from flags, so without them there is nothing left to build and the command
-    fails naming the precondition instead of pretending.
-    """
-    if request.actor_id is None or not (request.spec_slug or "").strip():
-        _fail_cooldown_packet(
-            ctx,
-            code=code,
-            message=f"{message} {advice}",
-            query=state.query,
-            details={
-                "source": source,
-                "provider": "lorrgs",
-                "required_flags": ["--actor-id", "--spec-slug"],
-            },
-            exit_code=exit_code,
-        )
-    state.lorrgs_unavailable = {"code": code, "message": message, "source": source}
-
-
-def _load_lorrgs_fight(ctx: typer.Context, request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
+def _load_lorrgs_fight(request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
     result = fetch("lorrgs", state.lorrgs_fight_args, expansion=request.expansion)
     state.lorrgs_result = result
     if result.get("status") != "ok":
-        message, advice = _lorrgs_lookup_failure(result.get("error"))
-        _degrade_without_lorrgs(
-            ctx,
-            request,
-            state,
-            code="lorrgs_fight_lookup_failed",
-            message=message,
-            advice=advice,
-            source=result.get("error"),
-            exit_code=source_exit_code(result),
-        )
+        state.lorrgs_unavailable = {
+            "code": "lorrgs_fight_lookup_failed",
+            "message": _lorrgs_lookup_failure(result.get("error")),
+            "source": result.get("error"),
+        }
         return
     fight = _find_lorrgs_fight(_data_of(result), state.fight_id)
     if fight is None:
-        _degrade_without_lorrgs(
-            ctx,
-            request,
-            state,
-            code="lorrgs_fight_not_found",
-            message="Lorrgs cached this report but not the selected fight, so phase markers are unavailable.",
-            advice=_LORRGS_FALLBACK_ADVICE,
-            source=None,
-            exit_code=EXIT_NOT_FOUND,
-        )
+        state.lorrgs_unavailable = {
+            "code": "lorrgs_fight_not_found",
+            "message": "Lorrgs cached this report but not the selected fight, so phase markers are unavailable.",
+            "source": None,
+        }
         return
     if not _available_lorrgs_players(fight):
-        _degrade_without_lorrgs(
-            ctx,
-            request,
-            state,
-            code="lorrgs_fight_has_no_players",
-            message="Lorrgs cached this fight without its players, so phase markers are unavailable.",
-            advice=_LORRGS_FALLBACK_ADVICE,
-            source=None,
-            exit_code=EXIT_NOT_FOUND,
-        )
+        state.lorrgs_unavailable = {
+            "code": "lorrgs_fight_has_no_players",
+            "message": "Lorrgs cached this fight without its players, so phase markers are unavailable.",
+            "source": None,
+        }
         return
     state.lorrgs_fight = fight
+
+
+def _fail_unresolved_player(
+    ctx: typer.Context, state: CooldownState, code: str, *, message: str, available: list[dict[str, Any]]
+) -> NoReturn:
+    exit_code = EXIT_NOT_FOUND if code.endswith("_not_found") else EXIT_USAGE if code == "missing_actor" else EXIT_GENERIC
+    _fail_cooldown_packet(
+        ctx, code=code, message=message, query=state.query, details={"available_players": available}, exit_code=exit_code
+    )
+
+
+def _roster_spec_slug(actor: dict[str, Any]) -> str | None:
+    """The Lorrgs spec slug of a Warcraft Logs roster row, from its class/spec identity."""
+    identity = as_dict(as_dict(actor.get("class_spec_identity")).get("identity"))
+    actor_class, spec_key = identity.get("actor_class"), identity.get("spec")
+    if not isinstance(actor_class, str) or not isinstance(spec_key, str):
+        return None
+    spec = lookup_spec(spec_key, class_hint=actor_class)
+    return spec.lorrgs_slug if spec is not None else None
 
 
 def _select_player_without_lorrgs(
     ctx: typer.Context, request: CooldownRequest, state: CooldownState, fetch: ProviderFetch
 ) -> None:
-    """Take the actor and spec from the flags ``_degrade_without_lorrgs`` already required.
+    """Find the actor (--actor-id or --actor-name) in the Warcraft Logs roster of the selected fight.
 
-    The actor's name and class come from the Warcraft Logs roster of the selected fight, so an
-    --actor-id that fight does not have fails instead of returning an empty cast list.
+    The roster row also supplies the name, class and spec Lorrgs would have; --spec-slug is needed
+    only when the row names no spec. An actor the fight does not have fails instead of returning an
+    empty cast list.
     """
-    state.actor_id = int(request.actor_id or 0)
-    state.spec_slug = str(request.spec_slug or "")
-    state.boss_slug = request.boss_slug
-    state.query.update({"actor_id": state.actor_id, "spec_slug": state.spec_slug, "boss_slug": state.boss_slug})
     state.roster_args = ["report-player-details", state.report_code, "--fight-id", str(state.fight_id)]
     if request.allow_unlisted:
         state.roster_args.append("--allow-unlisted")
@@ -439,21 +398,58 @@ def _select_player_without_lorrgs(
     )
     roles = as_dict(as_dict(_data_of(state.roster_result).get("player_details")).get("roles"))
     actors = [row for role in ("tanks", "healers", "dps") for row in as_list(roles.get(role)) if isinstance(row, dict)]
-    actor = next((row for row in actors if int_or_none(row.get("id")) == state.actor_id), None)
+    actor, actor_error = _resolve_player(actors, id_key="id", actor_id=request.actor_id, actor_name=request.actor_name)
+    lorrgs_reason = as_dict(state.lorrgs_unavailable).get("message")
     if actor is None:
+        _fail_unresolved_player(
+            ctx,
+            state,
+            actor_error or "actor_not_found",
+            message=(
+                f"{lorrgs_reason} Could not resolve the selected player in the roster of fight {state.fight_id} "
+                f"of Warcraft Logs report {state.report_code}; pass --actor-id or --actor-name from "
+                "details.available_players."
+            ),
+            available=[{key: row.get(key) for key in ("id", "name", "type")} for row in actors],
+        )
+    state.actor_id = int(int_or_none(actor.get("id")) or 0)
+    spec_slug = (request.spec_slug or "").strip() or _roster_spec_slug(actor)
+    if not spec_slug:
         _fail_cooldown_packet(
             ctx,
-            code="actor_id_not_found",
-            message=(
-                f"Fight {state.fight_id} of Warcraft Logs report {state.report_code} has no player with "
-                f"source id {state.actor_id}."
-            ),
-            query=state.query,
-            details={"available_players": [{key: row.get(key) for key in ("id", "name", "type")} for row in actors]},
-            exit_code=EXIT_NOT_FOUND,
+            code="spec_slug_missing",
+            message=f"{lorrgs_reason} The Warcraft Logs roster names no spec for the selected player. Pass --spec-slug.",
+            query={**state.query, "actor_id": state.actor_id},
+            details={"player": {key: actor.get(key) for key in ("id", "name", "type")}},
+            exit_code=EXIT_USAGE,
         )
     actor_type = actor.get("type")
     state.player = {"name": actor.get("name"), "class_slug": actor_type.lower() if isinstance(actor_type, str) else None}
+    state.spec_slug = spec_slug
+    state.boss_slug = request.boss_slug or _boss_slug_of_encounter(request, state, fetch)
+    state.query.update(
+        {"actor_id": state.actor_id, "actor_name": actor.get("name"), "spec_slug": state.spec_slug, "boss_slug": state.boss_slug}
+    )
+
+
+def _boss_slug_of_encounter(request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> str | None:
+    """The Lorrgs boss of the Warcraft Logs fight's encounter: Lorrgs boss ids are encounter ids.
+
+    A failed lookup only leaves the comparison without a boss, as it was before the lookup.
+    """
+    encounter_id = int_or_none(as_dict(state.wcl_fight).get("encounter_id"))
+    if not encounter_id:
+        return None
+    state.bosses_args = ["bosses"]
+    state.bosses_result = fetch("lorrgs", state.bosses_args, expansion=request.expansion)
+    if state.bosses_result.get("status") != "ok":
+        return None
+    boss = next(
+        (row for row in as_list(_data_of(state.bosses_result).get("bosses")) if isinstance(row, dict) and row.get("id") == encounter_id),
+        {},
+    )
+    slug = boss.get("full_name_slug")
+    return slug if isinstance(slug, str) and slug else None
 
 
 def _require_spec_of_player_class(ctx: typer.Context, state: CooldownState) -> None:
@@ -485,19 +481,17 @@ def _select_player(ctx: typer.Context, request: CooldownRequest, state: Cooldown
         _select_player_without_lorrgs(ctx, request, state, fetch)
         _require_spec_of_player_class(ctx, state)
         return
-    player, player_error = _resolve_lorrgs_player(
-        state.lorrgs_fight, actor_id=request.actor_id, actor_name=request.actor_name
+    players = [player for player in as_list(state.lorrgs_fight.get("players")) if isinstance(player, dict)]
+    player, player_error = _resolve_player(
+        players, id_key="source_id", actor_id=request.actor_id, actor_name=request.actor_name
     )
     if player is None:
-        code = player_error or "actor_not_found"
-        exit_code = EXIT_NOT_FOUND if code.endswith("_not_found") else EXIT_USAGE if code == "missing_actor" else EXIT_GENERIC
-        _fail_cooldown_packet(
+        _fail_unresolved_player(
             ctx,
-            code=code,
+            state,
+            player_error or "actor_not_found",
             message="Could not resolve the selected player in the Lorrgs fight payload.",
-            query=state.query,
-            details={"available_players": _available_lorrgs_players(state.lorrgs_fight)},
-            exit_code=exit_code,
+            available=_available_lorrgs_players(state.lorrgs_fight),
         )
     resolved_actor_id = int_or_none(player.get("source_id"))
     if resolved_actor_id is None:
@@ -516,6 +510,7 @@ def _select_player(ctx: typer.Context, request: CooldownRequest, state: Cooldown
             message="The selected player did not include a Lorrgs spec slug. Pass --spec-slug.",
             query={**state.query, "actor_id": resolved_actor_id},
             details={"player": player},
+            exit_code=EXIT_USAGE,
         )
     raw_boss = state.lorrgs_fight.get("boss")
     state.boss = as_dict(raw_boss)
@@ -592,7 +587,7 @@ def _load_spell_catalogs(ctx: typer.Context, request: CooldownRequest, state: Co
         expansion=request.expansion,
         query=state.query,
         error_code="lorrgs_spec_spells_failed",
-        error_message="Lorrgs spec spell metadata lookup failed.",
+        error_message="Lorrgs spec spell metadata lookup failed. Pass --spell-id for each cooldown to track.",
         # Explicit --spell-id values are the tracked set, so the metadata only names them.
         required=not request.spell_ids,
     )
@@ -690,6 +685,11 @@ def _load_warcraftlogs_casts(ctx: typer.Context, request: CooldownRequest, state
         error_code="warcraftlogs_events_failed",
         error_message="Warcraft Logs cast-event lookup failed.",
     )
+    if not request.spell_ids:
+        state.received_aura_ids = received_aura_spell_ids(
+            state.cooldown_catalog, state.tracked_ids, _data_of(state.events_result), source_id=state.actor_id
+        )
+        state.tracked_ids -= state.received_aura_ids
     state.player_casts = normalize_warcraftlogs_actor_casts(
         _data_of(state.events_result),
         fight_start_time_ms=state.fight_start_time_ms,
@@ -727,9 +727,10 @@ def _comparison_difficulty(request: CooldownRequest, state: CooldownState) -> st
     if not state.boss_slug:
         state.comparison_reason = "no_boss_slug"
         state.comparison_note = (
-            "Lorrgs did not name this fight's boss, so the top-parse comparison was skipped. "
-            "Pass --boss-slug (see `warcraft lorrgs bosses`) to compare anyway."
-        )
+            "Lorrgs lists no boss for this fight's Warcraft Logs encounter"
+            if state.lorrgs_unavailable is not None
+            else "Lorrgs did not name this fight's boss"
+        ) + ", so the top-parse comparison was skipped. Pass --boss-slug (see `warcraft lorrgs bosses`) to compare anyway."
         return None
     return _ranking_difficulty(request, state)
 
@@ -771,6 +772,7 @@ def _load_ranking_comparison(ctx: typer.Context, request: CooldownRequest, state
         boss_catalog=state.boss_catalog,
         spell_ids=state.tracked_ids,
         player_phase_count=len(state.phase_windows),
+        analyzed_fight=(state.report_code, state.fight_id),
     )
     if state.comparison["status"] == "no_phase_data":
         reasons = {sample["phase_unavailable_reason"] for sample in state.comparison["samples"]}
@@ -803,6 +805,7 @@ def _source_refs(state: CooldownState) -> dict[str, Any]:
             state.wcl_phases_result, command="warcraftlogs", args=state.wcl_phases_args
         ),
         "lorrgs_spec_ranking": _provider_source(state.ranking_result, command="lorrgs", args=state.ranking_args or []),
+        "lorrgs_bosses": _provider_source(state.bosses_result, command="lorrgs", args=state.bosses_args),
     }
 
 
@@ -837,6 +840,17 @@ def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
             "Lorrgs did not supply this report, so phase windows come from the Warcraft Logs fight's phase "
             "transitions; labels are one-based P1/P2/etc. in order, and each window's phase_id and name are "
             "the encounter phase it is."
+        )
+    if state.received_aura_ids:
+        notes.append(
+            "Externals this player did not cast in the fight (cooldowns.received_auras, e.g. Power Infusion or "
+            "Bloodlust from another player) are left out of both sides: top parses record them as auras received, "
+            "and the player's side holds only the player's own casts, so they would always read as missed."
+        )
+    if state.comparison.get("excluded_analyzed_fight"):
+        notes.append(
+            "The analyzed fight is itself a top parse; it is left out of the samples so the player is not "
+            "compared with themselves."
         )
     if state.comparison.get("status") == "ready":
         notes.append("Top-parse samples are comparison evidence, not universal cooldown recommendations.")
@@ -939,6 +953,7 @@ def _packet_payload(state: CooldownState) -> dict[str, Any]:
         "cooldowns": {
             "tracked_spell_count": len(state.tracked_ids),
             "tracked_spells": [spell_summary(spell_id, catalog=state.cooldown_catalog) for spell_id in sorted(state.tracked_ids)],
+            "received_auras": [spell_summary(spell_id, catalog=state.cooldown_catalog) for spell_id in sorted(state.received_aura_ids)],
             "player_casts": state.player_casts,
             "lorrgs_cached_player_timeline": {
                 "raw_cast_count": len(lorrgs_player_casts),
@@ -960,7 +975,7 @@ def emit_cooldown_packet(ctx: typer.Context, request: CooldownRequest, *, fetch:
     """Run the provider sequence and emit the packet, or exit 1 with a structured failure envelope."""
     state = CooldownState()
     _resolve_reference(ctx, request, state)
-    _load_lorrgs_fight(ctx, request, state, fetch)
+    _load_lorrgs_fight(request, state, fetch)
     _select_player(ctx, request, state, fetch)
     _select_phase(ctx, request, state, fetch)
     _load_spell_catalogs(ctx, request, state, fetch)

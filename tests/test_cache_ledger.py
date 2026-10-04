@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from warcraft_core.cache_ledger import (
     cache_ledger,
     current_cache_ledger,
+    record_cache_error,
     record_cache_lookup,
     record_cache_store,
     with_cache_provenance,
@@ -36,6 +37,7 @@ def test_a_scope_that_built_a_store_reports_it_even_without_lookups() -> None:
             "all_hits": False,
             "oldest_hit_age_seconds": None,
             "oldest_hit_ttl_seconds": None,
+            "errors": 0,
         }
     }
 
@@ -50,20 +52,32 @@ def test_a_nested_ledger_keeps_its_own_counts_and_adds_them_to_its_parent() -> N
     with cache_ledger() as outer:
         record_cache_lookup("file", hit=True, age_seconds=10, ttl_seconds=900)
         with cache_ledger() as inner:
-            record_cache_lookup("redis", hit=True)
             record_cache_lookup("file", hit=True, age_seconds=300, ttl_seconds=3600)
             record_cache_lookup("file", hit=False)
+            record_cache_error("redis")
         assert current_cache_ledger() is outer
     assert current_cache_ledger() is None
 
     inner_block = inner.provenance()
     assert inner_block is not None
-    assert (inner_block["backend"], inner_block["lookups"], inner_block["hits"]) == ("mixed", 3, 2)
+    assert (inner_block["backend"], inner_block["lookups"], inner_block["hits"], inner_block["errors"]) == ("mixed", 2, 1, 1)
     assert (inner_block["oldest_hit_age_seconds"], inner_block["oldest_hit_ttl_seconds"]) == (300, 3600)
     outer_block = outer.provenance()
     assert outer_block is not None
-    assert (outer_block["lookups"], outer_block["hits"], outer_block["all_hits"]) == (4, 3, False)
+    assert (outer_block["lookups"], outer_block["hits"], outer_block["all_hits"], outer_block["errors"]) == (3, 2, False, 1)
     assert (outer_block["oldest_hit_age_seconds"], outer_block["oldest_hit_ttl_seconds"]) == (300, 3600)
+
+
+def test_a_redis_hit_makes_the_aggregate_age_unknown_instead_of_understated() -> None:
+    """A Redis hit records no age, so the oldest file hit is not the oldest entry replayed."""
+    with cache_ledger() as outer:
+        record_cache_lookup("file", hit=True, age_seconds=10, ttl_seconds=900)
+        with cache_ledger():
+            record_cache_lookup("redis", hit=True)
+    block = outer.provenance()
+    assert block is not None
+    assert (block["backend"], block["hits"]) == ("mixed", 2)
+    assert (block["oldest_hit_age_seconds"], block["oldest_hit_ttl_seconds"]) == (None, None)
 
 
 def test_threads_running_in_a_copied_context_record_into_the_same_ledger() -> None:

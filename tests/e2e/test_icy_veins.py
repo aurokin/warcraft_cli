@@ -471,6 +471,21 @@ def test_resolve_answers_official_names_spelled_with_punctuation(require, query:
     assert result.data["match"]["id"] == slug, result.describe()
 
 
+@pytest.mark.parametrize(
+    ("query", "slug"),
+    [
+        ("murder row mythic+", "murder-row-dungeon-guide"),
+        ("Nerub-ar Palace mythic strategy", "nerubar-palace-raid-guide"),
+    ],
+)
+def test_resolve_answers_a_boss_or_dungeon_name_with_a_difficulty_or_strategy_word(require, query: str, slug: str) -> None:
+    """The page title lacks "mythic+" or "strategy", and one such word used to empty the result."""
+    require(PROVIDER)
+    result = run(BINARY, "resolve", query)
+    assert result.data["resolved"] is True, result.describe()
+    assert result.data["match"]["id"] == slug, result.describe()
+
+
 def test_guide_returns_attributed_sections_family_navigation_and_a_page_toc(require) -> None:
     require(PROVIDER)
     result = guide_page()

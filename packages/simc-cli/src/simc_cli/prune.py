@@ -12,7 +12,7 @@ import math
 import operator
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from simc_cli.apl import AplEntry
@@ -42,6 +42,10 @@ class PruneContext:
     talent_ranks: dict[str, int] = field(default_factory=dict)
     # The build's hero tree as a SimC token (`shadopan`), or None when it is not known.
     hero_tree: str | None = None
+    # Talents the spec can take but the build did not. SimC creates no action named after one.
+    untaken_talents: set[str] = field(default_factory=set)
+    # False makes every talent atom span every rank: see without_talents.
+    talents_known: bool = True
 
 
 @dataclass(slots=True)
@@ -110,18 +114,22 @@ def split_csv_values(values: list[str]) -> set[str]:
 def prune_entries(entries: list[AplEntry], context: PruneContext) -> list[PrunedEntry]:
     pruned: list[PrunedEntry] = []
     for entry in entries:
-        if not entry.condition:
-            pruned.append(PrunedEntry(entry=entry, state=TruthValue.TRUE, reason="no condition"))
-            continue
-        outcome = evaluate_condition_outcome(entry.condition, context)
-        pruned.append(
-            PrunedEntry(
-                entry=entry,
-                state=outcome.state,
-                reason=explanation_for_condition(entry.condition, context, outcome),
-            )
-        )
+        outcome, reason = entry_verdict(entry, context)
+        pruned.append(PrunedEntry(entry=entry, state=outcome.state, reason=reason))
     return pruned
+
+
+def entry_verdict(entry: AplEntry, context: PruneContext) -> tuple[ConditionOutcome, str]:
+    """Whether an APL row can run for this build, and why.
+
+    A row whose action is a talent the build did not take is dead whatever its condition says.
+    """
+    if entry.action in context.untaken_talents:
+        return ConditionOutcome(can_be_true=False, can_be_false=True), f"talent.{entry.action}=false [action]"
+    if not entry.condition:
+        return ConditionOutcome(can_be_true=True, can_be_false=False), "no condition"
+    outcome = evaluate_condition_outcome(entry.condition, context)
+    return outcome, explanation_for_condition(entry.condition, context, outcome)
 
 
 def evaluate_condition_outcome(condition: str, context: PruneContext) -> ConditionOutcome:
@@ -193,7 +201,14 @@ def _known_atom_text(atom: str, context: PruneContext) -> str | None:
     return None
 
 
+def without_talents(context: PruneContext) -> PruneContext:
+    """The same build with its talents and hero tree unknown; a row dead under the build but not here is talent-gated."""
+    return replace(context, talents_known=False, hero_tree=None, untaken_talents=set())
+
+
 def _talent_rank(name: str, context: PruneContext) -> Span:
+    if not context.talents_known:
+        return Span(0, math.inf)
     if name in context.disabled_talents:
         return FALSE
     if name in context.enabled_talents:

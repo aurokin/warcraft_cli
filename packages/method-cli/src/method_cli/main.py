@@ -86,7 +86,7 @@ def guide_query(
     ctx: typer.Context,
     bundle_ref: str = typer.Argument(..., help="Exported bundle directory produced by guide-export."),
     query: str = typer.Argument(..., help="Query text to search within the exported Method bundle."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum matches to return."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Maximum matches per kind and in the top list."),
     kind: list[str] = typer.Option(
         [],
         "--kind",

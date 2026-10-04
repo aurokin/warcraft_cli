@@ -40,15 +40,22 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
 - use `warcraft cooldown-packet` when the question is about a specific player's cooldowns in a
   report phase; Lorrgs supplies phase markers, spell metadata, boss casts, and top-parse samples,
   while Warcraft Logs supplies exact player cast events
-- `cooldown-packet` needs Lorrgs to have cached the report, which most guild and private reports
-  are not. Pass `--actor-id` and `--spec-slug` and it still returns the Warcraft Logs half with
-  `data.lorrgs.status: "unavailable"` and the player's casts intact. Phase windows then come from
+- `cooldown-packet` gets phase markers from Lorrgs only when Lorrgs cached the report, which most
+  guild and private reports are not. It still returns the Warcraft Logs half with
+  `data.lorrgs.status: "unavailable"` and the player's casts intact: the actor (`--actor-id` or
+  `--actor-name`) and spec come from the fight's Warcraft Logs roster, and the boss for the top-parse
+  comparison from the fight's encounter id. Phase windows then come from
   the Warcraft Logs fight's phase transitions (`data.phase.source: "warcraftlogs"`): windows are
   numbered P1, P2, ... in order as on the Lorrgs path, each with the encounter
   phase's `phase_id` and `name`. A fight without phase transitions leaves
   `data.phase.status: "unavailable"` and a null `data.phase.selected`. `data.lorrgs.message` names
   the reason and only says "no cached copy" for a `not_found`; a timeout or transport failure says
-  so instead. Without both flags there is nothing left to build, so the command fails and names them
+  so instead. Without an actor flag the command fails `missing_actor` and lists the roster in
+  `error.details.available_players`; `--spec-slug` is needed only when the roster names no spec
+- `cooldown-packet` leaves out externals the player did not cast (Power Infusion or Bloodlust from
+  someone else): they are in `data.cooldowns.received_auras` instead, while one the player cast (a
+  priest's own Power Infusion) is compared, and a top parse that is the
+  analyzed fight itself is skipped (`comparison.excluded_analyzed_fight`)
 - `cooldown-packet` top-parse samples often lack phase markers: those samples have
   `phase_available: false` (`phase_unavailable_reason: "top_parse_has_no_phase_markers"`) and are
   left out of `selected_phase_spell_frequency`; when no sample has the phase,
@@ -75,7 +82,7 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
 - use `user-report-fights <url> --type <report-type>` when the report URL carries a view type such
   as `damage-done`; the CLI also preserves that query parameter automatically from URLs
 - use `spec-spells` and `boss-spells` to interpret spell ids in timeline rows
-- use `comp-ranking` filters (`--role`, `--spec`, `--killtime-min`, `--killtime-max`) when you need
+- use `comp-ranking` filters (`--role`, `--spec`, `--kill-time-min`, `--kill-time-max`; 0 = no bound) when you need
   a narrower comparison cohort; `--role` and `--spec` take `<name>.<op>.<n>` with `op` one of `eq`,
   `gt`, `gte`, `lt`, `lte` (`--role heal.gte.4`, `--spec mage-frost.gte.1`); a role is `tank`, `heal`,
   `mdps` or `rdps`, and a spec is a slug from `lorrgs specs`

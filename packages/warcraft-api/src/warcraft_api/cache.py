@@ -4,15 +4,25 @@ import importlib
 import json
 import os
 import time
+import uuid
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypedDict
 
-from warcraft_core.cache_ledger import record_cache_lookup, record_cache_store
+from warcraft_core.cache_ledger import record_cache_error, record_cache_lookup, record_cache_store
 from warcraft_core.paths import provider_cache_root
 
 DEFAULT_CACHE_PREFIX = "wowhead_cli"
+
+# Short Redis timeouts: a cache that answers slower than this costs more than it saves, and redis-py 5
+# would otherwise wait forever on a hung server.
+_REDIS_CONNECT_TIMEOUT_SECONDS = 1.0
+_REDIS_SOCKET_TIMEOUT_SECONDS = 2.0
+
+# Redis URLs that failed once in this process. Later operations skip them, so a down or hung Redis
+# costs one timeout per invocation (the ``warcraft`` wrapper included) instead of one per lookup.
+_FAILED_REDIS_URLS: set[str] = set()
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,16 +199,23 @@ class FileCacheStore:
         return data.get("payload"), stored_at, float(expires_at)
 
     def set(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
+        """Store ``payload`` through a temp file unique to this writer, so concurrent writers of one key never tear it.
+
+        A failed write is dropped (the cache never fails a command) and leaves no temp file behind.
+        """
         try:
             path = self._path_for_key(key)
             path.parent.mkdir(parents=True, exist_ok=True)
-            temp = path.with_suffix(".tmp")
-            data = {
-                "expires_at": time.time() + ttl_seconds,
-                "payload": payload,
-            }
-            temp.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
-            temp.replace(path)
+            data = json.dumps({"expires_at": time.time() + ttl_seconds, "payload": payload}, separators=(",", ":"))
+            # A random name rather than mkstemp, so the entry keeps the umask's mode instead of 0600.
+            temp = path.with_name(f".{path.stem}.{uuid.uuid4().hex}.tmp")
+            try:
+                temp.write_text(data, encoding="utf-8")
+                os.replace(temp, path)
+            except BaseException:
+                with suppress(OSError):
+                    temp.unlink(missing_ok=True)
+                raise
         except Exception:
             return
 
@@ -210,20 +227,26 @@ def _build_redis_client(
 ) -> Any:
     if not redis_url:
         raise ValueError("A Redis URL is required for the redis cache backend.")
-    redis_module = import_module_func("redis")
-    client = None
-    from_url = getattr(redis_module, "from_url", None)
-    if callable(from_url):
-        client = from_url(redis_url, decode_responses=True)
-    else:
-        redis_cls = getattr(redis_module, "Redis", None)
-        if redis_cls is not None:
-            redis_cls_from_url = getattr(redis_cls, "from_url", None)
-            if callable(redis_cls_from_url):
-                client = redis_cls_from_url(redis_url, decode_responses=True)
-    if client is None:
-        raise ValueError("Redis backend requires the 'redis' package with from_url support.")
-    return client
+    try:
+        redis_module = import_module_func("redis")
+    except ImportError as exc:
+        raise ValueError(
+            "The redis cache backend needs the redis extra: install warcraft[redis] (or the redis package)."
+        ) from exc
+    try:
+        return redis_module.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_connect_timeout=_REDIS_CONNECT_TIMEOUT_SECONDS,
+            socket_timeout=_REDIS_SOCKET_TIMEOUT_SECONDS,
+        )
+    except ValueError as exc:
+        # redis-py's message can quote part of the userinfo (a bad port is read from it), so only the
+        # redacted URL is reported.
+        raise ValueError(
+            f"Invalid Redis URL {redacted_redis_url(redis_url)}: expected redis://, rediss:// or unix:// "
+            "with a numeric port and database."
+        ) from exc
 
 
 class RedisCacheStore:
@@ -235,11 +258,26 @@ class RedisCacheStore:
         import_module_func: Any = importlib.import_module,
     ) -> None:
         self._client = _build_redis_client(redis_url, import_module_func=import_module_func)
+        self._redis_url = redis_url
         self._prefix = prefix
         record_cache_store("redis")
 
     def _redis_key(self, key: str) -> str:
         return f"{self._prefix}:{key}"
+
+    def _run(self, operation: str, *args: Any, **kwargs: Any) -> Any | None:
+        """The client ``operation``'s result, or ``None`` when Redis failed now or earlier in this process.
+
+        A failure is recorded in the cache ledger (``provenance.cache.errors``) so an unreachable Redis
+        is not mistaken for a cold cache, and trips the per-process breaker in ``_FAILED_REDIS_URLS``.
+        """
+        if self._redis_url not in _FAILED_REDIS_URLS:
+            try:
+                return getattr(self._client, operation)(*args, **kwargs)
+            except Exception:
+                _FAILED_REDIS_URLS.add(self._redis_url)
+        record_cache_error("redis")
+        return None
 
     def get(self, key: str) -> Any | None:
         """The payload under ``key``, recorded in the cache ledger; Redis keeps no store time, so a hit has no age."""
@@ -248,10 +286,7 @@ class RedisCacheStore:
         return payload
 
     def _read(self, key: str) -> Any | None:
-        try:
-            raw = self._client.get(self._redis_key(key))
-        except Exception:
-            return None
+        raw = self._run("get", self._redis_key(key))
         if raw in (None, ""):
             return None
         try:
@@ -260,14 +295,34 @@ class RedisCacheStore:
             return None
 
     def set(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
-        try:
-            self._client.set(
-                self._redis_key(key),
-                json.dumps(payload, separators=(",", ":")),
-                ex=ttl_seconds,
-            )
-        except Exception:
-            return
+        # A payload JSON cannot hold is dropped, as in FileCacheStore: the cache never fails a command.
+        with suppress(TypeError, ValueError):
+            self._run("set", self._redis_key(key), json.dumps(payload, separators=(",", ":")), ex=ttl_seconds)
+
+
+class CacheBackendHealth(TypedDict):
+    available: bool
+    error: str | None
+
+
+def cache_backend_health(
+    settings: CacheSettings,
+    *,
+    import_module_func: Any = importlib.import_module,
+) -> CacheBackendHealth:
+    """Whether the configured cache backend answers, for every provider's ``doctor``.
+
+    A Redis backend is pinged, so a server that is down, refuses the credentials, has a bad URL or
+    lacks the redis extra reports ``available: false`` with the reason; a doctor then reports
+    ``degraded``. The file backend and a disabled cache need no probe.
+    """
+    if not settings.enabled or settings.backend != "redis":
+        return {"available": True, "error": None}
+    try:
+        _build_redis_client(settings.redis_url or "", import_module_func=import_module_func).ping()
+    except Exception as exc:
+        return {"available": False, "error": str(exc) or type(exc).__name__}
+    return {"available": True, "error": None}
 
 
 def build_cache_store(settings: CacheSettings) -> CacheStore | None:
@@ -513,15 +568,16 @@ def clear_redis_cache(
 def redacted_redis_url(url: str | None) -> str | None:
     """The Redis URL without its credentials or query string, for doctor and cache output.
 
-    Agents keep that output in their context and logs, so a password must never reach it. The userinfo
-    ends at the last '@' before the path, as redis-py reads it, so a password holding '@' (or '[')
-    is hidden whole; no URL parser is involved, so no password character can make this raise.
+    Agents keep that output in their context and logs, so a password must never reach it. Everything up
+    to the last '@' is hidden, so a password holding '@', '[' or an unescaped '/' (which redis-py would
+    misread as the path) is hidden whole; no URL parser is involved, so no password character can make
+    this raise.
     """
     if url is None:
         return None
-    scheme, sep, rest = url.split("?", 1)[0].partition("://")
+    scheme, sep, rest = url.partition("://")
     if not sep:
         return "***"
-    netloc, slash, path = rest.partition("/")
-    host = netloc.rpartition("@")[2]
-    return f"{scheme}://{'***@' if '@' in netloc else ''}{host}{slash}{path}"
+    _, at, location = rest.rpartition("@")
+    location = location.split("?", 1)[0].split("#", 1)[0]
+    return f"{scheme}://{'***@' if at else ''}{location}"

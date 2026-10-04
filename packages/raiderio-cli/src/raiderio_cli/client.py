@@ -172,11 +172,18 @@ class RaiderIOClient:
         self._cache_store.set(key, {"fetched_at": fetched.fetched_at, "payload": fetched.payload}, ttl_seconds=ttl_seconds)
 
     def _get_json(
-        self, url: str, *, params: dict[str, Any], namespace: str, ttl_seconds: int, key_params: dict[str, Any] | None = None
+        self,
+        url: str,
+        *,
+        params: dict[str, Any],
+        namespace: str,
+        ttl_seconds: int,
+        key_params: dict[str, Any] | None = None,
+        fresh: bool = False,
     ) -> FetchedJson:
-        """GET one Raider.IO JSON object, cached under ``key_params`` (``params`` when not given)."""
+        """GET one Raider.IO JSON object, cached under ``key_params`` (``params`` when not given); ``fresh`` skips the cache read."""
         key = self._cache_key(namespace, params if key_params is None else key_params)
-        cached = self._read_cache(key)
+        cached = None if fresh else self._read_cache(key)
         if cached is not None:
             return cached
         response = request_with_retries(self._client(), url, params=params, retry_attempts=self._retry_attempts)
@@ -236,6 +243,7 @@ class RaiderIOClient:
         dungeon: str = "all",
         affixes: str | None = None,
         page: int = 0,
+        fresh: bool = False,
     ) -> FetchedJson:
         params: dict[str, Any] = {
             "region": region,
@@ -251,6 +259,7 @@ class RaiderIOClient:
             params=params,
             namespace="mythic_plus_runs",
             ttl_seconds=self._mplus_runs_ttl,
+            fresh=fresh,
         )
 
     def raid_rankings(
@@ -304,6 +313,15 @@ class RaiderIOClient:
             f"{RAIDERIO_BASE_URL}/mythic-plus/affixes",
             params={"region": region, "locale": "en"},
             namespace="mythic_plus_affixes",
+            ttl_seconds=self._mplus_runs_ttl,
+        )
+
+    def season_cutoffs(self, *, season: str, region: str) -> FetchedJson:
+        """The Mythic+ rating at each top percentile of one region's season; cached like a leaderboard page."""
+        return self._get_json(
+            f"{RAIDERIO_BASE_URL}/mythic-plus/season-cutoffs",
+            params={"season": season, "region": region},
+            namespace="mythic_plus_season_cutoffs",
             ttl_seconds=self._mplus_runs_ttl,
         )
 

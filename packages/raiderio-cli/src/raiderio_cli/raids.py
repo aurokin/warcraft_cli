@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
+import httpx
 from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
 from warcraft_core.wow_normalization import primary_realm_slug
@@ -125,14 +126,25 @@ def sample_raid_rankings(
     seen_guilds: set[str] = set()
     read_pages: list[FetchedJson] = []
     for offset in range(pages):
-        fetched = client.raid_rankings(
-            raid=raid,
-            difficulty=difficulty,
-            region=region,
-            realm=realm,
-            limit=RAID_RANKINGS_PAGE_SIZE,
-            page=page + offset,
-        )
+        try:
+            fetched = client.raid_rankings(
+                raid=raid,
+                difficulty=difficulty,
+                region=region,
+                realm=realm,
+                limit=RAID_RANKINGS_PAGE_SIZE,
+                page=page + offset,
+            )
+        except httpx.HTTPStatusError as exc:
+            # Every other flag is checked before the request (an unknown realm is "Could not find requested
+            # realm"), so Raider.IO's bare "Invalid request query input" means it does not know the raid slug.
+            if exc.response.status_code != 400 or "invalid request query input" not in exc.response.text.lower():
+                raise
+            raise ProviderError(
+                "invalid_query",
+                f"Raider.IO does not know the raid {raid!r}. `raiderio raids --expansion-id <id>` lists each expansion's raid slugs.",
+                details={"status_code": 400, "url": str(exc.request.url)},
+            ) from exc
         read_pages.append(fetched)
         rankings = [row for row in as_list(fetched.payload.get("raidRankings")) if isinstance(row, dict)]
         for row in rankings:

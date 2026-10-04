@@ -2609,6 +2609,109 @@ def test_raiderio_leaderboard_raids_maps_unknown_raid_to_usage_error(monkeypatch
     monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", _as_fetched(fake_rankings))
     result = runner.invoke(raiderio_app, ["leaderboard", "raids", "--raid", "nope"])
     assert result.exit_code == 2, result.output
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "invalid_query"
+    # The raw "Invalid request query input" named neither the flag nor where the valid slugs are.
+    assert "'nope'" in error["message"] and "raiderio raids" in error["message"]
+
+
+def _http_error(status: int, url: str) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", url)
+    return httpx.HTTPStatusError(str(status), request=request, response=httpx.Response(status, request=request, json={}))
+
+
+@pytest.mark.parametrize(("current_season_answers", "code", "exit_code"), [(True, "invalid_query", 2), (False, "upstream_error", 5)])
+def test_raiderio_unknown_season_is_a_usage_error_not_an_outage(
+    monkeypatch, current_season_answers: bool, code: str, exit_code: int
+) -> None:
+    # Raider.IO answers an unknown season slug with HTTP 500, which an agent would retry forever as an outage.
+    def fake_runs(self: RaiderIOClient, *, season: str | None = None, page: int = 0, **kwargs: Any):
+        if season or not current_season_answers:
+            raise _http_error(500, "https://raider.io/api/v1/mythic-plus/runs")
+        return {"season": "season-mn-2", "rankings": []}
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
+    result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--season", "foo", "--limit", "1"])
+
+    assert result.exit_code == exit_code, result.output
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == code
+    if code == "invalid_query":
+        assert "'foo'" in error["message"] and "raiderio dungeons" in error["message"]
+
+
+def test_raiderio_a_later_page_failing_is_an_outage_not_an_unknown_season(monkeypatch) -> None:
+    # Page 0 of the season answered, so a 500 on page 1 cannot mean the slug is wrong.
+    def fake_runs(self: RaiderIOClient, *, season: str | None = None, page: int = 0, **kwargs: Any):
+        if page:
+            raise _http_error(500, "https://raider.io/api/v1/mythic-plus/runs")
+        return _one_run_page(page)
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", _as_fetched(fake_runs))
+    result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--season", "season-mn-2", "--limit", "21"])
+
+    assert result.exit_code == 5, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "upstream_error"
+
+
+def test_raiderio_unknown_season_check_does_not_trust_a_cached_current_season(monkeypatch, tmp_path) -> None:
+    # A current-season page cached minutes ago says nothing about whether Raider.IO answers now, so an
+    # outage that 500s a real season must stay a retryable upstream_error.
+    monkeypatch.setenv("RAIDERIO_CACHE_BACKEND", "file")  # the suite disables every provider cache
+    monkeypatch.setenv("RAIDERIO_CACHE_DIR", str(tmp_path / "cache"))
+    outage = False
+
+    def fake_request(client: httpx.Client, url: str, *, params: dict[str, Any], retry_attempts: int) -> httpx.Response:
+        if outage:
+            raise _http_error(500, url)
+        return httpx.Response(200, json=_one_run_page(0), request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("raiderio_cli.client.request_with_retries", fake_request)
+    warm = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--limit", "1"])
+    assert warm.exit_code == 0, warm.output
+    outage = True
+    result = runner.invoke(raiderio_app, ["leaderboard", "mythic-plus", "--season", "season-mn-2", "--limit", "1"])
+
+    assert result.exit_code == 5, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "upstream_error"
+
+
+def _cutoff(quantile: float, rating: float) -> dict[str, Any]:
+    side = {"quantile": quantile, "quantileMinValue": rating, "quantilePopulationCount": 10, "totalPopulationCount": 1000}
+    return {"horde": side, "alliance": {**side, "quantileMinValue": rating + 1}, "all": side, "allColor": "#fff"}
+
+
+def test_raiderio_cutoffs_reads_the_current_season_and_lists_each_percentile(monkeypatch) -> None:
+    requests: list[dict[str, Any]] = []
+
+    def fake_cutoffs(self: RaiderIOClient, *, season: str, region: str):
+        requests.append({"season": season, "region": region})
+        return {"cutoffs": {"updatedAt": "Sat Oct 03 2026", "p999": _cutoff(0.999, 3837.85), "p990": _cutoff(0.99, 3608.22)}}
+
+    current_page = _as_fetched(lambda self, **kwargs: {"rankings": [], "params": {"season": "season-mn-2"}})
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", current_page)
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.season_cutoffs", _as_fetched(fake_cutoffs))
+    result = runner.invoke(raiderio_app, ["cutoffs", "--region", "na"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert requests == [{"season": "season-mn-2", "region": "us"}]
+    assert payload["kind"] == "mythic_plus_cutoffs"
+    assert payload["query"] == {"season": "season-mn-2", "region": "us"}
+    assert [(row["percentile"], row["all"]["rating"], row["alliance"]["rating"]) for row in payload["data"]["cutoffs"]] == [
+        ("top 0.1%", 3837.85, 3838.85),
+        ("top 1%", 3608.22, 3609.22),
+    ]
+
+
+def test_raiderio_cutoffs_rejects_an_unknown_season_as_a_usage_error(monkeypatch) -> None:
+    def fake_cutoffs(self: RaiderIOClient, *, season: str, region: str):
+        raise _http_error(404, "https://raider.io/api/v1/mythic-plus/season-cutoffs")
+
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.season_cutoffs", _as_fetched(fake_cutoffs))
+    result = runner.invoke(raiderio_app, ["cutoffs", "--season", "foo"])
+
+    assert result.exit_code == 2, result.output
     assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
 
 
@@ -3209,6 +3312,11 @@ def test_raiderio_threshold_gives_no_estimate_outside_the_sampled_range(monkeypa
     assert threshold["estimate"] is None
     assert threshold["sampled_range"] == ({"min": 21.0, "max": 22.0} if metric == "mythic_level" else {"min": 503.9, "max": 515.4})
     assert "not reachable" in threshold["note"]
+
+    # Above the range the paging explanation is wrong; a score that high is a player rating, not a run score.
+    above = runner.invoke(raiderio_app, ["threshold", "mythic-plus-runs", "--metric", "score", "--value", "3000"])
+    note = json.loads(above.stdout)["data"]["threshold"]["note"]
+    assert "not reachable" not in note and "raiderio cutoffs" in note
 
     inside = runner.invoke(raiderio_app, ["threshold", "mythic-plus-runs", "--metric", "mythic_level", "--value", "21"])
     threshold = json.loads(inside.stdout)["data"]["threshold"]

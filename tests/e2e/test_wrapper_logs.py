@@ -266,7 +266,7 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
     }
     # The Lorrgs roster names the player and Lorrgs supplies the phases, so the Warcraft Logs roster
     # and phase transitions are listed but never read.
-    unread = {"warcraftlogs_report_player_details", "warcraftlogs_phase_transitions"}
+    unread = {"warcraftlogs_report_player_details", "warcraftlogs_phase_transitions", "lorrgs_bosses"}
     assert set(data["sources"]) == {*expected_sources, *unread}, result.describe()
     assert {data["sources"][key]["status"] for key in unread} == {"not_requested"}, result.describe()
     assert data["phase"]["source"] == "lorrgs", result.describe()
@@ -418,14 +418,14 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     ranked = found.fight["difficulty"] in (HEROIC_DIFFICULTY_ID, MYTHIC_DIFFICULTY_ID)
     assert data["comparison"]["reason"] == (None if ranked else "unranked_difficulty"), result.describe()
 
-    # Without --boss-slug nothing names the boss, and the packet says why the comparison is missing.
+    # Without --boss-slug the boss is the Lorrgs boss whose id is the fight's encounter id.
     unnamed = run(
         "warcraft", "cooldown-packet", found.url, "--actor-id", str(actor["id"]), "--spec-slug", spec_slug,
         "--phase", "1", "--sample-limit", "1",
     )
-    assert unnamed.data["comparison"]["reason"] == "no_boss_slug", unnamed.describe()
-    assert unnamed.data["comparison"]["samples"] == [], unnamed.describe()
-    assert any("--boss-slug" in note for note in unnamed.data["notes"]), unnamed.describe()
+    assert unnamed.payload["query"]["boss_slug"] == boss_slug, unnamed.describe()
+    assert unnamed.data["sources"]["lorrgs_bosses"]["status"] == "ok", unnamed.describe()
+    assert unnamed.data["comparison"]["reason"] == data["comparison"]["reason"], unnamed.describe()
 
     # --spell-id must narrow the tracked set, and the casts with it.
     pressed = max(casts["tracked_casts_by_spell"], key=lambda row: row["count"])
@@ -535,24 +535,25 @@ def test_lorrgs_resolve_hands_over_the_ranking_at_the_named_difficulty(require):
     assert _first_ranked_fight_difficulty(mythic) == MYTHIC_DIFFICULTY_ID, mythic.describe()
 
 
-def test_cooldown_packet_without_the_fallback_flags_names_the_flags_it_needs(require):
-    """Without ``--actor-id``/``--spec-slug`` there is nothing left to build, so it must fail loudly."""
+def test_cooldown_packet_without_lorrgs_takes_the_actor_and_spec_from_the_fight_roster(require):
+    """Lorrgs would have named the player and spec; on a report it never cached the Warcraft Logs
+    roster of the fight does, so --actor-name alone builds the packet and the boss comes from the
+    fight's encounter id. Without any actor flag it fails listing that roster."""
     require("warcraftlogs", "lorrgs")
-    actor, _spec_slug = _lorrgs_capable_actor()
+    found = guild_anchor()
+    actor, spec_slug = _lorrgs_capable_actor()
     result = run(
-        "warcraft",
-        "cooldown-packet",
-        guild_anchor().url,
-        "--actor-id",
-        str(actor["id"]),
-        "--phase",
-        "1",
-        expect=EXIT_NOT_FOUND,
-        error_code="lorrgs_fight_lookup_failed",
+        "warcraft", "cooldown-packet", found.url, "--actor-name", str(actor["name"]), "--phase", "1", "--sample-limit", "1",
     )
-    assert result.payload["error"]["details"]["required_flags"] == ["--actor-id", "--spec-slug"], result.describe()
-    assert "--spec-slug" in result.payload["error"]["message"], result.describe()
-    assert result.stdout == ""
+    assert result.data["lorrgs"]["status"] == "unavailable", result.describe()
+    assert (result.payload["query"]["actor_id"], result.payload["query"]["spec_slug"]) == (actor["id"], spec_slug), result.describe()
+    assert result.payload["query"]["boss_slug"] == _guild_boss_slug(), result.describe()
+
+    missing = run("warcraft", "cooldown-packet", found.url, "--phase", "1", expect=EXIT_USAGE, error_code="missing_actor")
+    roster = missing.payload["error"]["details"]["available_players"]
+    assert {"id": actor["id"], "name": actor["name"], "type": actor["type"]} in roster, missing.describe()
+    assert "--actor-name" in missing.payload["error"]["message"], missing.describe()
+    assert missing.stdout == ""
 
 
 def test_cooldown_packet_without_lorrgs_checks_the_flags_against_the_fight_roster(require):

@@ -69,7 +69,8 @@ and the shorthand in `CLASS_SPEC_ALIASES` (`bm hunter`, `bdk`). A bare spec seve
 (`frost`, `holy`, `protection`, `restoration`) names no spec unless `class_hint` picks one; no two specs
 share any other spelling. Provider flags that take a spec (Lorrgs spec routes, Raider.IO
 `--contains-spec`/`--contains-class`, Warcraft Logs `--class-name`/`--spec-name` and its sampled spec
-filter, `warcraft cooldown-packet --spec-slug`) translate through this lookup and leave text it does
+filter, SimC `--actor-class`/`--spec` and `find-action`/`trace-action --class`,
+`warcraft cooldown-packet --spec-slug`) translate through this lookup and leave text it does
 not recognize as typed. The table is retail only; classic sites keep their
 own permissive handling.
 
@@ -186,7 +187,9 @@ input or lookup:
   Logs report actor (`report_player_details`) and cross-walks it to a Raider.IO `character` profile,
   emitting both `class_spec_identity` blocks side by side with an agree/conflict reconciliation. The
   join is a soft match on region + realm + character name — explicitly **not** a canonical
-  cross-provider actor id (see Report Actor and Current Scope).
+  cross-provider actor id (see Report Actor and Current Scope). Raider.IO's spec is the character's
+  current active spec, not the one played in the log, so a `spec_mismatch` alone is expected for an
+  off-spec log; only a `class_mismatch` casts doubt on the join.
 
 ## Current Scope
 

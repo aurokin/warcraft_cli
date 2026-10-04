@@ -54,7 +54,12 @@ Every binary emits one JSON object, the envelope: `ok`, `provider`, `command`, `
 the top level; a binary refuses to print anything else and fails with `internal_error` instead.
 Read the payload from `data`. `provenance.cache` tells you whether the answer was replayed from the
 local cache: `hit` (any lookup was), `all_hits` (nothing came off the wire) and
-`oldest_hit_age_seconds`; with `--fields` request it explicitly, and treat its absence as unknown.
+`oldest_hit_age_seconds` (null whenever any hit came from Redis, which records no store time).
+`errors` above 0 means the cache backend is broken (a Redis that is down or refuses the
+credentials), not cold. With `--fields` request it explicitly, and treat its absence as unknown.
+For a fresh answer, turn that provider's cache off for one run with `<PROVIDER>_CACHE_BACKEND=none`
+(`RAIDERIO_CACHE_BACKEND=none raiderio character us illidan Name`; `ICY_VEINS_`, `WARCRAFT_WIKI_` and
+so on for the others, one variable per provider a wrapper command reaches).
 
 On failure the object goes to stderr with `ok: false`, `data: {}`, `query` echoing the parameters
 the command parsed (`null` when it failed before parsing them), and
@@ -103,6 +108,7 @@ narrower, **experimental** is thin and may change.
 - Prefer `resolve` when you want one conservative next command.
 - Prefer `search` when you want to inspect candidates across providers.
 - In every provider `search` / `resolve` payload (`warcraft <provider> search|resolve`), `count` is the rows returned, `total_matches` is every match the provider knows of (`null` on a `coming_soon` stub) and `truncated` says more exist. A provider `resolve` is `resolved` only at `high` confidence; an unresolved answer still names its top row in `match`, with `fallback_search_command` beside it (`null` when nothing matched, and always `null` from Warcraft Logs, which matches only explicit report references).
+- A global flag goes before the subcommand (`raiderio --pretty affixes`); typed after it, the error says so in `error.details.global_flag`. A group called without a subcommand lists them in `error.details.commands`.
 - A one-word query (`shadow`, `illidan`) resolves at `high` only when the word names the top match: its whole name, its head before a `,` or `:` (`thunderfury` for "Thunderfury, Blessed Blade of the Windseeker"), or a provider identity such as an exact wiki title, an expansion alias, or a spec word only one class has naming that spec's guide. Anything else comes back `medium` with `data.confidence_cap: {"rule": "single_word_query", "from": "high"}`, even when it is right ("Illidan Stormrage"): check `match` and run its `follow_up.command` yourself, or add a word.
 - An unresolved `warcraft resolve` has `match: null`: read `data.best_unresolved_candidate` (its `unresolved_reason`, `single_word_query_not_named_exactly` for the one-word rule, and `follow_up_command`) together with `data.fallback_search_command`, and check `data.provider_resolved_candidates`: a provider answer resolved at `high` that a better-ranked unresolved match kept from being the answer, each with its `next_command`. `warcraft search` keeps each provider's total in `data.merge_policy.provider_total_matches` (`null` for a stub or for a provider listed in `failed_providers`).
 - Prefer `warcraft guild ...` for one guild's Raider.IO snapshot with normalized region/realm/name input (Oceanic realms are in region `us`; `oce` is read as `us`); `data.sources.raiderio` carries `summary` and `provenance` (use `warcraft raiderio guild` for the raw Raider.IO payload), and `summary.raids[]` carries each raid's normal/heroic/mythic world, region, and realm ranks. A rank of `0` means unranked at that difficulty, not first place, and Raider.IO only covers the current expansion.
@@ -123,10 +129,13 @@ narrower, **experimental** is thin and may change.
 - Use `warcraft talent-describe` when you want that same routed packet handed directly into `simc describe-build` without manually chaining commands.
 - Use `warcraft cooldown-packet` for player-specific log questions like "how can I improve my
   cooldowns in P2"; it joins Lorrgs phase/spell/top-parse context with exact Warcraft Logs cast
-  events for the selected actor and keeps both sources visible. For a report Lorrgs cannot serve,
-  pass `--actor-id` and `--spec-slug` to get the Warcraft Logs half with
-  `data.lorrgs.status: "unavailable"` and phase windows from the Warcraft Logs fight
-  (`data.phase.source` names where they came from); without both flags the command fails naming them.
+  events for the selected actor and keeps both sources visible. For a report Lorrgs cannot serve
+  it still returns the Warcraft Logs half with `data.lorrgs.status: "unavailable"`, the actor
+  (`--actor-id` or `--actor-name`) and spec from the fight's Warcraft Logs roster, and phase windows
+  from the Warcraft Logs fight (`data.phase.source` names where they came from); without an actor flag
+  it fails `missing_actor` listing the roster. Externals the player did not cast (Power Infusion or
+  Bloodlust from someone else) are not compared: they are in `data.cooldowns.received_auras`. One the
+  player cast, such as a priest's own Power Infusion, is compared.
 - Typical packet flow:
   - `warcraftlogs report-player-talents <report> --fight-id <id> --actor-id <id> --out ./tmp/actor-packet.json`
   - `simc validate-talent-transport --build-packet ./tmp/actor-packet.json --out ./tmp/actor-packet-validated.json`

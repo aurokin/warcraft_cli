@@ -178,6 +178,10 @@ def build_doctor_payload(
     status = "ready"
     if live and failures:
         status = "degraded" if len(failures) < len(probe_results) else "error"
+    if cache.get("available") is False:
+        failures.append("cache")
+        if status == "ready":
+            status = "degraded"
 
     return {
         "status": status,

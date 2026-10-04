@@ -31,7 +31,8 @@ against the live API; `provenance.verified` is `true`.
   `gameVersions` match the flavor asked about, not row 0
 - a numeric argument is treated as a mod id and validated to be a WoW project; a non-numeric
   argument is matched to the exact addon slug, so a near-miss returns `addon_not_found` rather than
-  the wrong addon
+  the wrong addon; its `error.details.candidates` lists the addons a name search finds (`weakauras`
+  -> `weakauras-2`), most popular first, so retry with one of those slugs
 - changelog is best-effort: it is top-level `null` only when the addon has no files; otherwise an
   object for the newest file with its changelog `body` (`null` when that file exposes no notes) and
   `source_url`, or an explicit `{file_id, error}` marker on a failed fetch — the lookup still returns

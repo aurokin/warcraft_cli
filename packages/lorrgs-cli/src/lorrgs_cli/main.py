@@ -278,8 +278,8 @@ def comp_ranking(
         "--spec",
         help="Spec count filter <spec>.<op>.<n>, e.g. mage-frost.gte.1; any provider's spec spelling works; repeatable.",
     ),
-    killtime_min: int = typer.Option(0, "--killtime-min", min=0, help="Minimum kill time in seconds."),
-    killtime_max: int = typer.Option(0, "--killtime-max", min=0, help="Maximum kill time in seconds."),
+    killtime_min: int = typer.Option(0, "--kill-time-min", "--killtime-min", min=0, help="Minimum kill time in seconds; 0 = no bound."),
+    killtime_max: int = typer.Option(0, "--kill-time-max", "--killtime-max", min=0, help="Maximum kill time in seconds; 0 = no bound."),
 ) -> None:
     """Fetch top composition ranking rows for an encounter."""
     spec_filter = lorrgs_comp_spec_filters(spec_filter)
@@ -344,15 +344,18 @@ def user_report_fights(
         help="Warcraft Logs report URL, Lorrgs user_report URL, or report code already cached by Lorrgs.",
     ),
     fight: str | None = typer.Option(None, "--fight", help="Dot-separated fight ids, e.g. 2.4.15. Defaults to fight id from URL."),
+    fight_id: list[int] | None = typer.Option(None, "--fight-id", help="A fight id; repeatable, the same as --fight 2.4.15."),
     player: str | None = typer.Option(None, "--player", help="Optional dot-separated player source ids, e.g. 1.5.20."),
     data_type: str | None = typer.Option(None, "--type", help="Optional report view type, e.g. damage-done. Defaults to type from URL."),
 ) -> None:
     """Fetch selected fights from an already-cached Lorrgs user report."""
     report_id, parsed_fight_id, parsed_report_type = _report_reference_or_fail(ctx, report_ref)
-    resolved_fight = fight or (str(parsed_fight_id) if parsed_fight_id is not None else None)
+    if fight and fight_id:
+        fail(ctx, "invalid_query", "Pass --fight or --fight-id, not both.", exit_code=EXIT_USAGE)
+    resolved_fight = fight or ".".join(map(str, fight_id or [])) or (str(parsed_fight_id) if parsed_fight_id is not None else None)
     resolved_type = data_type or parsed_report_type
     if not resolved_fight:
-        fail(ctx, "missing_fight", "Pass --fight or provide a report URL containing fight=<id>.", exit_code=EXIT_USAGE)
+        fail(ctx, "missing_fight", "Pass --fight (or --fight-id) or provide a report URL containing fight=<id>.", exit_code=EXIT_USAGE)
     query = {"report_ref": report_ref, "report_id": report_id, "fight": resolved_fight, "player": player, "type": resolved_type}
     _run_command(
         ctx,

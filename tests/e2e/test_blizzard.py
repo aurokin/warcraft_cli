@@ -102,6 +102,10 @@ def test_character_read_uses_the_profile_namespace_and_agrees_with_the_realm_rea
     assert realm.data["id"] == result.data["realm"]["id"]
     assert realm.data["name"] == result.data["realm"]["name"]
 
+    # REGION REALM NAME, the order raiderio and warcraftlogs take, reads the same character.
+    region_first = run("blizzard", "character", "us", GUILD_REALM, CHARACTER_NAME)
+    assert region_first.data["id"] == result.data["id"], region_first.describe()
+
 
 def test_a_realm_display_name_reaches_the_realm_its_slug_names(require) -> None:
     """Blizzard slugs drop apostrophes, so the name a player types has to be tried as a slug spelling."""

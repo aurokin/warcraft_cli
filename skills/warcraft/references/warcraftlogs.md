@@ -45,7 +45,7 @@ Best fits:
   - `warcraftlogs report-events <code> --fight-id ...`
   - `warcraftlogs report-table <code> --data-type damage-done --fight-id ...`
   - `warcraftlogs report-graph <code> --data-type damage-done --fight-id ...`
-  - `warcraftlogs report-rankings <code> --fight-id ... --player-metric dps`
+  - `warcraftlogs report-rankings <code> --fight-id ...` (raid fights rank healers on hps and everyone else on dps, Mythic+ runs rank everyone on score; `--player-metric` sets one metric for every role)
   - `warcraftlogs graphql --query <query|@path|->`
   - `warcraftlogs report-encounter <report-url-or-code>`
   - `warcraftlogs report-encounter-players <report-url-or-code>`
@@ -125,7 +125,8 @@ Best fits:
   - `warcraftlogs character-rankings us illidan Roguecane --zone-id 38 --difficulty 5 --metric dps --size 20`
   - `--spec-name` takes any provider's spelling or shorthand (`Beast Mastery`, `beast-mastery`, `hunter-beastmastery`, `bm`, `bm hunter`); Warcraft Logs would otherwise ignore it and return another spec's rankings, so on the retail site an unknown spec is `invalid_query` (exit 2); `--site classic`/`fresh` pass it through (Combat exists there)
 - encounter rankings for real boss/class/spec leaderboard queries:
-  - `warcraftlogs encounter-rankings --zone-id 46 --boss-id 3180 --difficulty 5 --class-name Druid --spec-name Balance --metric dps --top 10`
+  - `warcraftlogs encounter-rankings --zone-id 46 --boss-id 3180 --difficulty mythic --class-name Druid --spec-name Balance --limit 10`
+  - without `--metric` a Mythic+ zone is ranked on `playerscore`; in a raid zone a healer spec (Discipline, Holy, Mistweaver, Preservation, Restoration) is ranked on `hps` and every other spec on `dps`. `query.metric` names the metric that ranked the rows
   - `--class-name`/`--spec-name` take any provider's spelling or shorthand (`death-knight`, `Death Knight`, `dk`, `beast-mastery`, `bm`); the CLI sends Warcraft Logs' own `DeathKnight`/`BeastMastery`, and an unknown `--class-name` is `invalid_query` (exit 2) because Warcraft Logs would answer it unfiltered
   - Warcraft Logs needs a class with a spec here: a spec spelling that names one class (`bm hunter`, `fdk`, `ret`) supplies it, a bare `frost` or `holy` needs `--class-name`, and a spec of another class than `--class-name` is `invalid_query` (exit 2)
 - guild report listing:
@@ -153,12 +154,12 @@ Best fits:
   - `warcraftlogs graphql --query 'query Report($code: String!) { reportData { report(code: $code) { code title } } }' --report-code <code>`
   - `warcraftlogs graphql --query @./query.graphql --variables-json '{"code":"<code>"}' --operation-name Report`
 - sampled cross-report analytics:
-  - `warcraftlogs boss-kills --zone-id 53 --boss-id 3429 --difficulty 5 --top 10`
-  - `warcraftlogs top-kills --zone-id 53 --boss-name 'Coiled Altar' --difficulty 5 --top 5`
-  - `warcraftlogs spec-kill-samples --zone-id 53 --boss-id 3429 --difficulty 5 --spec-name Balance --top 5`
+  - `warcraftlogs boss-kills --zone-id 53 --boss-id 3429 --difficulty 5 --limit 10`
+  - `warcraftlogs top-kills --zone-id 53 --boss-name 'Coiled Altar' --difficulty 5 --limit 5`
+  - `warcraftlogs spec-kill-samples --zone-id 53 --boss-id 3429 --difficulty 5 --spec-name Balance --limit 5`
   - `warcraftlogs kill-time-distribution --zone-id 53 --boss-id 3429 --difficulty 5 --bucket-seconds 30`
-  - `warcraftlogs boss-spec-usage --zone-id 53 --boss-id 3429 --difficulty 5 --top 10`
-  - `warcraftlogs comp-samples --zone-id 53 --boss-id 3429 --difficulty 5 --top 5`
+  - `warcraftlogs boss-spec-usage --zone-id 53 --boss-id 3429 --difficulty 5 --limit 10`
+  - `warcraftlogs comp-samples --zone-id 53 --boss-id 3429 --difficulty 5 --limit 5`
   - `warcraftlogs ability-usage-summary --zone-id 53 --boss-id 3429 --difficulty 5 --ability-id 20473 --preview-limit 5`
 
 ## Notes
@@ -175,7 +176,7 @@ Best fits:
   - `--window-start-ms`
   - `--window-end-ms`
 - `report-encounter-casts` also includes additive `by_target` and `by_source_target` summaries for target-scoped cast analysis inside the selected fight/window; targets are named from report master data, including NPCs and pets, so bosses and adds come back by name; actor id `-1` is the no-target slot and Warcraft Logs names it `Environment`
-- `report-encounter-casts` requests at most `--limit` cast events (default 200, max 10000) in one page: a busy fight overflows that easily, so check `casts.truncated` before reading any `by_*` count as a whole-fight total, and raise `--limit` or narrow `--window-start-ms`/`--window-end-ms` until it is `false`
+- `report-encounter-casts` requests at most `--event-limit` cast events (default 200, max 10000; `--limit` still works) in one page: a busy fight overflows that easily, so check `casts.truncated` before reading any `by_*` count as a whole-fight total, and raise `--event-limit` or narrow `--window-start-ms`/`--window-end-ms` until it is `false`
 - cast counts in `report-encounter-casts` and `ability-usage-summary` count only completed `cast` events: `begincast`, `empowerstart` and `empowerend` are skipped, so an empowered spell counts once per press, a cast-time spell once per finished cast, and a channel once when it starts; `casts.event_count` is the raw page size and `casts.cast_count` the counted casts
 - `report-encounter-buffs` returns typed `buffs.preview` rows with `aura` (with identity contract) and reported buff-table fields (`reported_total_uptime`, `reported_total_uses`, `reported_bands`); the unfiltered table is aura-aggregate, so `source`/`target` come back null there — pass `--ability-id` or use `report-encounter-aura-summary` for per-actor rows; use `--preview-limit` to bound the row count and `buffs.preview_truncated` to detect truncation
 - `report-encounter-aura-summary` is the narrower aura workflow: it requires one explicit `--ability-id` and returns typed source rows with the buff-table fields Warcraft Logs reports (`reported_total_uptime`, `reported_total_uses`, `reported_bands`) for that selected fight/window
@@ -206,7 +207,10 @@ Best fits:
 - `report-events`, `report-table`, `report-graph`, `report-rankings`, and `report-player-details` fail with `not_found` (exit 4) when a slice names a fight the report does not have — an unknown `--fight-id`, or an `--encounter-id`/`--difficulty` the report never pulled; the rejected slice is echoed in the failure envelope's `query`, and a request that names no fight at all is left alone because an empty answer to it is a real answer
 - `report-player-details` additionally fails with `not_found` when its `--start-time`/`--end-time` window matches no fight, because a fight Warcraft Logs actually has always returns a roster, so an empty one means the slice missed rather than that the report has no players
 - a `--start-time` after `--end-time`, or after every selected fight ended, is `invalid_query` (exit 2) on `report-events`, `report-table`, `report-graph`, and `report-player-details`
-- a flag value Warcraft Logs' schema rejects (`--data-type nope`, `--view-by nope`, `--metric nope`) is `invalid_query` (exit 2); an unknown guild is `not_found` (exit 4)
+- `--difficulty` takes an id or a name: `lfr` = 1, `normal` = 3, `heroic` = 4, `mythic` = 5 (`warcraftlogs zone <id>` lists a zone's difficulties)
+- the enum flags (`--hostility-type`, `--kill-type`, `--view-by`, `--data-type`, `--compare`, `--timeframe`, `--leaderboard`, `--hard-mode-level`) list their values in `--help`; any other value is `invalid_argument` (exit 2) with the valid values, before a request. A `--metric nope` that Warcraft Logs' schema rejects is `invalid_query` (exit 2); an unknown guild is `not_found` (exit 4)
+- `--start-time`/`--end-time` on `reports`, `guild-reports` and the sampled commands take UNIX epoch milliseconds or an ISO-8601 date (`2026-09-01` or `20260901`); on `report-events`, `report-table`, `report-graph` and `report-player-details` they are milliseconds from the report's start
+- the row cap is `--limit`; `--top` still works on `encounter-rankings`, `character-rankings` and the sampled commands
 - `report-events` can still return `events: null` for some valid report slices; use it as a typed event-query surface, not a guarantee of non-empty data
 - `report-rankings` can legitimately return zero rows for a valid public report slice
 - `encounter-rankings` is the ranking surface to use when the user means boss/class/spec leaderboard results like "top Balance parses on Vanguard"

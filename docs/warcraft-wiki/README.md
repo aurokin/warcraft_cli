@@ -70,16 +70,20 @@ Search ranking, resolution, and extraction all key off a locally classified cont
 
 - Programming: `api_function`, `api_enum` (`Enum.*` pages), `ui_handler`, `event_reference`, `framework_page`,
   `xml_schema`, `cvar` (the `Console variables` list and every `CVar <name>` page), `api_changes`, `howto_programming`.
+  `framework_page` covers the API and XML index pages, every widget page (`UIOBJECT Button`), every FrameXML template
+  (`SecureActionButtonTemplate`), `TOC format` and `Secure Execution and Tainting`.
 - Reference: `system_reference`, `expansion_reference`, `class_reference`, `profession_reference`, `faction_reference`,
   `zone_reference`, `patch_reference`, `lore_reference`, `guide_reference`.
 - Everything else: `general_article`.
 
-`api` and `api-full` only accept `api_function`, `api_enum`, `framework_page`, `xml_schema`, `cvar`, and `api_changes` pages;
+`api` and `api-full` only accept `api_function`, `api_enum`, `framework_page`, `xml_schema`, `cvar`, `api_changes`, and
+`howto_programming` pages; any other page (a `general_article`) fails them with `not_found`, so open it with `article`.
 `event` and `event-full` only accept `event_reference`, `ui_handler`, and `framework_page` pages. Both surfaces fetch
 exact titles before they search: `api` tries `API:<query>` then `API <query>`, `event` tries `Event:<query>` then
 `UIHANDLER <query>`, and both fall back to the bare title. Only if all three miss does the query go to ranked search,
 and a query that matches nothing in the allowed families fails with `not_found` (exit 4) rather than returning the
-wrong page. A CVar name resolves through search to its `CVar <name>` page (`api autoLootDefault`), and
+wrong page. On programming pages `reference.arguments` is the top-level `Arguments`, `Payload` or `Base Parameters`
+section; a heading nested under another (CLEU's example `Payload`) is never read as the arguments. A CVar name resolves through search to its `CVar <name>` page (`api autoLootDefault`), and
 `api "CVar autoLootDefault"` fetches it directly. Event names may be written with underscores or spaces (`PLAYER_LOGIN`, `Event:PLAYER LOGIN`).
 
 Queries that lead with a family word are rewritten before search (`lore Jaina` -> `jaina`, `class druid` -> `druid`);

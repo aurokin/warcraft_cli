@@ -177,6 +177,7 @@ SEARCH_TYPE_HINTS: dict[str, set[str]] = {
     for row in ENTITY_TYPE_DEFS
     if row.search_hint_terms
 }
+ENTITY_TYPE_KEYS = frozenset(row.key for row in ENTITY_TYPE_DEFS)
 PARSER_ENTITY_TYPES = frozenset(row.key for row in ENTITY_TYPE_DEFS if row.parser_supported)
 RESOLVE_ENTITY_TYPES = frozenset(row.key for row in ENTITY_TYPE_DEFS if row.resolve_supported)
 HYDRATABLE_ENTITY_TYPES = frozenset(row.key for row in ENTITY_TYPE_DEFS if row.hydrate_supported)

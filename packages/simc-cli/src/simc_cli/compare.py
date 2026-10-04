@@ -11,7 +11,7 @@ from typing import Any
 from warcraft_core.paths import provider_data_root
 from warcraft_core.simc_json2 import dps_error, metric_mean
 
-from simc_cli.build_input import BuildSpec, build_profile_text
+from simc_cli.build_input import BuildSpec, build_profile_text, has_talent_data
 from simc_cli.repo import RepoPaths
 from simc_cli.run import CommandResult, repo_git_status, run_profile
 
@@ -31,10 +31,19 @@ DEFAULT_GEAR_DISCLOSURE = (
 )
 
 
-def default_gear_disclosures(profile_text: str) -> list[str]:
-    """``[DEFAULT_GEAR_DISCLOSURE]`` when the profile loads SimC's default gear (every harness does), else ``[]``."""
-    loads_default_gear = any(line.strip() == "load_default_gear=1" for line in profile_text.splitlines())
-    return [DEFAULT_GEAR_DISCLOSURE] if loads_default_gear else []
+DEFAULT_TALENTS_DISCLOSURE = (
+    "The profile sets load_default_talents=1, so SimC sims the spec's default talents and ignores any talents= line. "
+    "To sim a build, pass its talents to build-harness, which writes a harness without load_default_talents=1."
+)
+
+
+def profile_disclosures(profile_text: str) -> list[str]:
+    """What a profile's default gear or default talents mean for its results; ``[]`` when it loads neither."""
+    lines = {line.strip() for line in profile_text.splitlines()}
+    disclosures = [DEFAULT_GEAR_DISCLOSURE] if "load_default_gear=1" in lines else []
+    if "load_default_talents=1" in lines:
+        disclosures.append(DEFAULT_TALENTS_DISCLOSURE)
+    return disclosures
 
 
 @dataclass(slots=True)
@@ -154,6 +163,7 @@ def compare_apl_variants(
         iterations=iterations,
         threads=threads,
         validations=validations,
+        disclosures=profile_disclosures(Path(harness_path).expanduser().read_text()),
     )
 
 
@@ -165,6 +175,7 @@ def comparison_report(
     iterations: int,
     threads: int,
     validations: list[dict[str, Any]],
+    disclosures: list[str],
 ) -> dict[str, Any]:
     """Rank the simulated variants against the first one and state which numbers are sampled."""
     base = summaries[0]
@@ -181,6 +192,7 @@ def comparison_report(
             "note": ACTION_SAMPLE_NOTE,
         },
         "validations": validations,
+        "disclosures": disclosures,
         "base": _summary_payload(base),
         "ranking": [_summary_payload(row) for row in ranking],
         "comparisons": [_comparison_payload(base, row) for row in summaries[1:]],
@@ -247,7 +259,9 @@ def _render_harness_text(build_spec: BuildSpec, *, lines: list[str]) -> str:
     normalized_lines = _normalized_lines(lines)
     if not any(line.startswith("load_default_gear=") for line in normalized_lines):
         normalized_lines.append("load_default_gear=1")
-    if not any(line.startswith("load_default_talents=") for line in normalized_lines):
+    # SimC applies load_default_talents=1 over a talents= line, so only a harness with no build talents
+    # gets it; without it such a harness would sim an almost empty talent tree.
+    if not has_talent_data(build_spec) and not any(line.startswith("load_default_talents=") for line in normalized_lines):
         normalized_lines.append("load_default_talents=1")
     if not any(line.startswith("allow_experimental_specializations=") for line in normalized_lines):
         normalized_lines.append("allow_experimental_specializations=1")

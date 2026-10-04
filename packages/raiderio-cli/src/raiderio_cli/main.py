@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+import httpx
 import typer
 from warcraft_core.cli import command_path, emit, fail, guarded_run, install_common_callback
 from warcraft_core.provider import ProviderError
@@ -21,11 +22,14 @@ from raiderio_cli.analytics import (
     player_distribution_payload,
     player_sample_summary,
     player_snapshots,
+    resolve_season_input,
+    response_season,
     run_filters,
     sample_leaderboard_runs,
     sample_request,
     sample_summary,
     threshold_payload,
+    unknown_season_error,
     validated_metric,
 )
 from raiderio_cli.client import RAIDERIO_BASE_URL, FetchedJson, page_freshness, validated_region
@@ -59,8 +63,9 @@ _SEASON = typer.Option("", "--season", help="Season slug, or 'current' (the defa
 _REGION = typer.Option("world", "--region", help="world, us, eu, kr, tw, cn, or an alias such as na.")
 _DUNGEON = typer.Option("all", "--dungeon", help="Dungeon slug or all.")
 _AFFIXES = typer.Option("", "--affixes", help="Affix slug, fortified, tyrannical, current, or all.")
-_PAGE = typer.Option(0, "--page", min=0, help="20-run page of rankings to start from.")
+_PAGE = typer.Option(0, "--page", min=0, help="0-based 20-run page to start from: 0 = ranks 1-20, 1 = ranks 21-40.")
 _PAGES = typer.Option(None, "--pages", min=1, max=10, help="Most 20-run pages to read. Defaults to as many as --limit needs.")
+_EXPANSION_HELP = "Raider.IO expansion id: 11 = Midnight, 10 = The War Within, 9 = Dragonflight (Warcraft Logs uses 7 for Midnight)."
 _SAMPLE_LIMIT = typer.Option(100, "--limit", min=1, max=200, help="Maximum runs to retain in the sample.")
 _PLAYER_LIMIT = typer.Option(100, "--player-limit", min=1, max=500, help="Maximum player snapshots to retain after deduping.")
 _LEVEL_MIN = typer.Option(None, "--level-min", min=0, help="Retain only runs at or above this Mythic+ level.")
@@ -399,7 +404,7 @@ def leaderboard_raids(
     difficulty: str = typer.Option("mythic", "--difficulty", help="normal, heroic, or mythic."),
     region: str = typer.Option("world", "--region", help="world, us, eu, kr, tw, cn, or an alias such as na."),
     realm: str = typer.Option("", "--realm", help="Realm slug or display name to narrow to (requires a standard --region)."),
-    page: int = typer.Option(0, "--page", min=0, help="20-row page of rankings to start from."),
+    page: int = typer.Option(0, "--page", min=0, help="0-based 20-row page to start from: 0 = ranks 1-20, 1 = ranks 21-40."),
     limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum guild rows to return."),
 ) -> None:
     """Return the guild raid rankings for one raid and difficulty with freshness and citations.
@@ -454,7 +459,7 @@ def leaderboard_raids(
 def raids(
     ctx: typer.Context,
     expansion_id: int = typer.Option(
-        11, "--expansion-id", min=1, help="Expansion id: 11 = Midnight, 10 = The War Within, 9 = Dragonflight."
+        11, "--expansion-id", min=1, help=_EXPANSION_HELP
     ),
 ) -> None:
     """List the raid slugs (and encounter slugs) Raider.IO knows for one expansion.
@@ -501,7 +506,7 @@ def affixes(
 def dungeons(
     ctx: typer.Context,
     expansion_id: int = typer.Option(
-        11, "--expansion-id", min=1, help="Expansion id: 11 = Midnight, 10 = The War Within, 9 = Dragonflight."
+        11, "--expansion-id", min=1, help=_EXPANSION_HELP
     ),
 ) -> None:
     """List the Mythic+ seasons Raider.IO knows for one expansion, each with its dungeon pool and slugs.
@@ -542,6 +547,72 @@ def dungeons(
             "citations": {"static_data_url": f"{RAIDERIO_BASE_URL}/mythic-plus/static-data?expansion_id={expansion_id}"},
         }
     emit(ctx, raiderio_envelope(command=command_path(ctx), kind="mythic_plus_dungeons", payload=payload))
+
+
+# Raider.IO's season-cutoffs keys, highest percentile first.
+_CUTOFF_PERCENTILES = (("p999", "top 0.1%"), ("p990", "top 1%"), ("p900", "top 10%"), ("p750", "top 25%"), ("p600", "top 40%"))
+
+
+def _cutoff_population(block: Any) -> dict[str, Any] | None:
+    block = as_dict(block)
+    if not block:
+        return None
+    return {
+        "rating": block.get("quantileMinValue"),
+        "population_count": block.get("quantilePopulationCount"),
+        "total_population": block.get("totalPopulationCount"),
+    }
+
+
+def _cutoffs_payload(fetched: FetchedJson, *, season: str, region: str, cache_ttl_seconds: int) -> dict[str, Any]:
+    """The ``raiderio cutoffs`` payload: the lowest rating inside each top percentile, overall and per faction."""
+    cutoffs = as_dict(fetched.payload.get("cutoffs"))
+    rows = [
+        {
+            "percentile": label,
+            "quantile": as_dict(as_dict(cutoffs.get(key)).get("all")).get("quantile"),
+            "all": _cutoff_population(as_dict(cutoffs.get(key)).get("all")),
+            "horde": _cutoff_population(as_dict(cutoffs.get(key)).get("horde")),
+            "alliance": _cutoff_population(as_dict(cutoffs.get(key)).get("alliance")),
+        }
+        for key, label in _CUTOFF_PERCENTILES
+        if isinstance(cutoffs.get(key), dict)
+    ]
+    return {
+        "query": {"season": season, "region": region},
+        "updated_at": cutoffs.get("updatedAt"),
+        "count": len(rows),
+        "cutoffs": rows,
+        "freshness": page_freshness(fetched, cache_ttl_seconds=cache_ttl_seconds),
+        "citations": {"cutoffs_url": f"{RAIDERIO_BASE_URL}/mythic-plus/season-cutoffs?season={season}&region={region}"},
+    }
+
+
+@app.command("cutoffs")
+def cutoffs(
+    ctx: typer.Context,
+    season: str = _SEASON,
+    region: str = typer.Option("us", "--region", help="us, eu, kr, tw, cn, or an alias such as na."),
+) -> None:
+    """Return the Mythic+ rating it takes to be in the top 0.1%, 1%, 10%, 25% and 40% of one region, per faction.
+
+    This is player rating (the profile's Mythic+ score), unlike ``threshold``, which works on single runs.
+    """
+    with _command_errors(ctx), open_client() as client:
+        region = validated_region(region, allowed=("us", "eu", "kr", "tw", "cn"))
+        # The endpoint has no current-season default, so the current slug comes from a leaderboard page.
+        season_slug = resolve_season_input(season) or response_season(client.mythic_plus_runs().payload)
+        if not season_slug:
+            raise ProviderError("upstream_error", "Raider.IO did not name its current season; pass --season.")
+        try:
+            fetched = client.season_cutoffs(season=season_slug, region=region)
+        except httpx.HTTPStatusError as exc:
+            # Raider.IO answers an unknown season here with HTTP 404 "Could not find data for season <slug>".
+            if exc.response.status_code != 404:
+                raise
+            raise unknown_season_error(season_slug, exc) from exc
+        payload = _cutoffs_payload(fetched, season=season_slug, region=region, cache_ttl_seconds=client.mythic_plus_runs_ttl_seconds)
+    emit(ctx, raiderio_envelope(command=command_path(ctx), kind="mythic_plus_cutoffs", payload=payload))
 
 
 @sample_app.command("mythic-plus-runs")

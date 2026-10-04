@@ -134,6 +134,26 @@ def test_addon_not_found_for_empty_search(monkeypatch: pytest.MonkeyPatch) -> No
     assert payload["error"]["code"] == "addon_not_found"
 
 
+def test_a_slug_miss_lists_the_addons_a_name_search_finds(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `curseforge addon weakauras` dead-ended: the real slug is weakauras-2 and search is a stub.
+    searched: list[dict[str, Any]] = []
+
+    def _fake(client: Any, url: str, *, method: str = "GET", params: dict[str, Any] | None = None, **kwargs: Any) -> _FakeResponse:
+        searched.append(dict(params or {}))
+        if params and "searchFilter" in params:
+            return _FakeResponse({"data": [{"id": 65387, "slug": "weakauras-2", "name": "WeakAuras"}]}, url)
+        return _FakeResponse({"data": []}, url)
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["addon", "weakauras"])
+    assert result.exit_code == 4
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "addon_not_found"
+    assert error["details"]["candidates"] == [{"slug": "weakauras-2", "id": 65387, "name": "WeakAuras"}]
+    assert "weakauras-2" in error["message"]
+    assert searched[-1]["searchFilter"] == "weakauras"
+
+
 def test_addon_not_found_for_mod_404(monkeypatch: pytest.MonkeyPatch) -> None:
     def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
         request = httpx.Request("GET", url)
