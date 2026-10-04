@@ -28,7 +28,7 @@ Real providers with narrower surfaces. They are expected to work and stay covere
 |----------|-------|
 | `raiderio` | character/guild profiles plus sample-backed Mythic+ analytics |
 | `warcraft-wiki` | MediaWiki reference, typed API/event lookups, article bundles |
-| `icy-veins` | guide extraction, export, and local guide query |
+| `icy-veins` | guide extraction, export, local guide query, and calculator-to-import-string conversion |
 | `method` | guide extraction, export, and local guide query |
 | `lorrgs` | public API, no auth; top-parse cooldown timelines and composition rankings |
 
@@ -39,7 +39,7 @@ Thin or unproven surfaces. Do not build a workflow on them without checking `doc
 | Provider | Status |
 |----------|--------|
 | `raidbots` | public report consumption and SimC input handoff; no discovery surface |
-| `blizzard` | verified live for us/eu/kr/tw (2026-09-13); thin command surface, `cn` unreachable |
+| `blizzard` | verified live for us/eu/kr/tw; realms/items, profiles, PvP, collections and auction/commodity snapshots; `cn` unreachable, search/resolve deferred |
 | `curseforge` | verified live (2026-09-13); thin command surface, addon metadata is at the edge of scope |
 
 ## Retired
@@ -49,8 +49,25 @@ Thin or unproven surfaces. Do not build a workflow on them without checking `doc
 ## Next
 
 - Ship the wheel install path end to end: attach the built wheel to each GitHub release and verify `pipx install <wheel-url>` and `uvx --from <wheel-url> warcraft doctor` on a clean machine.
-- Decide whether Blizzard and CurseForge earn the `supported` tier now that both are verified live, or whether CurseForge leaves the product; the surfaces are thin either way.
+- Decide whether Blizzard's expanded typed reads earn the `supported` tier while discovery remains deferred. Decide separately whether CurseForge's narrow addon reads earn that tier or leave the product.
 - Finish the expansion story for the deferred surfaces: Warcraft Logs classic/fresh cache isolation and `simc` expansion semantics.
+
+## Implemented, awaiting release
+
+The current `[Unreleased]` changes complete three previously deferred capabilities:
+
+- Blizzard PvP seasons, leaderboards and character ratings; character collections; connected-realm
+  auction and retail commodity snapshots with source freshness. Classic trade-good prices remain
+  unavailable through Blizzard, and price history is still outside this provider's scope.
+- Icy Veins calculator builds converted into import strings for guide-to-SimC handoffs, with source
+  URLs and class/spec identity. PvP selections remain in the calculator URL because import strings
+  cannot carry them.
+- Wowhead classic calculator inspection for tree points and MoP tier choices. SimC continues to
+  decode retail builds only; glyphs, runes and selection-order segments remain raw.
+
+These changes do not promote providers or un-gate the candidates below. Lorrgs' conservative boss
+composition resolution also keeps queries with extra words unresolved without changing wrapper
+ranking policy.
 
 ## Deferred Candidates
 
@@ -64,7 +81,7 @@ Un-gate when **both** are true and recorded here:
 
 First slice if un-gated: `doctor` + fetch one public plan + export/query a local plan bundle, read-only, following [foundation/SAFE_ANALYTICS_RULES.md](foundation/SAFE_ANALYTICS_RULES.md).
 
-**Undermine Exchange** (`https://undermine.exchange/`) — would cover auction pricing, commodity/item market history, and trade-good discovery, a genuine gap. Deferred because the public site was under maintenance at decision time with no confirmed stable page or documented data endpoint, and market data is time-sensitive enough that cache design is a real cost to take on speculatively.
+**Undermine Exchange** (`https://undermine.exchange/`) — would cover commodity/item market history and trade-good discovery. Blizzard now covers current retail auction and commodity snapshots, but history and Classic trade-good prices remain gaps. Deferred because the public site was under maintenance at decision time with no confirmed stable page or documented data endpoint, and market data is time-sensitive enough that cache design is a real cost to take on speculatively.
 
 Un-gate when **both** are true and recorded here:
 1. the public surface is stable again (out of maintenance), and

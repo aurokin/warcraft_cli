@@ -1,0 +1,107 @@
+{
+ "_links": {
+  "self": {
+   "href": "https://us.api.blizzard.com/data/wow/pvp-season/42/pvp-leaderboard/3v3?namespace=dynamic-us"
+  }
+ },
+ "season": {
+  "key": {
+   "href": "https://us.api.blizzard.com/data/wow/pvp-season/42?namespace=dynamic-us"
+  },
+  "id": 42
+ },
+ "name": "3v3",
+ "bracket": {
+  "id": 1,
+  "type": "ARENA_3v3"
+ },
+ "entries": [
+  {
+   "character": {
+    "name": "Promisedland",
+    "id": 203590047,
+    "realm": {
+     "key": {
+      "href": "https://us.api.blizzard.com/data/wow/realm/76?namespace=dynamic-us"
+     },
+     "id": 76,
+     "slug": "sargeras"
+    }
+   },
+   "faction": {
+    "type": "HORDE"
+   },
+   "rank": 1,
+   "rating": 2913,
+   "season_match_statistics": {
+    "played": 166,
+    "won": 123,
+    "lost": 43
+   },
+   "tier": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/pvp-tier/14?namespace=static-12.1.0_68914-us"
+    },
+    "id": 14
+   }
+  },
+  {
+   "character": {
+    "name": "Hyttzdwag",
+    "id": 249677990,
+    "realm": {
+     "key": {
+      "href": "https://us.api.blizzard.com/data/wow/realm/1566?namespace=dynamic-us"
+     },
+     "id": 1566,
+     "slug": "area-52"
+    }
+   },
+   "faction": {
+    "type": "ALLIANCE"
+   },
+   "rank": 2,
+   "rating": 2888,
+   "season_match_statistics": {
+    "played": 298,
+    "won": 162,
+    "lost": 136
+   },
+   "tier": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/pvp-tier/14?namespace=static-12.1.0_68914-us"
+    },
+    "id": 14
+   }
+  },
+  {
+   "character": {
+    "name": "Canetoad",
+    "id": 236104429,
+    "realm": {
+     "key": {
+      "href": "https://us.api.blizzard.com/data/wow/realm/16?namespace=dynamic-us"
+     },
+     "id": 16,
+     "slug": "kelthuzad"
+    }
+   },
+   "faction": {
+    "type": "ALLIANCE"
+   },
+   "rank": 3,
+   "rating": 2869,
+   "season_match_statistics": {
+    "played": 150,
+    "won": 90,
+    "lost": 60
+   },
+   "tier": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/pvp-tier/14?namespace=static-12.1.0_68914-us"
+    },
+    "id": 14
+   }
+  }
+ ]
+}

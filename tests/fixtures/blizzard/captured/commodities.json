@@ -1,0 +1,63 @@
+{
+ "_links": {
+  "self": {
+   "href": "https://us.api.blizzard.com/data/wow/auctions/commodities?namespace=dynamic-us"
+  }
+ },
+ "auctions": [
+  {
+   "id": 1627208352,
+   "item": {
+    "id": 198161
+   },
+   "quantity": 77,
+   "unit_price": 29200,
+   "time_left": "SHORT"
+  },
+  {
+   "id": 1627628494,
+   "item": {
+    "id": 198161
+   },
+   "quantity": 5,
+   "unit_price": 499999400,
+   "time_left": "LONG"
+  },
+  {
+   "id": 1631941303,
+   "item": {
+    "id": 198161
+   },
+   "quantity": 200,
+   "unit_price": 455500,
+   "time_left": "VERY_LONG"
+  },
+  {
+   "id": 1632372169,
+   "item": {
+    "id": 198161
+   },
+   "quantity": 57,
+   "unit_price": 29200,
+   "time_left": "LONG"
+  },
+  {
+   "id": 1627180461,
+   "item": {
+    "id": 201319
+   },
+   "quantity": 6,
+   "unit_price": 19595100,
+   "time_left": "SHORT"
+  },
+  {
+   "id": 1627685412,
+   "item": {
+    "id": 201319
+   },
+   "quantity": 2,
+   "unit_price": 499999400,
+   "time_left": "LONG"
+  }
+ ]
+}

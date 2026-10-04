@@ -252,21 +252,33 @@ def test_astro_pvp_talents_fixture_reads_builds_from_the_talent_calculator_embed
     assert build["build_identity"]["class_spec_identity"]["identity"] == {"actor_class": "warrior", "spec": "arms"}
 
 
-def test_calculator_embeds_are_read_on_pvp_pages_only() -> None:
-    """PvE pages embed the calculator too, for builds simc cannot take; their import strings are the build evidence."""
-    html = (
-        '<div class="guide-page-content">'
-        '<div id="midnight-skill-builder-1"></div>'
-        '<script>const args = ["midnight-skill-builder-1", "#OE-HIKJ-JgKG-AAAA-RSOa-"]; new MidnightTalentCalculator(...args);</script>'
-        "</div>"
-    )
-    pve_url = "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-mythic-plus-tips"
-    pvp_url = "https://www.icy-veins.com/wow/mistweaver-monk-pvp-talents-and-builds"
+def test_calculator_embeds_are_read_on_pve_pages_and_named_by_their_section() -> None:
+    """Synthetic, after fire-mage-pve-dps-spec-builds-talents and mistweaver-monk-leveling-guide.
 
-    assert parse_guide_page(html, source_url=pve_url)["build_references"] == []
-    (build,) = parse_guide_page(html, source_url=pvp_url)["build_references"]
-    assert build["label"] is None
-    assert build["build_identity"]["class_spec_identity"]["identity"] == {"actor_class": "monk", "spec": "mistweaver"}
+    A builds page's filter widget names each build by the section sharing its ``data-filter-index``;
+    an embed in neither a tab nor the widget takes the heading of the section it sits in.
+    """
+
+    def embed(builder: str, code: str) -> str:
+        return f'<div id="{builder}"></div><script>const args = ["{builder}", "#{code}"]; new MidnightTalentCalculator(...args);</script>'
+
+    html = (
+        '<div class="guide-page-content"><div class="talent-calculator-filters">'
+        '<div class="talent-calculator-filters-content">'
+        '<div class="filter-content-wrapper" data-filter-index="0-0"><h3>Sunfury Raid Talents</h3></div>'
+        '<div class="filter-content-wrapper" data-filter-index="1-0"><h3>Frostfire Raid Talents</h3></div></div>'
+        '<div class="talent-calculator-filters-trees">'
+        f'<div class="talent-calculator-wrapper" data-filter-index="1-0">{embed("builder-1", "OE-HIKJ-JgKG-AAAA-RSOa-")}</div>'
+        "</div></div>"
+        f"<h2>Leveling Talents</h2><div>{embed('builder-2', 'OE-HIKJ-JgKH-AAAA-RSOa-')}</div></div>"
+    )
+    builds = parse_guide_page(html, source_url="https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-spec-builds-talents")["build_references"]
+
+    assert [(row["reference_type"], row["label"]) for row in builds] == [
+        ("icy_veins_talent_calc_url", "Frostfire Raid Talents"),
+        ("icy_veins_talent_calc_url", "Leveling Talents"),
+    ]
+    assert builds[0]["build_identity"]["class_spec_identity"]["identity"] == {"actor_class": "monk", "spec": "mistweaver"}
 
 
 def test_calculator_builds_take_their_tab_by_position_and_share_one_row_per_hash() -> None:

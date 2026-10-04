@@ -1,0 +1,120 @@
+{
+ "_links": {
+  "self": {
+   "href": "https://us.api.blizzard.com/profile/wow/character/malganis/aurow/collections/pets?namespace=profile-us"
+  }
+ },
+ "pets": [
+  {
+   "species": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/pet/120?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Winter's Little Helper",
+    "id": 120
+   },
+   "level": 1,
+   "quality": {
+    "type": "UNCOMMON",
+    "name": "Uncommon"
+   },
+   "stats": {
+    "breed_id": 13,
+    "health": 151,
+    "power": 10,
+    "speed": 10
+   },
+   "name": "Baifer",
+   "creature_display": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/media/creature-display/15663?namespace=static-12.1.0_68914-us"
+    },
+    "id": 15663
+   },
+   "id": 382426799
+  },
+  {
+   "species": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/pet/1454?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Murkidan",
+    "id": 1454
+   },
+   "level": 25,
+   "quality": {
+    "type": "RARE",
+    "name": "Rare"
+   },
+   "stats": {
+    "breed_id": 3,
+    "health": 1481,
+    "power": 276,
+    "speed": 276
+   },
+   "is_favorite": true,
+   "creature_display": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/media/creature-display/64589?namespace=static-12.1.0_68914-us"
+    },
+    "id": 64589
+   },
+   "id": 382426896
+  },
+  {
+   "species": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/pet/1624?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Abyssius",
+    "id": 1624
+   },
+   "level": 25,
+   "quality": {
+    "type": "RARE",
+    "name": "Rare"
+   },
+   "stats": {
+    "breed_id": 4,
+    "health": 1400,
+    "power": 325,
+    "speed": 260
+   },
+   "creature_display": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/media/creature-display/61888?namespace=static-12.1.0_68914-us"
+    },
+    "id": 61888
+   },
+   "id": 382426805
+  },
+  {
+   "species": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/pet/1624?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Abyssius",
+    "id": 1624
+   },
+   "level": 1,
+   "quality": {
+    "type": "RARE",
+    "name": "Rare"
+   },
+   "stats": {
+    "breed_id": 4,
+    "health": 152,
+    "power": 13,
+    "speed": 10
+   },
+   "creature_display": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/media/creature-display/61888?namespace=static-12.1.0_68914-us"
+    },
+    "id": 61888
+   },
+   "id": 382426898
+  }
+ ],
+ "unlocked_battle_pet_slots": 3
+}

@@ -4776,6 +4776,7 @@ def test_simc_inspect_rejects_a_binary_file(tmp_path: Path) -> None:
     [
         "https://www.wowhead.com/mop-classic/talent-calc/mage/frost/213221",
         "https://www.wowhead.com/cata/talent-calc/rogue/combat/abc123",
+        "https://www.wowhead.com/forever/talent-calc/warrior/v2-3",
         "wowhead.com/classic/talent-calc/mage/frost/CYQAAA",
     ],
 )

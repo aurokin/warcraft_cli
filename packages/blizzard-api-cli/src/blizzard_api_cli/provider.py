@@ -39,8 +39,8 @@ from blizzard_api_cli.client import (
     verification_note,
 )
 
-# Blizzard ships as an experimental provider: the surface is still small (three reads plus doctor)
-# and search/resolve are stubs. The per-region verification posture lives in client.VERIFIED_REGIONS
+# Blizzard ships as an experimental provider: the surface is explicit reads only and search/resolve
+# are stubs. The per-region verification posture lives in client.VERIFIED_REGIONS
 # and client.verification_note(), which --help, doctor and every payload all quote.
 TIER = "experimental"
 
@@ -105,7 +105,7 @@ def _region_payload(auth: BlizzardAuthConfig) -> dict[str, Any]:
 
 def _cache_payload() -> dict[str, Any]:
     try:
-        settings, static_ttl, dynamic_ttl = load_blizzard_cache_settings_from_env()
+        settings, static_ttl, dynamic_ttl, snapshot_ttl = load_blizzard_cache_settings_from_env()
     except ValueError as exc:
         # Every read fails on this config, so doctor must not report the provider ready.
         return {"available": False, "error": {"code": "invalid_cache_config", "message": str(exc)}}
@@ -115,7 +115,7 @@ def _cache_payload() -> dict[str, Any]:
         "cache_dir": str(settings.cache_dir),
         "redis_url": redacted_redis_url(settings.redis_url),
         "prefix": settings.prefix,
-        "ttls": {"static": static_ttl, "dynamic_and_profile": dynamic_ttl},
+        "ttls": {"static": static_ttl, "dynamic_and_profile": dynamic_ttl, "snapshot": snapshot_ttl},
         **cache_backend_health(settings),
     }
 
@@ -147,9 +147,10 @@ def doctor_envelope() -> Envelope:
             },
             "cache": cache,
             "notes": [
-                "Experimental tier: the read surface is small (realm, item, character) and "
-                "search/resolve are stubs.",
-                "Game Data (realm, item) and Profile (character) commands ship with live OAuth "
+                "Experimental tier: the surface is explicit reads (realm, item, character, PvP, "
+                "collections, auctions) and search/resolve are stubs.",
+                "Game Data (realm, item, pvp-season, pvp-leaderboard, auctions, commodities) and Profile "
+                "(character, pvp-character, collections) commands ship with live OAuth "
                 "client-credentials auth and region/namespace routing.",
                 verification_note(),
             ],

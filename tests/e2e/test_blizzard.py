@@ -3,7 +3,8 @@
 These run against the real Battle.net Game Data and Profile APIs with the OAuth client credentials
 in ``~/.config/warcraft/providers``. The identifiers come from tests/e2e/pins.py because Blizzard
 publishes no index to discover them from, and all three (a 2005 item, a large realm, the
-maintainer's character) are stable.
+maintainer's character) are stable. PvP seasons, leaderboard players and auction items age out, so
+those journeys discover them at run time.
 """
 
 from __future__ import annotations
@@ -215,6 +216,116 @@ def test_character_section_reads_a_linked_sub_resource(require) -> None:
     assert isinstance(result.data["honor_level"], int)
 
 
+def test_pvp_season_names_the_current_season_its_brackets_and_cutoffs(require) -> None:
+    require("blizzard-api")
+    result = run("blizzard", "pvp-season")
+    assert result.payload["kind"] == "pvp_season"
+    _assert_the_namespace_reached_the_api(result, "dynamic-us")
+    data = result.data
+    assert data["season_id"] == data["current_season_id"] == data["seasons"][0], result.describe()
+    assert {"2v2", "3v3", "rbg", "shuffle-overall"} <= set(data["brackets"]), result.describe()
+    gladiator = [row for row in data["rewards"] if row["bracket"] == "ARENA_3v3"]
+    assert gladiator and all(isinstance(row["rating_cutoff"], int) for row in gladiator), result.describe()
+    # Shuffle cutoffs are per spec, and spec names repeat across classes, so each row names the spec id.
+    assert all(isinstance(row["specialization_id"], int) for row in data["rewards"] if row["bracket"] == "SHUFFLE")
+    assert data["freshness"]["last_modified"].endswith("Z"), result.describe()
+
+
+def test_a_leaderboard_leader_reads_back_through_pvp_character(require) -> None:
+    """The top 3v3 player, discovered at run time, has a 3v3 bracket in the same season on its own profile."""
+    require("blizzard-api")
+    board = run("blizzard", "pvp-leaderboard", "3v3", "--limit", "5")
+    data = board.data
+    assert board.payload["kind"] == "pvp_leaderboard"
+    assert (data["returned"], data["truncated"]) == (5, True), board.describe()
+    assert [row["rank"] for row in data["entries"]] == sorted(row["rank"] for row in data["entries"])
+    ratings = [row["rating"] for row in data["entries"]]
+    assert ratings == sorted(ratings, reverse=True), board.describe()
+    # Blizzard rebuilds leaderboards about hourly; a day-old Last-Modified means a stale snapshot.
+    assert 0 <= data["freshness"]["age_seconds"] < 86400, board.describe()
+
+    leader = data["entries"][0]
+    profile = run("blizzard", "pvp-character", "us", leader["realm"], leader["name"])
+    _assert_the_namespace_reached_the_api(profile, "profile-us")
+    assert profile.data["character"]["id"] == leader["character_id"], profile.describe()
+    arena = next((row for row in profile.data["brackets"] if row["bracket"] == "3v3"), None)
+    assert arena is not None, profile.describe()
+    assert arena["season_id"] == data["season_id"], profile.describe()
+    assert isinstance(arena["rating"], int) and arena["season"]["played"] >= 1
+
+
+def test_classic_pvp_leaderboards_route_to_the_classic_namespace(require) -> None:
+    require("blizzard-api")
+    board = run("blizzard", "pvp-leaderboard", "3v3", "--classic", "--limit", "1")
+    _assert_the_namespace_reached_the_api(board, "dynamic-classic-us")
+    assert board.data["bracket_type"] == "ARENA_3v3", board.describe()
+    leader = board.data["entries"][0]
+    assert leader["rank"] == 1, board.describe()
+
+    # Classic pvp-summary leaves out brackets the character has rated, so the leader's 3v3 rating
+    # is only there because pvp-character probes the fixed Classic brackets.
+    profile = run("blizzard", "pvp-character", leader["realm"], leader["name"], "--classic")
+    _assert_the_namespace_reached_the_api(profile, "profile-classic-us")
+    arena = next((row for row in profile.data["brackets"] if row["bracket"] == "3v3"), None)
+    assert arena is not None and arena["season_id"] == board.data["season_id"], profile.describe()
+
+    anniversary = run("blizzard", "pvp-leaderboard", "2v2", "--game-version", "classic-anniversary", "--limit", "1")
+    _assert_the_namespace_reached_the_api(anniversary, "dynamic-classicann-us")
+    assert anniversary.data["bracket_type"] == "ARENA_2v2", anniversary.describe()
+
+
+def test_collections_count_the_character_and_match_filters_by_name(require) -> None:
+    require("blizzard-api")
+    result = run("blizzard", "collections", GUILD_REALM, CHARACTER_NAME, "--limit", "1")
+    assert result.payload["kind"] == "collections"
+    _assert_the_namespace_reached_the_api(result, "profile-us")
+    collections = result.data["collections"]
+    assert list(collections) == ["mounts", "pets", "toys", "heirlooms", "transmogs"]
+    for kind in ("mounts", "pets", "toys"):
+        assert collections[kind]["count"] > 1 and collections[kind]["truncated"] is True, result.describe()
+    assert collections["transmogs"]["appearance_count"] == sum(collections["transmogs"]["appearances_by_slot"].values())
+    assert collections["transmogs"]["appearance_count"] > 0, result.describe()
+
+    first_mount = collections["mounts"]["items"][0]
+    matched = run("blizzard", "collections", GUILD_REALM, CHARACTER_NAME, "--kind", "mounts", "--match", first_mount["name"])
+    assert list(matched.data["collections"]) == ["mounts"]
+    assert first_mount in matched.data["collections"]["mounts"]["items"], matched.describe()
+    assert matched.data["collections"]["mounts"]["count"] == collections["mounts"]["count"]
+
+
+def test_commodities_summarize_the_region_market_with_its_snapshot_time(require) -> None:
+    require("blizzard-api")
+    top = run("blizzard", "commodities", "--limit", "3")
+    assert top.payload["kind"] == "commodities"
+    _assert_the_namespace_reached_the_api(top, "dynamic-us")
+    assert top.data["auction_count"] > 1000 and top.data["item_count"] > 100, top.describe()
+    # The market is rebuilt about hourly; the freshness block is Blizzard's own Last-Modified.
+    assert 0 <= top.data["freshness"]["age_seconds"] < 86400, top.describe()
+    leader = top.data["items"][0]
+    assert leader["auctions"] >= top.data["items"][-1]["auctions"]
+    assert leader["min_unit_price"] <= leader["median_unit_price"]
+
+    filtered = run("blizzard", "commodities", "--item-id", str(leader["item_id"]), "--item-id", str(ITEM_ID))
+    assert filtered.data["items"] == [leader], filtered.describe()
+    # Thunderfury is not a commodity, so it can never be on the region-wide market.
+    assert filtered.data["not_listed"] == [ITEM_ID]
+
+
+def test_realm_auctions_read_the_connected_realm_the_realm_record_names(require) -> None:
+    require("blizzard-api")
+    realm = run("blizzard", "realm", REALM_SLUG)
+    auctions = run("blizzard", "auctions", REALM_SLUG, "--limit", "2")
+    assert auctions.payload["kind"] == "auctions"
+    assert f"/connected-realm/{auctions.data['connected_realm_id']}?" in realm.data["connected_realm"]["href"], auctions.describe()
+    assert auctions.payload["provenance"]["source_url"].split("?")[0].endswith(f"/connected-realm/{auctions.data['connected_realm_id']}/auctions")
+    assert auctions.data["returned"] == 2 and auctions.data["auction_count"] > 100, auctions.describe()
+    assert auctions.data["freshness"]["last_modified"].endswith("Z")
+
+    classic = run("blizzard", "auctions", CLASSIC_CHARACTER[1], "--classic", "--limit", "1")
+    _assert_the_namespace_reached_the_api(classic, "dynamic-classic-us")
+    assert classic.data["realm"] == CLASSIC_CHARACTER[1] and classic.data["item_count"] >= 1, classic.describe()
+
+
 def test_search_and_resolve_are_structured_coming_soon_stubs(require) -> None:
     require("blizzard-api")
     for command in ("search", "resolve"):
@@ -270,6 +381,11 @@ def test_bad_routing_flags_are_usage_errors_refused_before_the_network(require) 
         expect=EXIT_USAGE, error_code="invalid_query", env=offline,
     )
     assert "pvp-summary" in section.payload["error"]["message"]
+
+    commodities = run("blizzard", "commodities", "--classic", expect=EXIT_USAGE, error_code="unsupported_game_version", env=offline)
+    assert "retail-only" in commodities.payload["error"]["message"]
+    run("blizzard", "pvp-leaderboard", "../3v3", expect=EXIT_USAGE, error_code="invalid_query", env=offline)
+    run("blizzard", "collections", GUILD_REALM, CHARACTER_NAME, "--kind", "bogus", expect=EXIT_USAGE, error_code="invalid_query", env=offline)
 
     # A blank realm would fetch the realm index as if it were a realm.
     for args in (("realm", " "), ("character", " ", CHARACTER_NAME), ("character", GUILD_REALM, " ")):

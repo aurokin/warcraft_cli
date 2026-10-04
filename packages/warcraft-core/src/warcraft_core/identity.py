@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any, Literal, TypeGuard
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import urlparse
 
 from warcraft_core.expansions import wowhead_path_prefixes
 from warcraft_core.wow_normalization import normalized_text
@@ -20,6 +21,14 @@ IdentityConfidence = Literal["none", "low", "medium", "high"]
 TalentTransportStatus = Literal["unknown", "raw_only", "validated", "exact"]
 WOWHEAD_TALENT_CALC_SEGMENT = "talent-calc"
 WOWHEAD_EXPANSION_PREFIXES = wowhead_path_prefixes()
+# Wowhead calculator path prefixes: every expansion site's, plus WoW Forever's (no expansion profile yet).
+WOWHEAD_TALENT_CALC_PREFIXES = WOWHEAD_EXPANSION_PREFIXES | {"forever"}
+# Calculators whose paths use the retail spec table; classic ones have their own (MoP Classic's rogue ``combat``).
+RETAIL_TALENT_CALCULATORS = frozenset({"retail", "ptr", "beta"})
+# Calculators that pick one talent per tier and carry a glyph segment after the build code.
+TIERED_TALENT_CALCULATORS = frozenset({"mop-classic"})
+# The calculators SimC and build references read: retail and the expansion sites (not WoW Forever).
+_EXPANSION_SITE_CALCULATORS = WOWHEAD_EXPANSION_PREFIXES | {"retail"}
 # Spec slugs as normalize_spec_name spells Wowhead's talent-calc path segments (beast-mastery ->
 # beast_mastery). A talent-calc path only names a spec when its third segment is one of these.
 WOW_SPECS_BY_CLASS: dict[str, frozenset[str]] = {
@@ -76,17 +85,6 @@ def is_transport_int(value: Any) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _split_reference_path_parts(path: str) -> list[str] | None:
-    parts = path.split("/")
-    if parts and parts[0] == "":
-        parts = parts[1:]
-    if parts and parts[-1] == "":
-        parts = parts[:-1]
-    if any(part == "" for part in parts):
-        return None
-    return parts
-
-
 def normalize_actor_class(value: str | None) -> str | None:
     text = _clean_text(value)
     if text is None:
@@ -121,44 +119,180 @@ def normalize_ability_name(value: str | None) -> str | None:
     return normalized.replace(" ", "_") if normalized else None
 
 
-def parse_wowhead_talent_calc_ref(ref: str) -> dict[str, str | None] | None:
-    candidate = _clean_text(ref)
-    if candidate is None:
-        return None
-    lowered = candidate.lower()
-    if "://" not in candidate and (lowered.startswith("wowhead.com/") or lowered.startswith("www.wowhead.com/")):
-        candidate = f"https://{candidate}"
+_TALENT_CALC_EMPTY_SEGMENTS = "talent-calc reference must not include empty path segments."
+_TALENT_CALC_LAYOUT = (
+    "Talent calculator URL must use /talent-calc/<class>/<spec>[/<build-code>] or "
+    "/talent-calc/<class>/<build-code> with a WoW class."
+)
+# A spec path segment (``balance``, ``beast-mastery``); build codes carry digits or capitals.
+_TALENT_CALC_SPEC_SEGMENT = re.compile(r"[a-z]+(?:-[a-z]+)*")
+
+
+@dataclass(frozen=True, slots=True)
+class WowheadTalentCalcRef:
+    """A Wowhead talent calculator reference split into its calculator, class, spec and build code.
+
+    ``expansion`` is the calculator: an expansion key, or ``forever`` for WoW Forever. Classic-era
+    paths name no spec (``/classic/talent-calc/warrior/<code>``), so ``spec`` is None there.
+    ``extra_segment`` is what follows the build code: a classic calculator's talent selection order
+    or a Mists of Pandaria Classic glyph code. ``explicit_path`` is False for a shorthand ref
+    (``druid/balance/<code>``) that never named ``/talent-calc``.
+    """
+
+    reference_url: str
+    expansion: str
+    class_slug: str
+    actor_class: str
+    spec_slug: str | None
+    spec: str | None
+    build_code: str | None
+    extra_segment: str | None
+    path_segments: tuple[str, ...]
+    explicit_path: bool
+
+
+@dataclass(frozen=True, slots=True)
+class WowheadTalentCalcRefError:
+    """Why a ref is no Wowhead talent calculator reference.
+
+    ``targets_talent_calc`` is True when the ref still aims at a talent calculator (a Wowhead URL
+    whose path holds ``talent-calc``, or a shorthand that starts with a class), so a router hands it
+    to Wowhead to report ``message`` rather than reading it as something else.
+    """
+
+    message: str
+    targets_talent_calc: bool
+
+
+def _talent_calc_segments(
+    expansion: str, segments: list[str], *, spec_aliases: frozenset[str] = frozenset()
+) -> tuple[str | None, str | None, str | None] | str:
+    """Spec slug, build code and extra segment from the path segments after the class, or why they do not fit.
+
+    A spec-shaped first segment is a spec (``balance``); otherwise it is the build code, which a
+    classic calculator may follow with its selection order or MoP Classic with its glyph code.
+    """
+    slot, *tail = segments
+    if _TALENT_CALC_SPEC_SEGMENT.fullmatch(slot) or normalize_spec_name(slot) in spec_aliases:
+        if len(tail) > (2 if expansion in TIERED_TALENT_CALCULATORS else 1):
+            return _TALENT_CALC_LAYOUT
+        return slot, (tail[0] if tail else None), (tail[1] if len(tail) > 1 else None)
+    if tail and expansion in RETAIL_TALENT_CALCULATORS:
+        return f"Talent calculator spec segment {slot!r} is not a spec name."
+    if len(tail) > 1:
+        return _TALENT_CALC_LAYOUT
+    return None, slot, (tail[0] if tail else None)
+
+
+def _bare_ref_targets_talent_calc(parts: list[str]) -> bool:
+    """A shorthand ref aims at a calculator when it starts (after any calculator prefix) with a class or talent-calc."""
+    if parts and parts[0] in WOWHEAD_TALENT_CALC_PREFIXES:
+        parts = parts[1:]
+    if not parts:
+        return False
+    if parts[0] == WOWHEAD_TALENT_CALC_SEGMENT or normalize_actor_class(parts[0]) in WOW_CLASS_SLUGS:
+        return True
+    return len(parts) >= 2 and parts[1] == WOWHEAD_TALENT_CALC_SEGMENT
+
+
+def _talent_calc_location(
+    ref: str, default_expansion: str
+) -> tuple[str, str, list[str], bool, bool] | WowheadTalentCalcRefError:
+    """The ref's base URL (scheme and host), calculator, path parts from ``talent-calc`` on, explicitness and aim."""
+    lowered = ref.lower()
+    candidate = f"https://{ref}" if lowered.startswith(("wowhead.com/", "www.wowhead.com/")) else ref
+    if candidate.startswith("//"):
+        candidate = f"https:{candidate}"
     parsed = urlparse(candidate)
-    if parsed.scheme and parsed.netloc:
-        if not _is_wowhead_hostname(parsed.hostname):
-            return None
-        reference_url = urlunparse(parsed._replace(query="", fragment=""))
-    else:
-        reference_url = urljoin("https://www.wowhead.com", candidate if candidate.startswith("/") else f"/{candidate}")
-        parsed = urlparse(reference_url)
-        if not _is_wowhead_hostname(parsed.hostname):
-            return None
-    path_parts = _split_reference_path_parts(parsed.path)
-    if path_parts is None:
-        return None
-    if path_parts and path_parts[0] in WOWHEAD_EXPANSION_PREFIXES:
-        path_parts = path_parts[1:]
-    if not path_parts or path_parts[0] != WOWHEAD_TALENT_CALC_SEGMENT:
-        return None
-    if len(path_parts) not in {3, 4}:
-        return None
-    actor_class = normalize_actor_class(path_parts[1])
-    spec = normalize_spec_name(path_parts[2])
-    build_code = path_parts[3] if len(path_parts) > 3 else None
-    # A classic-era calculator path (/classic/talent-calc/warrior/<code>) has no spec segment, so a
-    # third segment that is not one of the class's specs is not read as one.
-    if not actor_class or spec not in WOW_SPECS_BY_CLASS.get(actor_class, frozenset()):
+    is_url = bool(parsed.scheme and parsed.netloc)
+    raw_path = parsed.path if is_url else re.split(r"[?#]", ref, maxsplit=1)[0]
+    raw_parts = raw_path.strip("/").split("/") if raw_path.strip("/") else []
+    nonempty = [part for part in raw_parts if part]
+    if is_url and not _is_wowhead_hostname(parsed.hostname):
+        return WowheadTalentCalcRefError("talent-calc URL must point to wowhead.com.", False)
+    targets = WOWHEAD_TALENT_CALC_SEGMENT in nonempty if is_url else _bare_ref_targets_talent_calc(nonempty)
+    if "" in raw_parts:
+        return WowheadTalentCalcRefError(_TALENT_CALC_EMPTY_SEGMENTS, targets)
+    head = raw_parts[0] if raw_parts else ""
+    expansion = head if head in WOWHEAD_TALENT_CALC_PREFIXES else ("retail" if is_url else default_expansion)
+    parts = raw_parts[1:] if head in WOWHEAD_TALENT_CALC_PREFIXES else raw_parts
+    explicit = bool(parts) and parts[0] == WOWHEAD_TALENT_CALC_SEGMENT
+    if is_url:
+        if not explicit:
+            return WowheadTalentCalcRefError("Talent calculator URL must point to /talent-calc.", targets)
+        return f"{parsed.scheme}://{parsed.netloc}", expansion, parts, True, targets
+    if not explicit:
+        parts = [WOWHEAD_TALENT_CALC_SEGMENT, *parts]
+    return "https://www.wowhead.com", expansion, parts, explicit, targets
+
+
+def parse_wowhead_talent_calc(
+    ref: str, *, default_expansion: str = "retail", allow_spec_aliases: bool = False
+) -> WowheadTalentCalcRef | WowheadTalentCalcRefError:
+    """Parse a Wowhead talent calculator URL, path or ``<class>/<spec>/<code>`` shorthand.
+
+    The one parser behind Wowhead's ``talent-calc``, the wrapper's talent routing and the build
+    references in guides. A shorthand or a path without a calculator prefix reads as
+    ``default_expansion``'s calculator; a URL without one is retail.
+    ``allow_spec_aliases`` preserves build references' historical normalized spec spellings;
+    Wowhead tool refs use the calculator's lowercase spec-slug grammar.
+    """
+    text = ref.strip()
+    if not text:
+        return WowheadTalentCalcRefError("talent-calc reference cannot be empty.", False)
+    location = _talent_calc_location(text, default_expansion)
+    if isinstance(location, WowheadTalentCalcRefError):
+        return location
+    base, expansion, parts, explicit, targets = location
+    segments = parts[1:]
+    max_segments = 4 if expansion in TIERED_TALENT_CALCULATORS else 3
+    actor_class = normalize_actor_class(segments[0]) if segments else None
+    if not 2 <= len(segments) <= max_segments or actor_class not in WOW_CLASS_SLUGS:
+        return WowheadTalentCalcRefError(_TALENT_CALC_LAYOUT, targets)
+    split = _talent_calc_segments(
+        expansion, segments[1:], spec_aliases=WOW_SPECS_BY_CLASS[actor_class] if allow_spec_aliases else frozenset()
+    )
+    if isinstance(split, str):
+        return WowheadTalentCalcRefError(split, targets)
+    spec_slug, build_code, extra_segment = split
+    spec = normalize_spec_name(spec_slug)
+    if spec_slug is not None and expansion in RETAIL_TALENT_CALCULATORS and spec not in WOW_SPECS_BY_CLASS[actor_class]:
+        return WowheadTalentCalcRefError(f"Talent calculator spec {spec_slug!r} is not a {segments[0]} spec.", targets)
+    # Every calculator's path prefix is its expansion key; retail (and a key with no Wowhead site) has none.
+    prefix = f"/{expansion}" if expansion in WOWHEAD_TALENT_CALC_PREFIXES else ""
+    return WowheadTalentCalcRef(
+        reference_url=f"{base}{prefix}/{'/'.join(parts)}",
+        expansion=expansion,
+        class_slug=segments[0],
+        actor_class=actor_class,
+        spec_slug=spec_slug,
+        spec=spec,
+        build_code=build_code,
+        extra_segment=extra_segment,
+        path_segments=tuple(segments),
+        explicit_path=explicit,
+    )
+
+
+def parse_wowhead_talent_calc_ref(ref: str) -> dict[str, str | None] | None:
+    """A talent-calc URL or path that names ``/talent-calc``, a class and one of its retail specs, else None.
+
+    The narrow form build references and SimC read; :func:`parse_wowhead_talent_calc` reads every form.
+    """
+    parsed = parse_wowhead_talent_calc(ref, allow_spec_aliases=True)
+    if (
+        isinstance(parsed, WowheadTalentCalcRefError)
+        or not parsed.explicit_path
+        or parsed.extra_segment is not None
+        or parsed.expansion not in _EXPANSION_SITE_CALCULATORS
+        or parsed.spec not in WOW_SPECS_BY_CLASS[parsed.actor_class]
+    ):
         return None
     return {
-        "actor_class": actor_class,
-        "spec": spec,
-        "build_code": _clean_text(build_code),
-        "reference_url": reference_url,
+        "actor_class": parsed.actor_class,
+        "spec": parsed.spec,
+        "build_code": parsed.build_code,
+        "reference_url": parsed.reference_url,
         "source_kind": "wowhead_talent_calc_url",
     }
 

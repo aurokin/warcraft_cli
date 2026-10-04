@@ -200,7 +200,7 @@ List the guides in a Wowhead guide category with author, patch, and updated-wind
 
 ## wowhead talent-calc
 
-Parse a Wowhead talent calculator ref into class, spec, and build code; a classic build code is not decoded.
+Parse a Wowhead talent calculator ref into class, spec, and build code, decoding a classic build into its talents.
 
 **Arguments**
 

@@ -125,7 +125,15 @@
   code whose loadout header names another spec (`invalid_tool_ref`); classic calculators keep their
   own spec names (MoP Classic rogue `combat`); `listed_builds` are the ref's spec's builds only,
   and are absent for classic calculator refs
-- `talent-calc` parses a ref into class, spec and the raw `build_code`; it does not decode a classic
-  build code into talents or points per tree
+- `talent-calc` decodes a classic calculator build (`/classic/` with Season of Discovery, `/tbc/`,
+  `/wotlk/`, `/cata/`, `/mop-classic/`, `/classic-ptr/`, WoW Forever's `/forever/`) into `talents`:
+  `points_by_tree` (`17/34/0`) and per tree the talents taken with `rank`/`max_rank`, `name` and
+  `spell_id`; MoP Classic gives the talent chosen in each tier. Read `talents.decoded` first: when
+  it is `false`, `reason` says why (a retail build, which `warcraft talent-describe` decodes; a
+  classic path that names a spec; a code the calculator data cannot account for). Glyph, rune and
+  click-order segments come back raw, not decoded. Decoding reports the URL's ranks without
+  checking prerequisites, point budgets or level/race eligibility. Forever was compared against
+  Wowhead for warrior, paladin, hunter, rogue, priest, shaman and mage; warlock and druid remain
+  unverified because Wowhead blocked further calculator requests
 - do not assume Wowhead tool URLs expose enough stable state for deep reverse-engineering
 - treat Wowhead `analysis_surfaces` as an additive page-level layer extracted from trusted section structure, not as a replacement for the raw guide page

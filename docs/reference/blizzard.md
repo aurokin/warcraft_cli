@@ -2,7 +2,7 @@
 
 # blizzard
 
-Official Blizzard Battle.net World of Warcraft API CLI. Experimental tier: the read surface is small (realm, item, character) and search/resolve are stubs. Host, OAuth token URL, and namespace strings are confirmed against live Blizzard endpoints for us/eu/kr/tw (Game Data and Profile, every game version), whose payloads report provenance.verified=true. CN routing (gateway.battlenet.com.cn + oauth.battlenet.com.cn) follows documented Blizzard API conventions and is unconfirmed; those hosts are unreachable from outside China, so CN payloads report provenance.verified=false.
+Official Blizzard Battle.net World of Warcraft API CLI. Experimental tier: explicit reads (realm, item, character, PvP seasons/leaderboards/ratings, collections, auction prices); search/resolve are stubs. Host, OAuth token URL, and namespace strings are confirmed against live Blizzard endpoints for us/eu/kr/tw (Game Data and Profile, every game version), whose payloads report provenance.verified=true. CN routing (gateway.battlenet.com.cn + oauth.battlenet.com.cn) follows documented Blizzard API conventions and is unconfirmed; those hosts are unreachable from outside China, so CN payloads report provenance.verified=false.
 
 ## Global options
 
@@ -80,6 +80,124 @@ Fetch a character profile from the profile namespace: REALM NAME --region R, or 
 | `--game-version` | str |  | Game version to route: retail (default), classic (progression Classic), classic-era, or classic-anniversary. |
 | `--locale` | str |  | Locale passed through to Blizzard (default en_US). Not validated. |
 | `--section` | str |  | Read one sub-resource instead of the profile summary: pvp-summary, pvp-bracket/<bracket>, professions, collections/mounts, collections/pets, collections/toys. |
+
+## blizzard pvp-season
+
+A PvP season: name, start, every season id, its leaderboard brackets, and its title rating cutoffs.
+
+**Arguments**
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `season` | int range [x>=1] |  | PvP season id. Defaults to the current season. |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--region / -r` | str |  | Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us. |
+| `--classic` | boolean | false | Shorthand for --game-version classic: progression Classic (Mists of Pandaria Classic today), not Era or Anniversary. |
+| `--game-version` | str |  | Game version to route: retail (default), classic (progression Classic), classic-era, or classic-anniversary. |
+| `--locale` | str |  | Locale passed through to Blizzard (default en_US). Not validated. |
+
+## blizzard pvp-leaderboard
+
+The top ranks of one PvP leaderboard: rank, rating, character, realm, faction, season record.
+
+**Arguments**
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `bracket` | str | required | Leaderboard name from `blizzard pvp-season`: 2v2, 3v3, rbg, shuffle-overall, blitz-<class>-<spec>, ... |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--season` | int range [x>=1] |  | PvP season id (see `blizzard pvp-season`). Defaults to the current season. |
+| `--limit` | int range [1<=x<=5000] | 25 | Top ranks to return (Blizzard publishes up to ~5000). |
+| `--region / -r` | str |  | Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us. |
+| `--classic` | boolean | false | Shorthand for --game-version classic: progression Classic (Mists of Pandaria Classic today), not Era or Anniversary. |
+| `--game-version` | str |  | Game version to route: retail (default), classic (progression Classic), classic-era, or classic-anniversary. |
+
+## blizzard pvp-character
+
+A character's honor level, battleground record, and rating and record in every bracket it has played.
+
+**Arguments**
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `realm_slug` | str | required | Realm slug the character plays on, e.g. illidan. |
+| `name` | str | required | Character name. |
+| `region_first_name` | [name] |  | With three arguments they are REGION REALM NAME, as raiderio and warcraftlogs take them. |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--region / -r` | str |  | Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us. |
+| `--classic` | boolean | false | Shorthand for --game-version classic: progression Classic (Mists of Pandaria Classic today), not Era or Anniversary. |
+| `--game-version` | str |  | Game version to route: retail (default), classic (progression Classic), classic-era, or classic-anniversary. |
+| `--locale` | str |  | Locale passed through to Blizzard (default en_US). Not validated. |
+
+## blizzard collections
+
+A character's mounts, pets, toys, heirlooms and transmog appearances: counts plus a filtered list.
+
+**Arguments**
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `realm_slug` | str | required | Realm slug the character plays on, e.g. illidan. |
+| `name` | str | required | Character name. |
+| `region_first_name` | [name] |  | With three arguments they are REGION REALM NAME, as raiderio and warcraftlogs take them. |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--kind` | str (repeatable) |  | Collection to read (repeatable): mounts, pets, toys, heirlooms, transmogs. Defaults to all of them. |
+| `--match` | str |  | Keep only entries whose name contains this text (case-insensitive). |
+| `--limit` | int range [1<=x<=5000] | 20 | Most entries to list per collection, by name. |
+| `--region / -r` | str |  | Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us. |
+| `--classic` | boolean | false | Shorthand for --game-version classic: progression Classic (Mists of Pandaria Classic today), not Era or Anniversary. |
+| `--game-version` | str |  | Game version to route: retail (default), classic (progression Classic), classic-era, or classic-anniversary. |
+| `--locale` | str |  | Locale passed through to Blizzard (default en_US). Not validated. |
+
+## blizzard auctions
+
+A connected realm's auction house summarized per item id: listings, units, min and median unit price. Retail lists commodities (ore, herbs, reagents) region-wide instead; read them with `commodities`.
+
+**Arguments**
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `realm_slug` | str | required | Any realm of the connected realm whose auction house to read, e.g. illidan. |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--item-id` | int range [x>=1] (repeatable) |  | Only these item ids (repeatable), in the order given; ids with no listing go to not_listed. |
+| `--limit` | int range [1<=x<=500] | 20 | Most-listed items to return when no --item-id is given. |
+| `--region / -r` | str |  | Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us. |
+| `--classic` | boolean | false | Shorthand for --game-version classic: progression Classic (Mists of Pandaria Classic today), not Era or Anniversary. |
+| `--game-version` | str |  | Game version to route: retail (default), classic (progression Classic), classic-era, or classic-anniversary. |
+
+## blizzard commodities
+
+The region-wide retail commodity market summarized per item id: listings, units, min and median unit price.
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--item-id` | int range [x>=1] (repeatable) |  | Only these item ids (repeatable), in the order given; ids with no listing go to not_listed. |
+| `--limit` | int range [1<=x<=500] | 20 | Most-listed items to return when no --item-id is given. |
+| `--region / -r` | str |  | Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us. |
+| `--classic` | boolean | false | Shorthand for --game-version classic: progression Classic (Mists of Pandaria Classic today), not Era or Anniversary. |
+| `--game-version` | str |  | Game version to route: retail (default), classic (progression Classic), classic-era, or classic-anniversary. |
 
 ## blizzard search
 

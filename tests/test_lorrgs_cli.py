@@ -446,6 +446,35 @@ def test_resolve_caps_a_one_word_boss_short_name_that_does_not_name_the_boss(mon
     assert data["confidence_cap"] == {"rule": "single_word_query", "from": "high"}
 
 
+@pytest.mark.parametrize(("query", "terms"), [("ulatek mythic", ["mythic"]), ("ulatek top cooldowns", ["cooldowns", "top"])])
+def test_resolve_caps_a_boss_answer_when_the_query_asks_more_than_the_boss(monkeypatch, query: str, terms: list[str]) -> None:
+    # Live `warcraft resolve "ulatek mythic"` (2026-10) answered `lorrgs comp-ranking ulatek` at high
+    # while Lorrgs held no Ula'tek reports. Resolve never fetches the ranking, so it stays medium.
+    _patch_client(monkeypatch)
+    data = json.loads(runner.invoke(app, ["resolve", query]).stdout)["data"]
+    assert (data["confidence"], data["resolved"], data["next_command"]) == ("medium", False, None)
+    assert data["match"]["follow_up"]["command"] == "lorrgs comp-ranking ulatek"
+    assert data["confidence_cap"] == {"rule": "words_beyond_boss_name", "from": "high", "terms": terms}
+
+
+@pytest.mark.parametrize(
+    ("query", "command"),
+    [
+        ("ulatek", "lorrgs comp-ranking ulatek"),
+        ("lorrgs ulatek", "lorrgs comp-ranking ulatek"),
+        # The short name "The Lost Turtles" shares no "turtles" with "The Lost Explorers" or its slug.
+        ("lost turtles", "lorrgs comp-ranking the-lost-explorers"),
+        ("https://lorrgs.io/comp_ranking/ulatek", "lorrgs comp-ranking ulatek"),
+        ("mythic frost mage chimaerus", "lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god --difficulty mythic"),
+    ],
+)
+def test_resolve_keeps_a_bare_boss_a_lorrgs_url_and_a_spec_ranking_high(monkeypatch, query: str, command: str) -> None:
+    _patch_client(monkeypatch)
+    data = json.loads(runner.invoke(app, ["resolve", query]).stdout)["data"]
+    assert (data["confidence"], data["next_command"]) == ("high", command)
+    assert "confidence_cap" not in data
+
+
 def test_resolve_does_not_hand_over_an_unrivalled_but_only_partial_match(monkeypatch) -> None:
     # "undreamt" is one word out of "Chimaerus, the Undreamt God" — not the slug, not the short name.
     # Every provider resolves only at high confidence, and `warcraft resolve` trusts `resolved`, so a

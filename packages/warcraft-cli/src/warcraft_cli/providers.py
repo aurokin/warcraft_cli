@@ -329,7 +329,10 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         name="blizzard-api",
         command="blizzard",
         status="partial",
-        description="Official Blizzard Battle.net WoW API provider: doctor + auth, Game Data (realm, item) and Profile (character) reads.",
+        description=(
+            "Official Blizzard Battle.net WoW API provider: realm, item, PvP seasons/leaderboards, "
+            "auctions, commodities, character profiles, PvP ratings, and collections reads."
+        ),
         auth_required=True,
         # Blizzard routes by region + namespace class, not the wrapper's expansion axis. Passthrough
         # with --expansion runs with an advisory; see docs/architecture/EXPANSION_FILTERING.md.

@@ -59,7 +59,7 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     assert capabilities["resolve"] == "coming_soon"
     assert capabilities["game_data"] == "requires_client_credentials"
     assert capabilities["profile"] == "requires_client_credentials"
-    assert payload["data"]["cache"]["ttls"] == {"static": 86400, "dynamic_and_profile": 900}
+    assert payload["data"]["cache"]["ttls"] == {"static": 86400, "dynamic_and_profile": 900, "snapshot": 3600}
     region = payload["data"]["region"]
     assert region["routing"] == "ready"
     assert region["configured"] is None

@@ -1,0 +1,16 @@
+{
+ "_links": {
+  "self": {
+   "href": "https://us.api.blizzard.com/data/wow/pvp-season/42?namespace=dynamic-us"
+  }
+ },
+ "id": 42,
+ "leaderboards": {
+  "href": "https://us.api.blizzard.com/data/wow/pvp-season/42/pvp-leaderboard/?namespace=dynamic-us"
+ },
+ "rewards": {
+  "href": "https://us.api.blizzard.com/data/wow/pvp-season/42/pvp-reward/?namespace=dynamic-us"
+ },
+ "season_start_timestamp": 1787065200000,
+ "season_name": "Player vs. Player (Midnight Season 2)"
+}

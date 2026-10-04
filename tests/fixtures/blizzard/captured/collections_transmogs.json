@@ -1,0 +1,71 @@
+{
+ "_links": {
+  "self": {
+   "href": "https://us.api.blizzard.com/profile/wow/character/malganis/aurow/collections/transmogs?namespace=profile-us"
+  }
+ },
+ "appearance_sets": [
+  {
+   "key": {
+    "href": "https://us.api.blizzard.com/data/wow/item-appearance/set/13?namespace=static-12.1.0_68914-us"
+   },
+   "name": "Wild Combatant's Chain Armor",
+   "id": 13
+  },
+  {
+   "key": {
+    "href": "https://us.api.blizzard.com/data/wow/item-appearance/set/14?namespace=static-12.1.0_68914-us"
+   },
+   "name": "Wild Combatant's Chain Armor",
+   "id": 14
+  }
+ ],
+ "slots": [
+  {
+   "slot": {
+    "type": "HEAD",
+    "name": "Head"
+   },
+   "appearances": [
+    {
+     "key": {
+      "href": "https://us.api.blizzard.com/data/wow/item-appearance/322?namespace=static-12.1.0_68914-us"
+     },
+     "id": 322
+    },
+    {
+     "key": {
+      "href": "https://us.api.blizzard.com/data/wow/item-appearance/1053?namespace=static-12.1.0_68914-us"
+     },
+     "id": 1053
+    },
+    {
+     "key": {
+      "href": "https://us.api.blizzard.com/data/wow/item-appearance/1199?namespace=static-12.1.0_68914-us"
+     },
+     "id": 1199
+    }
+   ]
+  },
+  {
+   "slot": {
+    "type": "SHOULDER",
+    "name": "Shoulder"
+   },
+   "appearances": [
+    {
+     "key": {
+      "href": "https://us.api.blizzard.com/data/wow/item-appearance/1004?namespace=static-12.1.0_68914-us"
+     },
+     "id": 1004
+    },
+    {
+     "key": {
+      "href": "https://us.api.blizzard.com/data/wow/item-appearance/1173?namespace=static-12.1.0_68914-us"
+     },
+     "id": 1173
+    }
+   ]
+  }
+ ]
+}

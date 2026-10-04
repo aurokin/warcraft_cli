@@ -129,6 +129,16 @@ A tie between *different* kinds is a preference, not ambiguity, and it is fixed:
 (`chimaerus`) resolves to `comp-ranking`, because the ranking is the useful surface and the `boss`
 metadata row scored the same only because it was built from the same match.
 
+A boss answer (`comp-ranking` or `boss`) resolves only from the boss name alone: `resolve` does not
+fetch the ranking, and Lorrgs serves an empty one for a boss it holds no logs for yet. A query with
+any other word (`mythic`, `top`, `cooldowns`, `rankings`, `warcraftlogs`; only `lorrgs` and filler
+such as `the`/`of` are ignored) keeps that row as the `match` at `confidence: "medium"`, unresolved,
+with `confidence_cap: {"rule": "words_beyond_boss_name", "from": "high", "terms": [...]}` naming the
+extra words: `ulatek mythic` gives `terms: ["mythic"]`, while `ulatek` still resolves to
+`lorrgs comp-ranking ulatek`. A word Lorrgs does not recognise at all (`strategy`) and a heroic, normal,
+or LFR difficulty already leave the answer `low` through `unmatched_terms`. Spec rankings (`mythic frost mage chimaerus`) and explicit
+Lorrgs URLs are not capped.
+
 `--limit` only trims what is printed: `resolve` judges ambiguity over every candidate. In `search` and
 `resolve`, `count` is the rows in `results`/`candidates`, `total_matches` is every ranked candidate, and
 `truncated` says rivals were cut. An unresolved answer with a `match` carries `fallback_search_command`

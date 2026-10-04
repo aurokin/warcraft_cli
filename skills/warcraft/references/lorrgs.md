@@ -76,6 +76,12 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
   in `match`; its `match.follow_up.command` is the command to run if it is what you meant. A report
   reference carries a `caveat`: nothing checked that Lorrgs can serve that report, and it refuses
   reports Warcraft Logs keeps private
+- a boss query with any word beyond the boss name (`ulatek mythic`, `ulatek top`) comes back
+  `confidence: "medium"` with `confidence_cap.rule: "words_beyond_boss_name"` and the extra words in
+  `confidence_cap.terms`: `resolve` does not fetch the composition ranking, which can be empty for a
+  new boss. Run `match.follow_up.command` and check `reports` and `notes` before treating it as the
+  answer; the bare boss name (`ulatek`) or a Lorrgs `comp_ranking` URL still resolves. A heroic,
+  normal, or LFR boss query (`ulatek heroic`) comes back `low`: `comp-ranking` takes no difficulty
 - use `report-overview` for report metadata from any public Warcraft Logs URL, including one Lorrgs
   has not cached, without requesting Lorrgs' per-fight/player timeline generation
 - an empty `comp-ranking` or `spec-ranking` (`reports: []`) carries `data.notes`: Lorrgs has no

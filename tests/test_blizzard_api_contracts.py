@@ -30,6 +30,7 @@ class _FakeResponse:
         self._payload = payload
         self.request = SimpleNamespace(url=url)
         self.status_code = 200
+        self.headers: dict[str, str] = {}
 
     def json(self) -> Any:
         return self._payload

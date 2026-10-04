@@ -550,26 +550,74 @@ def test_guide_full_walks_the_family_and_publishes_build_references(require) -> 
 
 # A spec's PvP talents page publishes no import strings: its builds live in Icy Veins' own talent calculator.
 PVP_TALENTS_QUERY = "mistweaver monk pvp talents and builds"
+# The Mythic+ tips page publishes its builds only through the calculator too.
+MYTHIC_PLUS_TIPS_QUERY = "mistweaver monk mythic plus tips"
+CALCULATOR_SOURCE = "guide_talent_calculator_conversion"
+
+
+def _assert_simc_decodes_as_mistweaver(code: str) -> None:
+    """A converted import string is only useful if SimC reads it as the page's spec with a full build."""
+    decoded = run("simc", "decode-build", "--build-text", code).data["decoded"]
+    assert (decoded["actor_class"], decoded["spec"]) == ("monk", "mistweaver"), json.dumps(decoded)[:400]
+    assert decoded["hero_tree"] and decoded["talents_by_tree"]["spec"], json.dumps(decoded)[:400]
 
 
 def test_a_pvp_talents_page_publishes_its_builds_through_the_icy_veins_calculator(require) -> None:
-    require(PROVIDER)
+    require(PROVIDER, "simc")
     search = run(BINARY, "search", PVP_TALENTS_QUERY, "--limit", "5")
     slug = next((str(row["id"]) for row in search.data["results"] if str(row["id"]).endswith("-pvp-talents-and-builds")), None)
     assert slug is not None, search.describe()
 
-    result = run(BINARY, "guide", slug)
+    result = run(BINARY, "guide-full", slug)
 
     builds = result.data["build_references"]["items"]
-    assert builds, f"{slug} returned no builds: the talent calculator embed markup moved\n{result.describe()}"
-    assert {row["reference_type"] for row in builds} == {"icy_veins_talent_calc_url"}, result.describe()
+    calculator = [row for row in builds if row["reference_type"] == "icy_veins_talent_calc_url"]
+    assert calculator, f"{slug} returned no calculator builds: the talent calculator embed markup moved\n{result.describe()}"
     # Each build is labelled by its tab and names the page's own class and spec.
-    assert all(row["label"] for row in builds), result.describe()
+    assert all(row["label"] for row in calculator), result.describe()
     identities = {tuple(row["build_identity"]["class_spec_identity"]["identity"].values()) for row in builds}
     assert identities == {("monk", "mistweaver")}, result.describe()
-    assert all(row["url"].endswith(f"#{row['build_code']}") for row in builds)
+    assert all(row["url"].endswith(f"#{row['build_code']}") for row in calculator)
     # Tabs that embed one build share one row.
     assert len({row["url"] for row in builds}) == len(builds), result.describe()
+
+    # Each calculator build sits next to the WoW import string it converts to, which SimC decodes.
+    # The merged list drops the per-page ``conversion`` note, so read it off each page's own rows.
+    # Builds that differ only in PvP talents share one import string, converted from one of them.
+    exports = {row["url"]: row for row in builds if row["reference_type"] == "wow_talent_export"}
+    page_rows = [row for page in result.data["pages"] for row in page["build_references"]]
+    calculator_urls_by_export: dict[str, set[str]] = {}
+    for row in page_rows:
+        if row["reference_type"] != "icy_veins_talent_calc_url":
+            continue
+        assert row["conversion"]["status"] == "converted", json.dumps(row)[:600]
+        calculator_urls_by_export.setdefault(row["conversion"]["wow_talent_export"], set()).add(row["url"])
+    for code, calculator_urls in calculator_urls_by_export.items():
+        converted = exports[code]
+        assert converted["source"]["source"] == CALCULATOR_SOURCE
+        assert converted["source"]["converted_from"] in calculator_urls, json.dumps(converted)[:600]
+    for code in exports:
+        _assert_simc_decodes_as_mistweaver(code)
+
+
+def test_a_mythic_plus_tips_page_turns_its_calculator_builds_into_import_strings(require) -> None:
+    """A PvE page's calculator-only builds come back as import strings, not as calculator links simc cannot take."""
+    require(PROVIDER, "simc")
+    slug, result = _first_guide_of_family(MYTHIC_PLUS_TIPS_QUERY, "mythic_plus_tips")
+
+    builds = result.data["build_references"]["items"]
+    # A calculator row stays on a PvE page only for a build whose hash names PvP talents, next to its
+    # import string; one that failed to convert says why.
+    for row in builds:
+        if row["reference_type"] == "icy_veins_talent_calc_url":
+            assert row["conversion"]["status"] == "converted", json.dumps(row)[:600]
+    converted = [row for row in builds if (row.get("source") or {}).get("source") == CALCULATOR_SOURCE]
+    assert converted, f"{slug} returned no converted calculator builds\n{result.describe()}"
+    for row in converted:
+        assert row["reference_type"] == "wow_talent_export" and row["label"], json.dumps(row)[:400]
+        assert "midnight-talent-calculator#" in row["source"]["converted_from"], json.dumps(row)[:400]
+        assert row["build_identity"]["class_spec_identity"]["identity"] == {"actor_class": "monk", "spec": "mistweaver"}
+        _assert_simc_decodes_as_mistweaver(row["build_code"])
 
 
 def _first_guide_of_family(query: str, family: str) -> tuple[str, Result]:

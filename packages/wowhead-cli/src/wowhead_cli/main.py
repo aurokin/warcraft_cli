@@ -42,11 +42,14 @@ from warcraft_core.cli import (
 )
 from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope
 from warcraft_core.identity import (
-    WOW_CLASS_SLUGS,
+    RETAIL_TALENT_CALCULATORS,
+    TIERED_TALENT_CALCULATORS,
+    WowheadTalentCalcRef,
+    WowheadTalentCalcRefError,
     build_identity_payload,
     build_reference_transport_packet_payload,
     normalize_actor_class,
-    normalize_spec_name,
+    parse_wowhead_talent_calc,
     validate_talent_transport_packet,
 )
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS, to_json
@@ -58,6 +61,7 @@ from warcraft_core.wow_specs import WOW_SPECS
 
 from wowhead_cli import provider
 from wowhead_cli.citation_pack import citation_pack_from_compare, citation_pack_from_entity
+from wowhead_cli.classic_talents import CLASSIC_CALCULATORS, decode_build, talent_data_url, undecodable_reason
 from wowhead_cli.comments_intelligence import build_comments_intelligence, filter_raw_comments
 from wowhead_cli.compare_presets import ResolvedCompareOptions, resolve_compare_options
 from wowhead_cli.entities import (
@@ -1587,18 +1591,18 @@ def _normalize_blue_tracker_row(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-# A spec path segment (``balance``, ``beast-mastery``); build codes carry digits or capitals.
-_TALENT_CALC_SPEC_RE = re.compile(r"[a-z]+(?:-[a-z]+)*")
 # Retail build codes are Blizzard loadout strings (base64 letters, digits, ``+``); classic ones are digits and ``-``.
 _TALENT_CALC_BUILD_CODE_RE = re.compile(r"[A-Za-z0-9+_-]+")
+# After a classic build code: its selection order (TalentCalcClassic's two rank alphabets); after a MoP one, glyphs.
+_TALENT_CALC_EXTRA_SEGMENT_RE = re.compile(r"[A-Za-z0-9.!_~^-]+")
 # Blizzard specialization ids by class and spec key. Wowhead's listed builds carry one as ``spec``, and
 # a retail build code's loadout header encodes one.
 _WOW_SPEC_IDS: dict[tuple[str, str], int] = {(spec.class_key, spec.key): spec.spec_id for spec in WOW_SPECS}
 _WOW_SPEC_BY_ID = {spec_id: class_spec for class_spec, spec_id in _WOW_SPEC_IDS.items()}
-# Calculators that use the retail spec names and loadout strings above; classic ones have their own
-# (MoP Classic names rogue's second spec ``combat``), so their spec is not checked and has no id.
-_RETAIL_TALENT_CALC_EXPANSIONS = frozenset({"retail", "ptr", "beta"})
 _LOADOUT_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+_RETAIL_BUILD_CODE_REASON = (
+    "Retail build codes are Blizzard loadout strings; `warcraft talent-describe` or `simc describe-build` decodes them."
+)
 
 
 def _absolute_tool_url(raw: str, *, tool_slug: str) -> str | None:
@@ -1614,15 +1618,6 @@ def _absolute_tool_url(raw: str, *, tool_slug: str) -> str | None:
     return url_candidate
 
 
-def _expansion_prefixed_talent_calc_url(normalized: str) -> str | None:
-    """Route an expansion-prefixed relative talent-calc ref (``classic/warrior/<code>``) to its tool URL, else None."""
-    prefix, _separator, rest = normalized.partition("/")
-    if prefix not in EXPANSION_PREFIXES:
-        return None
-    path = rest if rest == "talent-calc" or rest.startswith("talent-calc/") else f"talent-calc/{rest}"
-    return tool_url(f"{prefix}/{path}", expansion="retail")
-
-
 def _normalize_tool_ref(ref: str, *, tool_slug: str, expansion: ExpansionProfile) -> str:
     raw = ref.strip()
     if not raw:
@@ -1631,53 +1626,39 @@ def _normalize_tool_ref(ref: str, *, tool_slug: str, expansion: ExpansionProfile
     if absolute is not None:
         return absolute
     normalized = raw.lstrip("/")
-    if tool_slug == "talent-calc":
-        prefixed = _expansion_prefixed_talent_calc_url(normalized)
-        if prefixed is not None:
-            return prefixed
     if not normalized.startswith(f"{tool_slug}/") and normalized != tool_slug:
         normalized = f"{tool_slug}/{normalized}"
     return tool_url(normalized, expansion=expansion)
 
 
-def _parse_talent_calc_state(state_url: str) -> dict[str, Any]:
-    """Split a talent-calc URL into expansion, class, spec, and build code.
+def _talent_calc_state(ref: str, *, default_expansion: str) -> dict[str, Any]:
+    """Split a talent-calc ref into its URL, calculator, class, spec and build code; raises ValueError.
 
-    Retail-style calculators use ``/talent-calc/<class>/<spec>[/<build-code>]``; classic-era ones
-    have no spec segment, ``/classic/talent-calc/<class>/<build-code>``, so their spec is None.
+    The shared parser reads the path; Wowhead adds the build code checks: the characters a code uses
+    and, on a retail calculator, that the loadout header names the path's spec.
     """
-    path = urlparse(state_url).path.strip("/")
-    raw_parts = path.split("/") if path else []
-    if "" in raw_parts:
-        raise ValueError("talent-calc reference must not include empty path segments.")
-    expansion = raw_parts[0] if raw_parts and raw_parts[0] in EXPANSION_PREFIXES else "retail"
-    parts = raw_parts[1:] if expansion != "retail" else raw_parts
-    if not parts or parts[0] != "talent-calc":
-        raise ValueError("Talent calculator URL must point to /talent-calc.")
-    if len(parts) not in {3, 4} or normalize_actor_class(parts[1]) not in WOW_CLASS_SLUGS:
-        raise ValueError(
-            "Talent calculator URL must use /talent-calc/<class>/<spec>[/<build-code>] or "
-            "/talent-calc/<class>/<build-code> with a WoW class."
-        )
-    class_slug, slot, *rest = parts[1:]
+    parsed = parse_wowhead_talent_calc(ref, default_expansion=default_expansion)
+    if isinstance(parsed, WowheadTalentCalcRefError):
+        raise ValueError(parsed.message)
+    build_code = parsed.build_code
     spec_id: int | None = None
-    if _TALENT_CALC_SPEC_RE.fullmatch(slot):
-        spec_slug, build_code = slot, (rest[0] if rest else None)
-        if expansion in _RETAIL_TALENT_CALC_EXPANSIONS:
-            spec_id = _talent_calc_spec_id(class_slug, spec_slug, build_code)
-    elif not rest:
-        spec_slug, build_code = None, slot
-    else:
-        raise ValueError(f"Talent calculator spec segment {slot!r} is not a spec name.")
+    if parsed.spec is not None and parsed.expansion in RETAIL_TALENT_CALCULATORS:
+        spec_id = _talent_calc_spec_id(parsed, build_code)
     if build_code is not None and _TALENT_CALC_BUILD_CODE_RE.fullmatch(build_code) is None:
         raise ValueError(f"Talent calculator build code {build_code!r} holds characters no build code uses.")
+    extra = parsed.extra_segment
+    if extra is not None and _TALENT_CALC_EXTRA_SEGMENT_RE.fullmatch(extra) is None:
+        raise ValueError(f"Talent calculator segment {extra!r} after the build code holds characters no calculator uses.")
     return {
-        "expansion": expansion,
-        "class_slug": class_slug,
-        "spec_slug": spec_slug,
+        "state_url": parsed.reference_url,
+        "expansion": parsed.expansion,
+        "actor_class": parsed.actor_class,
+        "class_slug": parsed.class_slug,
+        "spec_slug": parsed.spec_slug,
         "spec_id": spec_id,
         "build_code": build_code,
-        "path_segments": parts[1:],
+        "extra_segment": extra,
+        "path_segments": list(parsed.path_segments),
         "has_build_code": build_code is not None,
     }
 
@@ -1696,15 +1677,13 @@ def _loadout_spec_id(build_code: str) -> int | None:
     return spec_id if spec_id in _WOW_SPEC_BY_ID else None
 
 
-def _talent_calc_spec_id(class_slug: str, spec_slug: str, build_code: str | None) -> int:
-    """The spec id a talent-calc path names; raises when the spec is not the class's or the build code is another spec's."""
-    spec_id = _WOW_SPEC_IDS.get((normalize_actor_class(class_slug) or "", normalize_spec_name(spec_slug) or ""))
-    if spec_id is None:
-        raise ValueError(f"Talent calculator spec {spec_slug!r} is not a {class_slug} spec.")
+def _talent_calc_spec_id(parsed: WowheadTalentCalcRef, build_code: str | None) -> int:
+    """The spec id a retail talent-calc path names; raises when the build code is another spec's loadout."""
+    spec_id = _WOW_SPEC_IDS[(parsed.actor_class, parsed.spec or "")]
     encoded = _loadout_spec_id(build_code) if build_code else None
     if encoded is not None and encoded != spec_id:
         encoded_class, encoded_spec = _WOW_SPEC_BY_ID[encoded]
-        raise ValueError(f"Build code is a {encoded_class}/{encoded_spec} loadout, not {class_slug}/{spec_slug}.")
+        raise ValueError(f"Build code is a {encoded_class}/{encoded_spec} loadout, not {parsed.class_slug}/{parsed.spec_slug}.")
     return spec_id
 
 
@@ -1748,12 +1727,14 @@ def _base_talent_calc_payload(
 ) -> dict[str, Any]:
     cfg = _cfg(ctx)
     try:
-        state_url = _normalize_tool_ref(ref, tool_slug="talent-calc", expansion=cfg.expansion)
-        state = _parse_talent_calc_state(state_url)
+        state = _talent_calc_state(ref, default_expansion=cfg.expansion.key)
     except ValueError as exc:
         fail(ctx, "invalid_tool_ref", str(exc))
+    state_url = state.pop("state_url")
+    actor_class = state.pop("actor_class")
+    named = bool(state.get("spec_slug"))
     return {
-        "expansion": str(state.get("expansion") or cfg.expansion.key),
+        "expansion": state["expansion"],
         "tool": {
             "kind": "talent-calc",
             "input": ref,
@@ -1762,11 +1743,11 @@ def _base_talent_calc_payload(
             **state,
         },
         "build_identity": build_identity_payload(
-            actor_class=state.get("class_slug"),
+            actor_class=actor_class,
             spec=state.get("spec_slug"),
-            confidence="high" if state.get("class_slug") and state.get("spec_slug") else "none",
+            confidence="high" if named else "none",
             source="wowhead_talent_calc_url",
-            candidates=[(state.get("class_slug"), state.get("spec_slug"))] if state.get("class_slug") and state.get("spec_slug") else None,
+            candidates=[(actor_class, state.get("spec_slug"))] if named else None,
             source_notes=["class/spec came from the explicit Wowhead talent-calc URL path"],
         ),
         "page": {
@@ -1780,12 +1761,44 @@ def _base_talent_calc_payload(
     }
 
 
+def _talents_block(client: WowheadClient, html: str, tool: dict[str, Any]) -> dict[str, Any]:
+    """The decoded ``talents`` of a classic calculator build, or ``decoded: false`` with the reason it is not decoded."""
+    calculator = str(tool["expansion"])
+    if calculator not in CLASSIC_CALCULATORS:
+        return {"decoded": False, "reason": _RETAIL_BUILD_CODE_REASON}
+    extra_key = "glyphs_code" if calculator in TIERED_TALENT_CALCULATORS else "selection_order"
+    extra = {extra_key: tool["extra_segment"]} if tool["extra_segment"] else {}
+    reason = undecodable_reason(calculator, spec_named=tool["spec_slug"] is not None)
+    if reason is not None:
+        return {"decoded": False, "reason": reason, **extra}
+    data_url = talent_data_url(html)
+    if data_url is None:
+        return {"decoded": False, "reason": "The calculator page names no talent data file.", **extra}
+    try:
+        with provider.transport_errors():
+            data = client.talent_calc_data(data_url)
+    except ProviderError as exc:
+        return {
+            "decoded": False,
+            "reason": "The talent data file could not be fetched.",
+            "fetch_error": {"code": exc.code, "message": exc.message},
+            "data_url": data_url,
+            **extra,
+        }
+    except ValueError as exc:
+        return {"decoded": False, "reason": f"The talent data file did not parse: {exc}", "data_url": data_url, **extra}
+    actor_class = normalize_actor_class(tool["class_slug"]) or ""
+    decoded = decode_build(data, calculator=calculator, actor_class=actor_class, build_code=str(tool["build_code"]))
+    return {**decoded, **extra, "data_url": data_url}
+
+
 def _enrich_talent_calc_payload_with_page_data(
     ctx: typer.Context,
     payload: dict[str, Any],
     *,
     listed_build_limit: int,
     fail_on_fetch_error: bool,
+    decode_talents: bool = False,
 ) -> dict[str, Any]:
     state_url = str(payload["tool"]["state_url"])
     # A broken cache config has already written its error envelope, so it fails the command.
@@ -1813,6 +1826,8 @@ def _enrich_talent_calc_payload_with_page_data(
     listed_builds = None if spec_id is None else _extract_talent_calc_listed_builds(html, spec_id=spec_id, limit=listed_build_limit)
     if listed_builds is not None:
         enriched_payload["listed_builds"] = listed_builds
+    if decode_talents and enriched_tool["build_code"] is not None:
+        enriched_payload["talents"] = _talents_block(client, html, enriched_tool)
     return enriched_payload
 
 
@@ -1828,6 +1843,7 @@ def _talent_calc_payload(
         payload,
         listed_build_limit=listed_build_limit,
         fail_on_fetch_error=True,
+        decode_talents=True,
     )
 
 
@@ -3647,7 +3663,7 @@ def talent_calc(
         help="Maximum embedded listed builds to return when the page exposes them.",
     ),
 ) -> None:
-    """Parse a Wowhead talent calculator ref into class, spec, and build code; a classic build code is not decoded."""
+    """Parse a Wowhead talent calculator ref into class, spec, and build code, decoding a classic build into its talents."""
     _emit(ctx, _talent_calc_payload(ctx, ref=ref, listed_build_limit=listed_build_limit))
 
 

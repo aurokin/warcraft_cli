@@ -259,7 +259,7 @@ Tool-state decoders:
 
 | Command | Purpose |
 |---------|---------|
-| `talent-calc REF` | class, spec (`tool.spec_id` is its Blizzard spec id), and build code from a talent calculator ref; the build code is returned raw, so a classic build is not decoded into talents or points per tree; a classic-era `/classic/talent-calc/<class>/<build-code>` ref has no spec, so `spec_slug` and `spec_id` are null. An unknown class is `invalid_tool_ref`, as is a build code with a character outside letters, digits, `+`, `-` and `_`; so, on a retail, PTR or beta ref, is a spec of another class (`paladin/frost`) or a build code whose loadout header names another spec. A classic calculator's spec is not checked (MoP Classic's rogue `combat` is valid) and its `spec_id` is null. `listed_builds` holds only the ref's spec's builds (the page embeds every spec's), and is absent for a classic calculator ref and for a ref with no spec, since both have a null `spec_id` |
+| `talent-calc REF` | class, spec (`tool.spec_id` is its Blizzard spec id), and build code from a talent calculator ref; for a classic calculator the build is decoded into `talents` (see [Classic talent builds](#classic-talent-builds)). A classic-era `/classic/talent-calc/<class>/<build-code>` ref has no spec, so `spec_slug` and `spec_id` are null. An unknown class is `invalid_tool_ref`, as is a build code with a character outside letters, digits, `+`, `-` and `_`; so, on a retail, PTR or beta ref, is a spec of another class (`paladin/frost`) or a build code whose loadout header names another spec. A classic calculator's spec is not checked (MoP Classic's rogue `combat` is valid) and its `spec_id` is null. `listed_builds` holds only the ref's spec's builds (the page embeds every spec's), and is absent for a classic calculator ref and for a ref with no spec, since both have a null `spec_id` |
 | `talent-calc-packet REF` | exact talent transport packet from a `<class>/<spec>/<build-code>` ref; `--out PATH` writes just the packet. The packet comes from the build code in `REF`, so a failed page fetch still answers, with `page.canonical_url` null and `page.fetch_error` `{code, message}` |
 | `profession-tree REF` | profession slug and loadout code |
 | `dressing-room REF` | normalized share hash and cited state URL |
@@ -271,6 +271,54 @@ fails with `not_found` (exit 4) when Wowhead answers with its "This list doesn't
 removed" page. For both, `page.canonical_url` is the fetched page's own canonical link; when the
 page names none it is null and `page.note` says so. A share URL under an expansion path
 (`/classic/dressing-room#...`) is read from that expansion unless `--expansion` is passed.
+
+### Classic talent builds
+
+`talent-calc` reads every Wowhead calculator: retail (and `/ptr/`, `/beta/`), `/classic/` (Classic
+Era and Season of Discovery), `/classic-ptr/`, `/tbc/`, `/wotlk/`, `/cata/`, `/mop-classic/` and
+WoW Forever's `/forever/`. A classic path is `<class>/<build-code>`, optionally followed by the
+talent selection order Wowhead appends once talents are clicked; a MoP Classic path is
+`<class>[/<spec>]/<tiers>[/<glyphs>]`. `tool.extra_segment` holds that trailing segment raw.
+
+For a ref with a build code, `talents` is the decoded build:
+
+| Field | Meaning |
+|-------|---------|
+| `decoded` | `true` when the build decoded; `false` with a `reason` otherwise |
+| `format` | `classic_points` (talent trees) or `mop_tiers` (MoP Classic's one talent per tier) |
+| `points_total`, `points_by_tree` | points spent, and per tree in the calculator's order (`17/34/0`) |
+| `trees[]` | `tree_id`, `name`, `points`, and `talents[]` with `name`, `rank`, `max_rank`, `spell_id` (the taken rank's spell), `talent_id`, `row`, `col` |
+| `tiers[]` | MoP Classic: `tier`, `level`, `choice` (0 for none, else column 1-3) and `talent` `{name, spell_id}` |
+| `player_level`, `race_id` | the calculator's level and race suffixes, when the code carries them |
+| `glyphs_or_runes_code`, `glyphs_code`, `selection_order` | glyph, rune and click-order segments, returned raw and not decoded |
+| `data_url` | the versioned talent data file the calculator loads; its trimmed copy is cached for 30 days (`talent_calc_data` namespace) |
+
+`decoded` is `false`, with the reason, for a retail build (decode it with `warcraft talent-describe`
+or `simc describe-build`), for a classic path that names a spec, and for a code the calculator data
+cannot account for: a rank above the talent's maximum, more digits than a tree has talents, more
+trees than the class has, or a WoW Forever code without its `v2` prefix. Wowhead's calculator
+quietly drops such parts, so the decoder refuses rather than guess. Codes in the calculator's older
+packed form (starting with a capital letter) decode for the calculators listed in the table below.
+
+Decoding reports the ranks encoded in the URL. It does not validate talent prerequisites, point
+budgets or level/race eligibility, so an invalid allocation may differ from Wowhead's rendered
+selection. A truncated packed tree or incomplete packed rank returns `decoded: false`.
+
+Each calculator was checked build by build against what Wowhead's own calculator renders (tree
+totals, talents, ranks and names), with builds from Wowhead's class guides:
+
+| Calculator | Builds checked | Packed codes |
+|------------|----------------|--------------|
+| `classic` (Classic Era, Season of Discovery with runes) | 31 | decoded (6 checked) |
+| `tbc` | 25 | decoded (2 checked) |
+| `wotlk` | 20 | decoded (2 checked) |
+| `cata` | 13 | not decoded |
+| `mop-classic` | 7 | n/a |
+| `forever` | 7: warrior, paladin, hunter, rogue, priest, shaman and mage; made in its calculator (it has no guide builds yet) | not decoded |
+| `classic-ptr` | 1 | not decoded |
+
+Forever warlock and druid builds were not checked because Wowhead blocked further calculator
+requests. They use the same decoder and class tree-order tables, but have no rendered comparison.
 
 Cache maintenance:
 
