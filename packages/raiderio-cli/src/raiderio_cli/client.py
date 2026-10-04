@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, CachedHttpClient, json_cache_key, request_with_retries
 from warcraft_core.paths import provider_cache_root
 from warcraft_core.provider import ProviderError
 from warcraft_core.wow_normalization import normalize_name, normalize_region, primary_realm_slug, profile_region
@@ -106,7 +103,7 @@ def page_freshness(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[str,
     }
 
 
-class RaiderIOClient:
+class RaiderIOClient(CachedHttpClient):
     """Cached Raider.IO API access.
 
     Every endpoint a command reports provenance for returns :class:`FetchedJson`, so the command can
@@ -119,7 +116,6 @@ class RaiderIOClient:
         timeout_seconds: float = 20.0,
         retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     ) -> None:
-        self._http_client: httpx.Client | None = None
         settings, static_ttl, character_ttl, guild_ttl, mplus_runs_ttl, raid_rankings_ttl = load_raiderio_cache_settings_from_env()
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
@@ -130,34 +126,15 @@ class RaiderIOClient:
         self._mplus_runs_ttl = mplus_runs_ttl
         self._raid_rankings_ttl = raid_rankings_ttl
 
-    def close(self) -> None:
-        if self._http_client is not None:
-            self._http_client.close()
-            self._http_client = None
-
-    def __enter__(self) -> RaiderIOClient:
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        self.close()
-
-    def _client(self) -> httpx.Client:
-        if self._http_client is None:
-            self._http_client = build_client(timeout=self._timeout_seconds)
-        return self._http_client
-
     def _cache_key(self, namespace: str, params: dict[str, Any]) -> str:
         # `entry` names the stored shape ({fetched_at, payload}). Releases up to 0.5.0 stored the bare
         # body under the same key without it, so their entries, which this client must refetch, are
         # misses in the store rather than hits in provenance.cache.
-        raw = json.dumps(
-            {"entry": "fetched", "namespace": namespace, "params": params}, sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
-        return f"{namespace}:{hashlib.sha256(raw).hexdigest()}"
+        return json_cache_key(namespace, {"entry": "fetched", "namespace": namespace, "params": params})
 
     def _read_cache(self, key: str) -> FetchedJson | None:
         """Replay a cached response; an entry written before fetch times were stored is a miss."""
-        cached = self._cache_store.get(key) if self._cache_store is not None else None
+        cached = super()._read_cache(key)
         if not isinstance(cached, dict):
             return None
         payload = cached.get("payload")
@@ -167,9 +144,7 @@ class RaiderIOClient:
         return FetchedJson(payload=payload, fetched_at=fetched_at, cache_hit=True)
 
     def _write_cache(self, key: str, fetched: FetchedJson, *, ttl_seconds: int) -> None:
-        if self._cache_store is None:
-            return
-        self._cache_store.set(key, {"fetched_at": fetched.fetched_at, "payload": fetched.payload}, ttl_seconds=ttl_seconds)
+        super()._write_cache(key, {"fetched_at": fetched.fetched_at, "payload": fetched.payload}, ttl_seconds=ttl_seconds)
 
     def _get_json(
         self,

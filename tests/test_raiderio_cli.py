@@ -708,6 +708,15 @@ def test_raiderio_character_summary(monkeypatch) -> None:
                 }
             ],
             "mythic_plus_ranks": {"overall": {"world": 50, "region": 10, "realm": 1}},
+            "last_crawled_at": "2026-04-13T19:35:02.000Z",
+            "mythic_plus_recent_runs": [
+                {
+                    "dungeon": "Murder Row",
+                    "mythic_level": 13,
+                    "spec": {"id": 259, "name": "Assassination", "slug": "assassination", "role": "dps"},
+                    "role": "dps",
+                }
+            ],
         }
 
     monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.character_profile", _as_fetched(fake_profile))
@@ -716,6 +725,11 @@ def test_raiderio_character_summary(monkeypatch) -> None:
 
     payload = json.loads(result.stdout)
     assert payload["data"]["character"]["name"] == "Roguecane"
+    # The crawl time is the age of the profile; fetched_at is only when this CLI asked for it.
+    assert payload["data"]["character"]["last_crawled_at"] == "2026-04-13T19:35:02.000Z"
+    # A run played in another spec says so instead of reading as the active Subtlety spec.
+    run = payload["data"]["mythic_plus"]["recent_runs"][0]
+    assert (run["spec"], run["spec_slug"], run["role"]) == ("Assassination", "assassination", "dps")
     assert payload["data"]["guild"]["name"] == "Liquid"
     assert payload["data"]["mythic_plus"]["current_score"] == 1234.5
     assert payload["data"]["raiding"]["progression"][0]["raid_slug"] == "tier-mn-1"
@@ -777,9 +791,30 @@ def test_raiderio_guild_summary(monkeypatch) -> None:
                     "mythic": {"world": 1, "region": 1, "realm": 1},
                 }
             },
+            "last_crawled_at": "2026-10-01T13:07:50.000Z",
             "members": [
-                {"character": {"name": "Roguecane", "realm": "Illidan", "class": "Rogue", "active_spec_name": "Subtlety"}},
-                {"character": {"name": "Ruinmkv", "realm": "Illidan", "class": "Paladin", "active_spec_name": "Retribution"}},
+                {
+                    "rank": 7,
+                    "character": {
+                        "name": "Ruinmkv",
+                        "realm": "Illidan",
+                        "class": "Paladin",
+                        "active_spec_name": "Holy",
+                        "active_spec_role": "HEALING",
+                        "profile_url": "https://raider.io/characters/us/illidan/Ruinmkv",
+                    },
+                },
+                {
+                    "rank": 0,
+                    "character": {
+                        "name": "Roguecane",
+                        "realm": "Illidan",
+                        "class": "Rogue",
+                        "active_spec_name": "Subtlety",
+                        "active_spec_role": "DPS",
+                        "profile_url": "https://raider.io/characters/us/illidan/Roguecane",
+                    },
+                },
             ],
         }
 
@@ -790,8 +825,16 @@ def test_raiderio_guild_summary(monkeypatch) -> None:
     payload = json.loads(result.stdout)
     assert payload["data"]["guild"]["name"] == "Liquid"
     assert payload["data"]["guild"]["member_count"] == 2
+    assert payload["data"]["guild"]["last_crawled_at"] == "2026-10-01T13:07:50.000Z"
     assert payload["data"]["raiding"]["rankings"][0]["raid_slug"] == "tier-mn-1"
-    assert payload["data"]["roster_preview"][0]["name"] == "Roguecane"
+    # Raider.IO lists members unordered; the roster comes back guild master first, realm as a slug.
+    first = payload["data"]["roster_preview"][0]
+    assert (first["name"], first["rank"], first["realm"], first["realm_name"], first["active_spec_role"]) == (
+        "Roguecane", 0, "illidan", "Illidan", "dps"
+    )
+    # Raider.IO's roster roles (TANK/HEALING/DPS) use the provider's tank/healer/dps vocabulary.
+    assert payload["data"]["roster_preview"][1]["active_spec_role"] == "healer"
+    assert payload["data"]["roster_truncated"] is False
     # Roster preview rows carry the additive normalized identity alongside raw class/spec.
     assert payload["data"]["roster_preview"][0]["class_name"] == "Rogue"
     roster_identity = payload["data"]["roster_preview"][0]["class_spec_identity"]
@@ -799,6 +842,18 @@ def test_raiderio_guild_summary(monkeypatch) -> None:
     assert roster_identity["confidence"] == "high"
     assert roster_identity["identity"] == {"actor_class": "rogue", "spec": "subtlety"}
     assert roster_identity["source"] == {"provider": "raiderio", "source": "guild_roster_preview"}
+
+
+def test_raiderio_guild_roster_limit_cuts_by_rank_and_says_it_truncated(monkeypatch) -> None:
+    members = [{"rank": rank, "character": {"name": f"M{rank}"}} for rank in (8, 3, 0, 5)]
+    monkeypatch.setattr(
+        "raiderio_cli.client.RaiderIOClient.guild_profile", _as_fetched(lambda self, **kwargs: {"name": "G", "members": members})
+    )
+    result = runner.invoke(raiderio_app, ["guild", "us", "illidan", "G", "--roster-limit", "2"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert [row["name"] for row in data["roster_preview"]] == ["M0", "M3"]
+    assert (data["roster_truncated"], data["guild"]["member_count"]) == (True, 4)
 
 
 def test_raiderio_sample_mythic_plus_runs(monkeypatch) -> None:
@@ -2472,9 +2527,25 @@ def test_raiderio_leaderboard_raids_normalizes_rows(monkeypatch) -> None:
         "is_defeated": False,
         "pull_started_at": "2025-03-07T05:33:27Z",
     }
+    assert top["privacy"] == {"raid_pulls_hidden": False, "raid_percents_hidden": False}
     assert payload["data"]["citations"]["leaderboard_urls"] == ["https://raider.io/liberation-of-undermine/rankings/us/mythic?realm=malganis"]
     assert payload["data"]["freshness"]["sampled_at"] and payload["data"]["freshness"]["cache_ttl_seconds"] >= 1
     assert payload["provenance"]["citations"] == payload["data"]["citations"]
+
+
+def test_raiderio_leaderboard_raids_flags_pulls_the_guild_hid(monkeypatch) -> None:
+    # Live 2026-10-03: rank 25 on world mythic tier-mn-1 hid pulls and percents, so both read null.
+    hidden = {
+        **_raid_ranking_row(1),
+        "guildPrivacy": {"raidPulls": False, "raidPercents": False, "wereRaidPullsRestricted": True, "wereRaidPercentsRestricted": True},
+        "encountersPulled": [{"id": 1, "slug": "vexie-and-the-geargrinders", "isDefeated": True}],
+    }
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.raid_rankings", _as_fetched(lambda self, **kwargs: {"raidRankings": [hidden]}))
+    result = runner.invoke(raiderio_app, ["leaderboard", "raids", "--raid", "tier-mn-1", "--limit", "1"])
+    assert result.exit_code == 0, result.output
+    row = json.loads(result.stdout)["data"]["rows"][0]
+    assert row["encounters_pulled"][0]["num_pulls"] is None
+    assert row["privacy"] == {"raid_pulls_hidden": True, "raid_percents_hidden": True}
 
 
 def test_raiderio_leaderboard_raids_paginates_for_limit(monkeypatch) -> None:
@@ -2686,7 +2757,13 @@ def test_raiderio_cutoffs_reads_the_current_season_and_lists_each_percentile(mon
 
     def fake_cutoffs(self: RaiderIOClient, *, season: str, region: str):
         requests.append({"season": season, "region": region})
-        return {"cutoffs": {"updatedAt": "Sat Oct 03 2026", "p999": _cutoff(0.999, 3837.85), "p990": _cutoff(0.99, 3608.22)}}
+        return {
+            "cutoffs": {
+                "updatedAt": "Sat Oct 03 2026 10:36:16 GMT+0000 (Coordinated Universal Time)",
+                "p999": _cutoff(0.999, 3837.85),
+                "p990": _cutoff(0.99, 3608.22),
+            }
+        }
 
     current_page = _as_fetched(lambda self, **kwargs: {"rankings": [], "params": {"season": "season-mn-2"}})
     monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.mythic_plus_runs", current_page)
@@ -2698,10 +2775,22 @@ def test_raiderio_cutoffs_reads_the_current_season_and_lists_each_percentile(mon
     assert requests == [{"season": "season-mn-2", "region": "us"}]
     assert payload["kind"] == "mythic_plus_cutoffs"
     assert payload["query"] == {"season": "season-mn-2", "region": "us"}
+    # Raider.IO sends a JavaScript Date string; it comes out ISO-8601 like every other timestamp.
+    assert payload["data"]["updated_at"] == "2026-10-03T10:36:16Z"
     assert [(row["percentile"], row["all"]["rating"], row["alliance"]["rating"]) for row in payload["data"]["cutoffs"]] == [
         ("top 0.1%", 3837.85, 3838.85),
         ("top 1%", 3608.22, 3609.22),
     ]
+
+
+def test_raiderio_cutoffs_passes_an_unparsable_updated_at_through(monkeypatch) -> None:
+    # A date shape the parser does not know is kept as Raider.IO sent it, not dropped or crashed on.
+    payload = {"cutoffs": {"updatedAt": "Sat Oct 03 2026", "p999": _cutoff(0.999, 3837.85)}}
+    monkeypatch.setattr("raiderio_cli.client.RaiderIOClient.season_cutoffs", _as_fetched(lambda self, **kwargs: payload))
+    result = runner.invoke(raiderio_app, ["cutoffs", "--season", "season-mn-2"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["data"]["updated_at"] == "Sat Oct 03 2026"
 
 
 def test_raiderio_cutoffs_rejects_an_unknown_season_as_a_usage_error(monkeypatch) -> None:

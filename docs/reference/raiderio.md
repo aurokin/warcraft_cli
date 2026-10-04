@@ -69,7 +69,7 @@ Return a character profile with identity, guild, Mythic+ score, and raid progres
 
 ## raiderio guild
 
-Return a guild profile with raid progression, raid rankings, and a roster preview.
+Return a guild profile with raid progression, raid rankings, and the roster by guild rank.
 
 **Arguments**
 
@@ -78,6 +78,12 @@ Return a guild profile with raid progression, raid rankings, and a roster previe
 | `region` | str | required | Region slug such as us or eu. |
 | `realm` | str | required | Realm slug or title. |
 | `name` | str | required | Guild name. |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--roster-limit` | int range [0<=x<=1000] | 10 | Roster members to return, highest guild rank first (Raider.IO tracks up to 1000). |
 
 ## raiderio raids
 

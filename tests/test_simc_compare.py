@@ -10,7 +10,6 @@ import json
 from pathlib import Path
 
 from simc_cli.compare import (
-    ACTION_SAMPLE_ITERATIONS,
     VariantSummary,
     _extract_summary,
     comparison_report,
@@ -33,15 +32,29 @@ def _summary(label: str, *, report: dict[str, object] | None = None) -> VariantS
     )
 
 
-def test_extract_summary_reads_the_means_and_counts_the_recorded_action_sequence() -> None:
+def test_extract_summary_reads_the_dps_and_fight_length_means() -> None:
     summary = _summary("base")
 
     assert summary.dps == 362851.8712606381
     assert summary.fight_length == 31.0
-    # 34 recorded rows, one of which is a `wait` with no action name.
-    assert sum(summary.action_counts.values()) == 33
-    assert summary.action_counts["arcane_missiles"] == 6
-    assert "wait" not in summary.action_counts
+
+
+def _report_with_stats() -> dict[str, object]:
+    """The captured report plus a synthetic ``stats`` block whose means disagree with its one recorded sequence."""
+    report = json.loads(json.dumps(CAPTURED_REPORT))
+    report["sim"]["players"][0]["stats"] = [
+        {"name": "arcane_missiles", "num_executes": {"sum": 30.0, "count": 4, "mean": 7.5}},
+        {"name": "arcane_blast", "num_executes": {"sum": 46.0, "count": 4, "mean": 11.5}},
+        {"name": "touch_of_the_magi", "num_executes": {"sum": 0.0, "count": 4, "mean": 0.0}},
+    ]
+    return report
+
+
+def test_action_counts_are_simc_execute_means_over_every_iteration_not_the_one_recorded_sequence() -> None:
+    """The captured action_sequence holds 6 arcane_missiles from its one iteration; the mean over all four is 7.5."""
+    summary = _summary("base", report=_report_with_stats())
+
+    assert summary.action_counts == {"arcane_missiles": 7.5, "arcane_blast": 11.5}
 
 
 def test_extract_summary_reports_the_dps_error_simc_prints_not_effective_dps() -> None:
@@ -51,14 +64,13 @@ def test_extract_summary_reports_the_dps_error_simc_prints_not_effective_dps() -
     assert summary.dps_error == 38374.55027921543
 
 
-def test_action_cpm_scales_the_recorded_counts_by_the_mean_fight_length() -> None:
-    summary = _summary("base")
+def test_action_cpm_scales_the_execute_means_by_the_mean_fight_length() -> None:
+    summary = _summary("base", report=_report_with_stats())
 
-    assert summary.action_cpm["arcane_missiles"] == round(6 * 60.0 / 31.0, 2)
-    assert summary.action_cpm["arcane_missiles"] == 11.61
+    assert summary.action_cpm["arcane_missiles"] == round(7.5 * 60.0 / 31.0, 2) == 14.52
 
 
-def _variant(label: str, dps: float, action_counts: dict[str, int]) -> VariantSummary:
+def _variant(label: str, dps: float, action_counts: dict[str, float]) -> VariantSummary:
     return VariantSummary(
         label=label,
         apl_path=Path(f"/repo/{label}.simc"),
@@ -110,15 +122,11 @@ def test_comparison_report_ranks_action_deltas_by_magnitude_not_by_sign() -> Non
     }
 
 
-def test_comparison_report_says_the_action_numbers_come_from_one_recorded_iteration() -> None:
-    """SimC records an action sequence for a single iteration; the payload must not hide that."""
+def test_comparison_report_says_where_the_action_numbers_come_from() -> None:
     report = _report()
 
     assert report["sampling"]["iterations_simulated"] == 250
-    assert report["sampling"]["action_sequence_iterations"] == ACTION_SAMPLE_ITERATIONS == 1
-    assert "not from an iteration mean" in report["sampling"]["note"]
-    assert all(row["action_sequence_iterations"] == 1 for row in report["ranking"])
-    assert all(row["action_sequence_iterations"] == 1 for row in report["comparisons"])
+    assert "mean executes per iteration" in report["sampling"]["note"]
 
 
 def test_variant_report_carries_each_variant_delta_and_the_sampling_note() -> None:
@@ -135,4 +143,4 @@ def test_variant_report_carries_each_variant_delta_and_the_sampling_note() -> No
         "base": 0.0,
         "slower": -5.0,
     }
-    assert summary["sampling"]["action_sequence_iterations"] == 1
+    assert summary["sampling"]["iterations_simulated"] == 250

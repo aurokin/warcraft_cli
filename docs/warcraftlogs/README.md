@@ -38,7 +38,8 @@ from the callback. `--scope` (repeatable) selects the OAuth scopes: `view-user-p
 `ready` when public API access is, and `degraded` otherwise (no client credentials, or a failed
 probe): every data command needs that access, and each capability then names the reason. `doctor` also reports
 `installed`, `language`, and the resolved `cache` configuration (backend, directory, TTLs); a Redis
-backend that does not answer is `cache.available: false` with the reason in `cache.error`, and makes
+backend that does not answer, or a cache config that does not parse (`cache.error.code:
+"invalid_cache_config"`), is `cache.available: false` with the reason in `cache.error`, and makes
 `status` `degraded`.
 
 ## Site profiles
@@ -62,8 +63,9 @@ and `search` put that site's `--site` in the follow-up command, and the report c
 `invalid_query` (exit 2) when the URL's site is not the selected `--site`.
 
 Every report command (`report`, `report-fights`, `report-events`, the `report-encounter*` family and
-the rest) takes a report URL or a bare report code. A URL's `#fight=N` or `?fight=N` scopes the
-commands that take `--fight-id` when the flag is absent; an explicit `--fight-id` wins. Localized hosts (`de.warcraftlogs.com`,
+the rest) takes a report URL or a bare report code. A URL's `#fight=N` or `?fight=N`, or a bare
+`CODE#fight=N`, scopes the commands that take `--fight-id` when the flag is absent; an explicit
+`--fight-id` wins. Localized hosts (`de.warcraftlogs.com`,
 `ko.classic.warcraftlogs.com`) work; when the host names no site (`de.`), the selected `--site`
 applies. An empty or malformed reference, or a URL whose host is not `warcraftlogs.com` or one of
 its subdomains, is `invalid_query` (exit 2) before any request; `search` and
@@ -154,6 +156,11 @@ Guilds: `guild`, `guild-members`, `guild-attendance`, `guild-rankings`, `guild-r
 
 Characters: `character`, `character-rankings`.
 
+`guild-members`, `character` and `character-rankings` return `class_id` in Warcraft Logs' own
+numbering (`gameData.classes`, the same on every site: 1 Death Knight, 2 Druid, 3 Hunter, 4 Mage,
+5 Monk, 6 Paladin, 7 Priest, 8 Rogue, 9 Shaman, 10 Warlock, 11 Warrior, 12 Demon Hunter, 13 Evoker),
+not Blizzard's, so each also carries `class_name`.
+
 Rankings: `encounter-rankings` (official encounter leaderboard).
 
 Reports: `reports`, `report`, `report-fights`, `report-master-data`, `report-player-details`,
@@ -184,7 +191,23 @@ The aura and damage summaries emit typed rows only. `--include-raw` attaches the
 Logs table entry per row, which is where the gear, pet and per-ability detail lives; one fight goes
 from roughly 43 KB to 560 KB with it on. `report-encounter-casts` aggregates only the events one
 `--event-limit` page returns, so it sets `casts.truncated` and a note when Warcraft Logs hands back a
-`next_page_timestamp`.
+`next_page_timestamp`. `report-events` returns one raw page too: when `next_page_timestamp` is set,
+a note says to fetch the next page with the same filters plus `--start-time <next_page_timestamp>`.
+Warcraft Logs returns no events for a start time without an end, so a fight-scoped request with
+`--start-time` and no `--end-time` runs to the end of the selected fights, echoed as `query.end_time`.
+
+Buff and aura rows name their actor by role. In a Warcraft Logs Buffs table, `--view-by source`
+(the default) groups rows by the actor that had the aura and `--view-by target` by the actor that
+applied it, so the rows carry `aura_holder` or `applied_by`, never `source`/`target`, and
+`buffs.row_actor`, `aura_summary.row_actor` and `comparison.row_actor` say which. `--source-id`
+pins the grouping actor, and Warcraft Logs then groups by the other one (its table says
+`useTargets: true`): under the default view `--source-id 18` returns `applied_by` rows, the casters
+of the aura actor 18 had. With `--ability-id`, each row's `aura` is the requested ability.
+
+Encounter windows (`--window-start-ms`/`--window-end-ms` and the compare windows) are clamped to the
+fight. The `query` block carries `effective_window_start_ms`, `effective_window_end_ms`,
+`effective_window_duration_ms` and `window_clamped`, and a note names any window that ran past the
+fight, so uptime is read against the span that was really covered.
 
 Cast counts (`report-encounter-casts` and `ability-usage-summary`) count only `cast` events. The
 Casts data type also returns `begincast` (a cast bar starting, including cancelled casts) and
@@ -244,9 +267,11 @@ can come from cache. `freshness.cache_hit_count`, `freshness.upstream_request_co
 sample is scanned, so a wrong id fails with `not_found` (exit 4) instead of returning `count: 0`.
 
 When two raiders in one group each upload the pull, Warcraft Logs holds it as two reports. Those
-are collapsed into one sampled kill: same guild id, encounter, difficulty and raid size, with
-wall-clock start *and* end within 5 s of any report already folded into one of that guild's
-pulls, so uploads a few seconds apart chain into one pull. Every open pull is a candidate,
+are collapsed into one sampled kill when they share encounter, difficulty and raid size and either
+come from the same guild id with wall-clock start *and* end within 5 s, or list the same set of
+players (from the fight's player details, fetched only for such candidates) with start and end
+within 30 s. Timing is checked against every report already folded into a pull, so uploads a few
+seconds apart chain into one pull. Every open pull is a candidate,
 so another pull that starts in between cannot split a double-logged one. Fights are clustered in
 start order, so the result does not depend on report listing order, and the earliest-starting
 report represents the pull. The collapse is reported, never silent —
@@ -259,9 +284,17 @@ how many reports and fights were scanned and how to widen the cohort: raise `--r
 rarely killed boss. An empty cohort is not evidence about the boss.
 
 Warcraft Logs has no cross-report pull id, and timing alone cannot tell two unrelated personal
-logs apart, so a fight from a report with no guild is never collapsed; neither is a guild upload
-merged with a personal upload of the same pull. Such a pull can therefore count twice. A fight
-whose absolute window cannot be computed is always kept.
+logs apart, so a fight from a report with no guild is collapsed only on a matching roster. When
+two fights fall within 5 s of each other, either one has no guild and their rosters differ, the
+later-starting one is kept, marked `possible_duplicate_of` the earlier pull, counted in
+`sample.possible_duplicates`, and named in a note. A report that the listing returns on two pages
+is counted once. A fight whose absolute window cannot be computed is always kept.
+
+`sample.difficulty_counts` gives kills per difficulty and `sample.keystone_level_counts` runs per
+Mythic+ key level. A note warns when a cohort mixes difficulties (no `--difficulty`) or key levels:
+those kill times are not comparable, and the fastest-kill order ranks raw durations across them.
+Mythic+ fight rows carry `keystone_level` and `keystone_time_ms`, the in-game key timer, which
+differs from `end_time - start_time` by a few seconds.
 
 `ability-usage-summary` requests at most `--event-limit` cast events per sampled kill. Kills that
 overflow that page are counted in `sample.kills_with_truncated_events_count`, and

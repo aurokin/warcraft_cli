@@ -37,13 +37,15 @@ UPSTREAM_RANK_MAX_SCORE = 10
 # 54) when both titles share a content family. ``is_confident_match`` discounts this bonus, so it
 # never makes a row confident.
 QUERY_CONTAINS_TITLE_MAX_SCORE = 30
-SYSTEM_REFERENCE_FAMILIES = {
-    "system_reference",
-    "expansion_reference",
-    "profession_reference",
-    "class_reference",
-    "faction_reference",
-    "zone_reference",
+# A system word in the query boosts the reference pages of that system only: "profession" lifts the
+# profession pages, not every class page whose snippet shares a word with the query.
+SYSTEM_INTENT_FAMILIES = {
+    "zone": "zone_reference",
+    "renown": "system_reference",
+    "housing": "system_reference",
+    "profession": "profession_reference",
+    "expansion": "expansion_reference",
+    "faction": "faction_reference",
 }
 
 # Reasons that mean the row's own text covers the whole query. The positional baseline, the intent
@@ -142,8 +144,6 @@ def _query_intents(query: str) -> set[str]:
         intents.add("programming")
     if any(token in lowered for token in ("patch", "changes", "hotfix")):
         intents.add("patch")
-    if any(token in lowered for token in ("zone", "zones", "renown", "housing", "profession", "expansion", "faction")):
-        intents.add("systems")
     if any(token in lowered for token in ("lore", "story", "character", "characters")):
         intents.add("lore")
     return intents
@@ -228,7 +228,7 @@ def _intent_family_score(original_query: str, *, family: str) -> tuple[int, list
     if "programming" in intents and family in PROGRAMMING_FAMILIES:
         score += 20
         reasons.append("intent_programming")
-    if "systems" in intents and family in SYSTEM_REFERENCE_FAMILIES:
+    if any(word in original_query.lower() for word, system_family in SYSTEM_INTENT_FAMILIES.items() if system_family == family):
         score += 18
         reasons.append("intent_systems")
     if "patch" in intents and family in {"patch_reference", "api_changes"}:

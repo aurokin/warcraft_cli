@@ -16,7 +16,7 @@ from typing import Any
 import httpx
 from warcraft_api.cache import cache_backend_health, redacted_redis_url
 from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND, resolve_data, search_data
-from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, error_envelope, success_envelope
+from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 from warcraft_core.shapes import as_list
 
@@ -216,7 +216,7 @@ class RaiderIOProvider:
         try:
             report = doctor_report()
         except ValueError as exc:
-            return error_envelope(provider=self.name, command="doctor", code="invalid_cache_config", message=str(exc))
+            raise ProviderError("invalid_cache_config", str(exc)) from exc
         return raiderio_envelope(command="doctor", kind="doctor", payload=report)
 
 

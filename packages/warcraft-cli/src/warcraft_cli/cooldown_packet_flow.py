@@ -7,6 +7,7 @@ single seam (``warcraft_cli.main._provider_payload_result``) and this module nev
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, NoReturn
 
@@ -28,6 +29,7 @@ from warcraft_cli.cooldown_packet import (
     spell_catalog,
     spell_summary,
     timestamp_in_window,
+    top_parse_fights,
     top_parse_samples,
     tracked_spell_ids,
     warcraftlogs_phase_windows,
@@ -249,6 +251,9 @@ class CooldownState:
     player_casts: dict[str, Any] = field(default_factory=dict)
     ranking_args: list[str] | None = None
     ranking_result: dict[str, Any] | None = None
+    # The top parses' Warcraft Logs phase transitions, read only when the player's windows came from there.
+    sample_phases_args: list[str] = field(default_factory=list)
+    sample_phases_result: dict[str, Any] | None = None
     # Why the top-parse comparison is unavailable, and what to do about it; None when it ran.
     comparison_reason: str | None = None
     comparison_note: str | None = None
@@ -553,6 +558,45 @@ def _load_warcraftlogs_phases(request: CooldownRequest, state: CooldownState, fe
         state.phase_windows = warcraftlogs_phase_windows(report, state.fight_id)
 
 
+def _top_parse_phases_query(count: int) -> str:
+    """One aliased query for the phase transitions of ``count`` top-parse fights (``$c<i>``/``$f<i>``)."""
+    variables = ", ".join(f"$c{index}: String!, $f{index}: [Int]" for index in range(count))
+    fight_fields = "id encounterID startTime endTime phaseTransitions { id startTime }"
+    reports = " ".join(
+        f"r{index}: report(code: $c{index}) {{ fights(fightIDs: $f{index}) {{ {fight_fields} }} }}" for index in range(count)
+    )
+    return f"query CooldownPacketTopParsePhases({variables}) {{ reportData {{ {reports} }} }}"
+
+
+def _top_parse_warcraftlogs_windows(
+    request: CooldownRequest, state: CooldownState, fetch: ProviderFetch, ranking: dict[str, Any]
+) -> dict[tuple[str, int], list[dict[str, Any]]]:
+    """Each sampled top parse's Warcraft Logs phase windows, numbered as the player's fight's are.
+
+    Lorrgs places its own phase markers (on some bosses only the intermission ends), so a Lorrgs P2
+    is not the Warcraft Logs P2. A failed lookup leaves every sample without a window.
+    """
+    fights = top_parse_fights(ranking, sample_limit=request.sample_limit, analyzed_fight=(state.report_code, state.fight_id))
+    if not fights:
+        return {}
+    variables: dict[str, Any] = {}
+    for index, (code, fight_id) in enumerate(fights):
+        variables.update({f"c{index}": code, f"f{index}": [fight_id]})
+    state.sample_phases_args = ["graphql", "--query", _top_parse_phases_query(len(fights)), "--variables-json", json.dumps(variables)]
+    state.sample_phases_result = fetch("warcraftlogs", state.sample_phases_args, expansion=request.expansion)
+    if state.sample_phases_result.get("status") != "ok":
+        return {}
+    answers = as_dict(_data_of(state.sample_phases_result).get("reportData"))
+    phase_names = as_dict(as_dict(_data_of(state.wcl_phases_result).get("reportData")).get("report")).get("phases")
+    return {
+        (code, fight_id): warcraftlogs_phase_windows(
+            {"phases": phase_names, "fights": as_list(as_dict(answers.get(f"r{index}")).get("fights"))}, fight_id
+        )
+        for index, (code, fight_id) in enumerate(fights)
+        if isinstance(answers.get(f"r{index}"), dict)
+    }
+
+
 def _select_phase(ctx: typer.Context, request: CooldownRequest, state: CooldownState, fetch: ProviderFetch) -> None:
     if state.lorrgs_unavailable is not None:
         _load_warcraftlogs_phases(request, state, fetch)
@@ -764,6 +808,9 @@ def _load_ranking_comparison(ctx: typer.Context, request: CooldownRequest, state
         state.comparison_note = (
             "Lorrgs top-parse comparison was unavailable; inspect sources.lorrgs_spec_ranking.error for details."
         )
+    warcraftlogs_phases = None
+    if state.phase_source == "warcraftlogs" and state.selected_window is not None and ranking_payload is not None:
+        warcraftlogs_phases = (state.selected_window, _top_parse_warcraftlogs_windows(request, state, fetch, ranking_payload))
     state.comparison = top_parse_samples(
         ranking_payload,
         phase=request.phase,
@@ -773,13 +820,14 @@ def _load_ranking_comparison(ctx: typer.Context, request: CooldownRequest, state
         spell_ids=state.tracked_ids,
         player_phase_count=len(state.phase_windows),
         analyzed_fight=(state.report_code, state.fight_id),
+        warcraftlogs_phases=warcraftlogs_phases,
     )
     if state.comparison["status"] == "no_phase_data":
         reasons = {sample["phase_unavailable_reason"] for sample in state.comparison["samples"]}
         state.comparison_reason = reasons.pop() if len(reasons) == 1 else "no_sample_has_phase"
         hint = (
             "; Lorrgs ranking fights often carry no phase markers"
-            if state.comparison_reason == "top_parse_has_no_phase_markers"
+            if state.comparison_reason == "top_parse_has_no_phase_markers" and state.phase_source != "warcraftlogs"
             else ""
         )
         state.comparison_note = (
@@ -805,6 +853,9 @@ def _source_refs(state: CooldownState) -> dict[str, Any]:
             state.wcl_phases_result, command="warcraftlogs", args=state.wcl_phases_args
         ),
         "lorrgs_spec_ranking": _provider_source(state.ranking_result, command="lorrgs", args=state.ranking_args or []),
+        "warcraftlogs_top_parse_phase_transitions": _provider_source(
+            state.sample_phases_result, command="warcraftlogs", args=state.sample_phases_args
+        ),
         "lorrgs_bosses": _provider_source(state.bosses_result, command="lorrgs", args=state.bosses_args),
     }
 
@@ -839,7 +890,9 @@ def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
         notes.append(
             "Lorrgs did not supply this report, so phase windows come from the Warcraft Logs fight's phase "
             "transitions; labels are one-based P1/P2/etc. in order, and each window's phase_id and name are "
-            "the encounter phase it is."
+            "the encounter phase it is. Top-parse samples are segmented by their own Warcraft Logs phase "
+            "transitions the same way, not by Lorrgs markers, and a sample counts only when its window of "
+            "that number is the same encounter phase."
         )
     if state.received_aura_ids:
         notes.append(

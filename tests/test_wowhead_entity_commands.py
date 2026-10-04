@@ -1225,6 +1225,153 @@ def test_compare_counts_the_entities_in_each_page_relation_tab(monkeypatch) -> N
     ]
 
 
+# Trimmed from the live item=50818 (Invincible's Reins) and item=18567 pages (2026-10): comments link
+# Onyxia and The Lich King, gatherer data names both and the smelting spell, the "dropped-by" tab names
+# the dropper with its drop sample, and a comment links the spell with the anchor text "t".
+DROPPED_BY_HTML = """<html><body>
+<a href="/npc=10184/onyxia">Onyxia</a> <a href="/npc=36597/the-lich-king">The Lich King</a>
+<a href="/spell=22967/smelt-enchanted-elementium">t</a> <a href="/achievement=3802">this achievement</a>
+<script>
+WH.Gatherer.addData(1, 1, {"10184":{"name_enus":"Onyxia"},"36597":{"name_enus":"The Lich King"}});
+WH.Gatherer.addData(6, 1, {"22967":{"name_enus":"Smelt Enchanted Elementium"}});
+new Listview({template: 'npc', id: 'dropped-by', name: WH.TERMS.droppedby,
+    data:[{"boss":1,"displayName":"The Lich King","id":36597,"name":"The Lich King","count":2054,"outof":265761}]});
+</script></body></html>"""
+
+
+def test_a_relation_tab_survives_the_merge_and_leads_the_preview_with_its_drop_sample(monkeypatch) -> None:
+    """Live `wowhead entity-page item 50818` (2026-10) showed The Lich King with `listview: None`, because the
+    tab record merged into the earlier href record, and `wowhead entity item 50818` previewed Onyxia."""
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", lambda self, entity_type, entity_id: DROPPED_BY_HTML)
+
+    items = json.loads(runner.invoke(app, ["entity-page", "item", "50818"]).stdout)["data"]["linked_entities"]["items"]
+    lich_king = next(row for row in items if row["id"] == 36597)
+    assert (lich_king["listview"], lich_king["listviews"]) == ("dropped-by", ["dropped-by"])
+    assert lich_king["listview_data"] == {"count": 2054, "outof": 265761}
+    assert lich_king["sources"] == ["gatherer", "href", "listview"]
+    # Gatherer data carries Wowhead's name for the spell; the comment's anchor text does not replace it.
+    assert next(row for row in items if row["id"] == 22967)["name"] == "Smelt Enchanted Elementium"
+
+    preview = entity_linked_entities_payload(
+        html=DROPPED_BY_HTML,
+        page_url="https://www.wowhead.com/item=50818",
+        page_entity_type="item",
+        page_entity_id=50818,
+        requested_entity_type="item",
+        requested_entity_id=50818,
+        linked_entity_preview_limit=3,
+        expansion=resolve_expansion("retail"),
+    )
+    assert preview is not None
+    assert preview["items"][0] == {
+        "type": "npc",
+        "id": 36597,
+        "name": "The Lich King",
+        "url": "https://www.wowhead.com/npc=36597",
+        "listview": "dropped-by",
+        "listview_data": {"count": 2054, "outof": 265761},
+    }
+    # A link's lowercase prose ("this achievement") is not shown as the linked entity's name.
+    assert {row["id"]: row["name"] for row in preview["items"][1:]} == {22967: "Smelt Enchanted Elementium", 3802: None}
+
+# Trimmed from the live quest=24748 page (2026-10): the Quick Facts infobox markup and the Series box.
+QUEST_INFOBOX_HTML = r"""<html><body><table class="infobox-inner-table">
+<tr class="infobox-heading"><th>Quick Facts</th></tr><tr><td><div id="infobox-contents-0"></div><script>
+WH.markup.printHtml("[ul][li]Level: 30[\/li][li]Side: Both[\/li][li]Classes: [class=1], [class=2][\/li][li][img src=https:\/\/wow.zamimg.com\/questnormal.png style=\"vertical-align: middle;\"]Start: [url=\/npc=37120\/highlord-darion-mograine]Highlord Darion Mograine[\/url][\/li][li][img src=https:\/\/wow.zamimg.com\/questturnin.png]End: [url=\/npc=37120\/highlord-darion-mograine]Highlord Darion Mograine[\/url][\/li][li]Added in patch [acronym=\"3.3.0.11159\"]3.3.0[\/acronym] \"Fall of the Lich King\"[\/li][\/ul]", "infobox-contents-0", {dbPage: true});
+</script></td></tr></table>
+<table class="infobox-inner-table"><tr class="infobox-heading"><th>Series</th></tr><tr><td>
+<table class="series"><tr><th>1.</th><td><div><a href="/quest=24545/the-sacred-and-the-corrupt">The Sacred and the Corrupt</a></div></td></tr><tr><th>2.</th><td><div><a href="/quest=24549/shadowmourne">Shadowmourne...</a></div></td></tr><tr><th>3.</th><td><div><b>The Lich King's Last Stand</b></div></td></tr></table>
+</td></tr></table></body></html>"""
+
+# Trimmed from the live npc=130993 page (2026-10): the "This NPC can be found in" link and the map data.
+NPC_MAPPER_HTML = """<html><body><div>This NPC can be found in <span id="locations"><a href="javascript:" onclick="
+    myMapper.update({
+        zone: 9359,
+        level: 1,
+    });
+    return false;" onmousedown="return false">The Vindicaar</a>&nbsp;(10).</span></div>
+<script>var g_mapperData = {"9359":{"1":{"count":2,"coords":[[43.2,25.2],[51,44.8]]}}};
+var myMapper = new Mapper({"parent":"k6b43j6b","name":"Captain Fareeya"});</script></body></html>"""
+
+
+def test_entity_page_reports_a_quest_chain_its_start_and_end_and_an_npc_location(monkeypatch) -> None:
+    """Live quest and NPC pages (2026-10) carry these in the infobox and map data, and entity-page left them out."""
+    pages = {("quest", 24748): QUEST_INFOBOX_HTML, ("npc", 130993): NPC_MAPPER_HTML}
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", lambda self, entity_type, entity_id: pages[(entity_type, entity_id)])
+
+    quest = json.loads(runner.invoke(app, ["entity-page", "quest", "24748"]).stdout)["data"]["facts"]
+    mograine = {"type": "npc", "id": 37120, "name": "Highlord Darion Mograine", "url": "https://www.wowhead.com/npc=37120"}
+    assert quest["quick_facts"] == [
+        "Level: 30",
+        "Side: Both",
+        "Classes: class 1, class 2",
+        "Start: Highlord Darion Mograine",
+        "End: Highlord Darion Mograine",
+        'Added in patch 3.3.0 "Fall of the Lich King"',
+    ]
+    assert (quest["start"], quest["end"]) == (mograine, mograine)
+    assert [(step["position"], step["id"], step["current"]) for step in quest["series"][0]] == [
+        (1, 24545, False),
+        (2, 24549, False),
+        (3, 24748, True),
+    ]
+    assert quest["series"][0][2]["url"] == "https://www.wowhead.com/quest=24748"
+    assert "locations" not in quest
+
+    npc = json.loads(runner.invoke(app, ["entity-page", "npc", "130993"]).stdout)["data"]["facts"]
+    assert npc == {
+        "locations": [{"zone_id": 9359, "zone": "The Vindicaar", "level": 1, "count": 2, "coords": [[43.2, 25.2], [51, 44.8]]}]
+    }
+
+
+# Trimmed from the live quest=5089, achievement=6 and npc=448 pages (2026-10).
+ITEM_STARTED_QUEST_HTML = r"""<table><tr><th>Quick Facts</th></tr><tr><td><script>
+WH.markup.printHtml("[ul][li]Side: [span class=icon-alliance]Alliance[\/span][\/li][li][img src=https:\/\/wow.zamimg.com\/questnormal.png]Start: [item=12780][\/li][\/ul]", "infobox-contents-0", {dbPage: true});
+</script></td></tr></table>"""
+ACHIEVEMENT_SERIES_HTML = r"""<table><tr><th>Quick Facts</th></tr><tr><td><script>
+WH.markup.printHtml("[ul][li]Points: [achievementpoints=10][\/li][li class=icon-db-link]Icon: [icondb=236562 name=true][\/li][\/ul]", "infobox-contents-0", {dbPage: true});
+</script></td></tr></table>
+<table class="series"><tr><th>1.</th><td><div><b>Level 10</b></div></td></tr><tr><th>2.</th><td><div><a href="/achievement=7/level-20">Level 20</a></div></td></tr></table>"""
+HOSTILE_NPC_HTML = r"""<table><tr><th>Quick Facts</th></tr><tr><td><script>
+WH.markup.printHtml("[ul][li]React: [color=q10]A[\/color] [color=q2]H[\/color][\/li][\/ul]", "infobox-contents-0", {dbPage: true});
+</script></td></tr></table>"""
+
+
+def test_page_facts_read_item_starts_achievement_chains_reactions_and_keep_entity_compact(monkeypatch) -> None:
+    """Live (2026-10): quest 5089's item start was missing, achievement 6's own step read as quest 6, "React"
+    lost who is hostile, and `entity object 1731` carried 4300 spawn coordinates."""
+    pages = {
+        ("quest", 5089): ITEM_STARTED_QUEST_HTML,
+        ("achievement", 6): ACHIEVEMENT_SERIES_HTML,
+        ("npc", 448): HOSTILE_NPC_HTML,
+        ("npc", 130993): NPC_MAPPER_HTML,
+    }
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.entity_page_html", lambda self, entity_type, entity_id: pages[(entity_type, entity_id)])
+
+    def facts(*args: str) -> dict:
+        return json.loads(runner.invoke(app, ["entity-page", *args]).stdout)["data"]["facts"]
+
+    quest = facts("quest", "5089")
+    assert quest["start"] == {"type": "item", "id": 12780, "name": None, "url": "https://www.wowhead.com/item=12780"}
+    assert quest["quick_facts"] == ["Side: Alliance", "Start: item 12780"]
+
+    achievement = facts("achievement", "6")
+    assert achievement["quick_facts"] == ["Points: 10"]
+    assert achievement["series"][0][0] == {
+        "position": 1,
+        "type": "achievement",
+        "id": 6,
+        "name": "Level 10",
+        "url": "https://www.wowhead.com/achievement=6",
+        "current": True,
+    }
+
+    assert facts("npc", "448")["quick_facts"] == ["React: Alliance hostile, Horde friendly"]
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", lambda self, entity_type, entity_id, data_env=None: {"name": "Captain Fareeya"})
+    entity = json.loads(runner.invoke(app, ["entity", "npc", "130993", "--no-include-comments"]).stdout)["data"]
+    assert entity["facts"]["locations"] == [{"zone_id": 9359, "zone": "The Vindicaar", "level": 1, "count": 2}]
+
 def _raise_404(url: str):
     def fetch(self, entity_type: str, entity_id: int, data_env=None):
         request = httpx.Request("GET", url.format(type=entity_type, id=entity_id))

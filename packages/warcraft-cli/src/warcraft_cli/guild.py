@@ -17,9 +17,9 @@ def normalized_identity(region: str, realm: str, name: str) -> dict[str, str]:
 def raiderio_guild_summary(payload: dict[str, Any]) -> dict[str, Any]:
     """Guild identity, every raid Raider.IO reports (progression joined to ranks), roster, citations.
 
-    Raider.IO returns progression and rankings sorted by raid slug and carries no start/end window,
-    so there is no honest way to name one row "the active raid" from this payload alone; every raid
-    is returned instead of guessing.
+    The raiderio CLI sorts progression and rankings rows by raid slug; Raider.IO's payload carries no
+    start/end window, so there is no honest way to name one row "the active raid" from this payload
+    alone; every raid is returned instead of guessing.
     """
     guild = as_dict(payload.get("guild"))
     raids = guild_rank_rows(payload)

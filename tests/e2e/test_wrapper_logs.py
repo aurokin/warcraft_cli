@@ -265,8 +265,13 @@ def test_cooldown_packet_joins_a_report_fight_to_lorrgs_top_parses(require):
         "warcraftlogs_report_events": "warcraftlogs",
     }
     # The Lorrgs roster names the player and Lorrgs supplies the phases, so the Warcraft Logs roster
-    # and phase transitions are listed but never read.
-    unread = {"warcraftlogs_report_player_details", "warcraftlogs_phase_transitions", "lorrgs_bosses"}
+    # and phase transitions (the fight's and the top parses') are listed but never read.
+    unread = {
+        "warcraftlogs_report_player_details",
+        "warcraftlogs_phase_transitions",
+        "warcraftlogs_top_parse_phase_transitions",
+        "lorrgs_bosses",
+    }
     assert set(data["sources"]) == {*expected_sources, *unread}, result.describe()
     assert {data["sources"][key]["status"] for key in unread} == {"not_requested"}, result.describe()
     assert data["phase"]["source"] == "lorrgs", result.describe()
@@ -417,6 +422,15 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     # unless the kill is on a difficulty Lorrgs does not rank (it ranks Heroic and Mythic only).
     ranked = found.fight["difficulty"] in (HEROIC_DIFFICULTY_ID, MYTHIC_DIFFICULTY_ID)
     assert data["comparison"]["reason"] == (None if ranked else "unranked_difficulty"), result.describe()
+    if ranked and phase["windows"]:
+        # Lorrgs numbers phases its own way, so the top parses are segmented by their own Warcraft Logs
+        # transitions, and a sample's window is the same encounter phase as the player's.
+        assert data["sources"]["warcraftlogs_top_parse_phase_transitions"]["status"] == "ok", result.describe()
+        for sample in data["comparison"]["samples"]:
+            if sample["phase_available"]:
+                window = sample["phase_window"]
+                assert window["start_source"] == "warcraftlogs_phase_transition", result.describe()
+                assert window["phase_id"] == phase["selected"]["phase_id"], result.describe()
 
     # Without --boss-slug the boss is the Lorrgs boss whose id is the fight's encounter id.
     unnamed = run(
@@ -843,6 +857,12 @@ def test_warcraftlogs_passthrough_matches_the_direct_binary(require):
     args = ("report-fights", anchor().code)
     through_wrapper = run("warcraft", "warcraftlogs", *args)
     direct = run("warcraftlogs", *args)
-    assert through_wrapper.payload == direct.payload, through_wrapper.describe()
+
+    def without_cache(payload: dict[str, Any]) -> dict[str, Any]:
+        # provenance.cache differs by design: the first call fills the cache the second one hits.
+        provenance = {key: value for key, value in payload["provenance"].items() if key != "cache"}
+        return {**payload, "provenance": provenance}
+
+    assert without_cache(through_wrapper.payload) == without_cache(direct.payload), through_wrapper.describe()
     assert through_wrapper.payload["provider"] == "warcraftlogs", through_wrapper.describe()
     assert through_wrapper.data["fights"], through_wrapper.describe()

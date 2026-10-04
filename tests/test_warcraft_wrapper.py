@@ -20,7 +20,7 @@ from warcraft_cli.actor_profile import ACTOR_PROFILE_MAX_SCOPED_FIGHTS
 from warcraft_cli.cooldown_packet import normalize_warcraftlogs_actor_casts
 from warcraft_cli.guild import guild_rank_rows
 from warcraft_cli.main import app as warcraft_app
-from warcraft_cli.providers import PROVIDERS, DescribeOptions, PacketInput, get_provider
+from warcraft_cli.providers import PROVIDERS, DescribeOptions, PacketInput, get_provider, provider_doctor
 from warcraft_content.article_bundle import write_article_bundle
 from warcraft_core.cli import error_envelope_for
 from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS, envelope_violations
@@ -400,6 +400,40 @@ def test_method_doctor_reports_search_and_resolve_ready() -> None:
     assert payload["data"]["status"] == "ready"
     assert payload["data"]["capabilities"]["search"] == "ready"
     assert payload["data"]["capabilities"]["resolve"] == "ready"
+
+
+def test_warcraft_doctor_surfaces_a_providers_cache_config_error(monkeypatch) -> None:
+    monkeypatch.setenv("CURSEFORGE_CACHE_BACKEND", "bogus")
+
+    data = json.loads(runner.invoke(warcraft_app, ["doctor"]).stdout)["data"]
+
+    providers = {row["provider"]: row for row in data["providers"]}
+    assert providers["curseforge"]["status"] == "degraded"
+    assert providers["curseforge"]["cache_error"]["code"] == "invalid_cache_config"
+    assert (providers["wowhead"]["status"], providers["wowhead"]["cache_error"]) == ("ready", None)
+
+
+def test_warcraft_doctor_cache_error_is_an_object_when_the_provider_doctor_fails(monkeypatch) -> None:
+    monkeypatch.setenv("WOWHEAD_CACHE_BACKEND", "bogus")
+
+    data = json.loads(runner.invoke(warcraft_app, ["doctor"]).stdout)["data"]
+
+    wowhead = next(row for row in data["providers"] if row["provider"] == "wowhead")
+    assert wowhead["status"] == "error"
+    assert wowhead["cache_error"]["code"] == "invalid_cache_config"
+    assert "WOWHEAD_CACHE_BACKEND" in wowhead["cache_error"]["message"]
+
+
+def test_warcraft_doctor_wraps_a_redis_ping_failure_as_an_object(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "warcraft_cli.providers._call_surface",
+        lambda *_args, **_kwargs: (0, {"ok": True, "data": {"cache": {"error": "Connection refused."}}}),
+    )
+
+    row = provider_doctor("wowhead")
+
+    assert row["status"] == "degraded"
+    assert row["cache_error"] == {"code": "cache_unavailable", "message": "Connection refused."}
 
 
 def test_warcraft_doctor_reports_ready_and_stubbed_providers() -> None:
@@ -5879,8 +5913,8 @@ def test_warcraft_guild_is_a_single_raiderio_source_and_normalizes_query(monkeyp
     assert "payload" not in payload["data"]["sources"]["raiderio"]
     assert payload["data"]["sources"]["raiderio"]["provenance"] == {"source": "raider.io"}
     summary = payload["data"]["sources"]["raiderio"]["summary"]
-    # Raider.IO orders progression and rankings by slug and carries no raid window, so the snapshot
-    # reports every raid joined to its own ranks instead of calling element [0] the "active" raid.
+    # The raiderio CLI sorts progression and rankings by raid slug and Raider.IO carries no raid
+    # window, so the snapshot reports every raid joined to its own ranks instead of calling element [0] the "active" raid.
     assert "active_raid" not in summary
     assert summary["raid_count"] == 2
     assert [row["raid_slug"] for row in summary["raids"]] == ["liberation-of-undermine", "manaforge-omega"]
@@ -6949,6 +6983,84 @@ def test_cooldown_packet_keeps_the_whole_fight_when_the_warcraftlogs_phase_looku
     assert (data["phase"]["status"], data["phase"]["unavailable_reason"]) == ("unavailable", "lorrgs_fight_lookup_failed")
     assert data["sources"]["warcraftlogs_phase_transitions"]["error"]["code"] == "network_error"
     assert data["cooldowns"]["player_casts"]["tracked_cast_count"] == 2
+
+
+def _wcl_segmented_cooldown_packet(monkeypatch, sample_fights: dict[str, Any], sample_args: list[list[str]]) -> dict[str, Any]:
+    """Run a cooldown packet whose player windows come from Warcraft Logs and whose top parses (one per
+    ``sample_fights`` alias, Lorrgs-marked only at 2500 ms) are segmented by ``sample_fights``. Like
+    GraphQL, a sample fight carries ``encounterID`` only when the query selects it."""
+    transitions = [{"id": 1, "startTime": 1000}, {"id": 2, "startTime": 2000}, {"id": 1, "startTime": 3000}]
+    uncached = _uncached_lorrgs_invoke([], transitions)
+
+    def top_fight(report_id: str) -> dict[str, Any]:
+        player = {"name": "Topwar", "source_id": 7, "casts": [{"id": 107574, "ts": 1500}, {"id": 107574, "ts": 3000}]}
+        return {"report_id": report_id, "fights": [{"fight_id": 1, "duration": 6000, "phases": [{"ts": 2500}], "players": [player]}]}
+
+    def invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        if args[0] == "graphql" and "--variables-json" in args:
+            sample_args.append(args)
+            selects_encounter = "encounterID" in args[args.index("--query") + 1]
+            answers = {
+                alias: fight if fight is None else {"fights": [{**fight, **({"encounterID": 7} if selects_encounter else {})}]}
+                for alias, fight in sample_fights.items()
+            }
+            return {"provider": provider, "exit_code": 0, "payload": _envelope({"reportData": answers})}
+        if args[0] == "boss-spells":
+            return {"provider": provider, "exit_code": 0, "payload": _envelope({})}
+        if args[0] == "spec-ranking":
+            reports = [top_fight(f"report-{alias}") for alias in sample_fights]
+            return {"provider": provider, "exit_code": 0, "payload": _envelope({"reports": reports})}
+        return uncached(provider, args, expansion=expansion)
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", invoke)
+
+    result = runner.invoke(warcraft_app, [
+        "cooldown-packet", "abcd1234", "--fight-id", "22", "--actor-id", "89", "--spec-slug", "warrior-protection",
+        "--phase", "2", "--boss-slug", "lura", "--difficulty", "mythic",
+    ])
+
+    assert result.exit_code == 0, result.output
+    return json.loads(result.stdout)["data"]
+
+
+def test_cooldown_packet_segments_top_parses_by_warcraftlogs_phases_when_the_player_windows_came_from_there(
+    monkeypatch,
+) -> None:
+    """Lorrgs marks only some transitions (here, only the intermission's end), so its P2 is not the
+    Warcraft Logs P2. Each top parse is segmented by its own Warcraft Logs transitions instead, and a
+    sample whose P2 is another encounter phase, or whose transitions could not be read, is left out."""
+    sample_fights = {
+        "r0": {"id": 1, "startTime": 50000, "endTime": 56000, "phaseTransitions": [
+            {"id": 1, "startTime": 50000}, {"id": 2, "startTime": 51200}, {"id": 1, "startTime": 52000}]},
+        "r1": {"id": 1, "startTime": 0, "endTime": 6000, "phaseTransitions": [
+            {"id": 1, "startTime": 0}, {"id": 3, "startTime": 1000}]},
+        "r2": None,
+    }
+    sample_args: list[list[str]] = []
+
+    comparison = _wcl_segmented_cooldown_packet(monkeypatch, sample_fights, sample_args)["comparison"]
+
+    assert (comparison["status"], comparison["phase_sample_count"]) == ("ready", 1)
+    matched, other_phase, unreadable = comparison["samples"]
+    assert (matched["phase_window"]["start_ms"], matched["phase_window"]["end_ms"]) == (1200, 2000)
+    assert matched["phase_window"]["name"] == "Void Rift"
+    assert [cast["timestamp_ms"] for cast in matched["selected_phase_casts"]] == [1500]
+    assert other_phase["phase_unavailable_reason"] == "phase_not_in_top_parse"
+    assert unreadable["phase_unavailable_reason"] == "top_parse_phase_lookup_failed"
+    assert json.loads(sample_args[0][-1]) == {
+        "c0": "report-r0", "f0": [1], "c1": "report-r1", "f1": [1], "c2": "report-r2", "f2": [1]}
+
+
+def test_cooldown_packet_does_not_blame_lorrgs_markers_when_warcraftlogs_top_parses_have_no_transitions(
+    monkeypatch,
+) -> None:
+    """On the Warcraft Logs path the samples' windows come from their own transitions, not Lorrgs markers."""
+    sample_fights = {"r0": {"id": 1, "startTime": 0, "endTime": 6000, "phaseTransitions": None}}
+
+    data = _wcl_segmented_cooldown_packet(monkeypatch, sample_fights, [])
+
+    assert (data["comparison"]["status"], data["comparison"]["reason"]) == ("no_phase_data", "top_parse_has_no_phase_markers")
+    assert not any("Lorrgs ranking fights" in note for note in data["notes"])
 
 
 @pytest.mark.parametrize(

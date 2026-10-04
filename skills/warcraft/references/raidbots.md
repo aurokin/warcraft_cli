@@ -24,7 +24,8 @@ SimC input to local `simc`. It cannot queue or run simulations.
 - `inspect-report` returns a kind-aware summary:
   - `quick_sim`: the actor (name/spec/role/class) plus DPS and core metrics; a sim with several
     actors also carries `actor_count` and `other_actors`
-  - `multi_profile` (Top Gear / Droptimizer): ranked profileset results by mean; per-actor damage/buff
+  - `multi_profile` (Top Gear / Droptimizer): ranked profileset results by mean, each with SimC's
+    `mean_error` and `iterations`; two rows closer than `mean_error` are a tie. Per-actor damage/buff
     detail is not present in these report types, so reason from the ranked rows, not from a single actor
 - pass `--no-raw` to `inspect-report` for large multi-profile reports so you get the summary without the
   full `data.json` payload
@@ -32,7 +33,8 @@ SimC input to local `simc`. It cannot queue or run simulations.
   cite the source and tell how fresh it is
 - use `input` when you want to continue the analysis locally: it returns the SimC input (`data.input`,
   never shortened by `--compact`) plus suggested `simc` commands (run the full profile with `simc sim -`,
-  which also ranks Top Gear profilesets, or decode/describe the talents)
+  which keeps the input's own iterations, target error and fight length and also ranks Top Gear
+  profilesets, or decode/describe the talents)
 - use `explain-input` when the user pastes a `/simc` addon block and asks "what would Raidbots do with this?"
   — it classifies the sim type (quick sim vs Top Gear/Droptimizer vs advanced) entirely offline; text
   with no SimC `key=value` line fails `invalid_query` instead of being classified as advanced

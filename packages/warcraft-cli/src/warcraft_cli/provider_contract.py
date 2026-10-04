@@ -8,7 +8,7 @@ from typing import Any
 from warcraft_core.discovery import title_match
 from warcraft_core.shapes import as_dict
 
-from warcraft_cli.providers import STALE_GUIDE_REASON
+from warcraft_cli.providers import STALE_GUIDE_REASON, WIKI_QUERY_COVERAGE_REASONS
 
 # The wrapper's ranking weights. Changing them is a contract change: the table of realistic queries in
 # tests/test_provider_contract.py is what a change has to keep true.
@@ -177,6 +177,12 @@ def query_intents(query: str) -> list[str]:
 # and popularity credit; a Raider.IO exact structured match scores 45 on top of its base), so the
 # floor only bites when a provider's whole answer is weak.
 MINIMUM_PROVIDER_SCORE_SCALE = 40
+# The divisor floor for a row that does not cover the query (``_row_covers_query``): it keeps its
+# provider-local score instead of being rescaled up for leading its provider's weak answer.
+UNCOVERED_ROW_SCORE_SCALE = 100
+# A wiki title that is a phrase inside the query ("where is Captain Fareeya" -> "Captain Fareeya")
+# names the subject. The wiki leaves it out of its own coverage reasons only for its confidence rule.
+_WIKI_TITLE_IN_QUERY_REASON = "query_contains_title"
 
 # The provider family that only answers a query actually asking for a player or guild profile, and
 # the intents that ask for one.
@@ -186,7 +192,7 @@ PROFILE_INTENTS = frozenset({"character_profile", "guild_profile", "structured_p
 # them is answered by that entity first; every other family describes or lists it.
 ENTITY_FAMILY = "entity"
 
-def normalized_provider_score(score: int, *, provider_max_score: int) -> int:
+def normalized_provider_score(score: int, *, provider_max_score: int, scale_floor: int = MINIMUM_PROVIDER_SCORE_SCALE) -> int:
     """Rescale one provider-local score onto the shared 0-100 axis using that provider's own best row.
 
     Provider search scores are not comparable, and the gap is in the scoring code, not in one
@@ -195,13 +201,13 @@ def normalized_provider_score(score: int, *, provider_max_score: int) -> int:
     measured 116 against 89. Merging the raw numbers lets the provider with the largest scale own
     every slot in the merged list.
 
-    The divisor never drops below ``MINIMUM_PROVIDER_SCORE_SCALE``, so a provider whose best row is
-    junk (a two-term text match scoring 3) is scaled down rather than promoted to 100 for winning
-    its own empty field.
+    The divisor never drops below ``scale_floor`` (``MINIMUM_PROVIDER_SCORE_SCALE`` by default), so a
+    provider whose best row is junk (a two-term text match scoring 3) is scaled down rather than
+    promoted to 100 for winning its own empty field.
     """
     if provider_max_score <= 0 or score <= 0:
         return 0
-    divisor = max(provider_max_score, MINIMUM_PROVIDER_SCORE_SCALE)
+    divisor = max(provider_max_score, scale_floor)
     return round(100 * min(score, provider_max_score) / divisor)
 
 
@@ -216,11 +222,40 @@ def name_match_strength(query: str, name: Any) -> str | None:
     return title_match(query, str(name or ""))
 
 
+def _row_covers_query(row: Mapping[str, Any]) -> bool:
+    """Whether the row's provider says the row accounts for the whole query.
+
+    Two providers say when it does not: a Lorrgs row lists the query words it ignored in
+    ``unmatched_terms`` (``Sun King's Salvation`` for ``mimiron's head mount`` matched only an ``s``),
+    and a wiki row matched on its snippet, upstream position or page family alone carries none of the
+    wiki's coverage reasons (``Events`` for ``pvp tier list``). Rows that say neither count as covering.
+    """
+    ranking = as_dict(row.get("ranking"))
+    if ranking.get("unmatched_terms"):
+        return False
+    if row.get("provider") != "warcraft-wiki":
+        return True
+    reasons = ranking.get("match_reasons")
+    return not isinstance(reasons, list) or bool(set(reasons) & (WIKI_QUERY_COVERAGE_REASONS | {_WIKI_TITLE_IN_QUERY_REASON}))
+
+
 def _provider_flagged_stale(row: Mapping[str, Any]) -> bool:
     """Whether the provider itself marked this row a superseded guide (Wowhead does, per response)."""
     ranking = row.get("ranking")
     reasons = ranking.get("match_reasons") if isinstance(ranking, Mapping) else None
     return isinstance(reasons, list) and STALE_GUIDE_REASON in reasons
+
+
+def _base_score(raw_score: int, *, provider_max_score: int | None, covers_query: bool) -> tuple[int, list[str]]:
+    """The row's score before policy boosts, and the reasons that explain it."""
+    if provider_max_score is None:
+        return raw_score, [f"provider_score:{raw_score}"]
+    scale_floor = MINIMUM_PROVIDER_SCORE_SCALE if covers_query else UNCOVERED_ROW_SCORE_SCALE
+    score = normalized_provider_score(raw_score, provider_max_score=provider_max_score, scale_floor=scale_floor)
+    reasons = [f"normalized_provider_score:{score}(raw {raw_score}/{provider_max_score})"]
+    if not covers_query:
+        reasons.append(f"uncovered_query:scale_floor:{scale_floor}")
+    return score, reasons
 
 
 def wrapper_search_ranking(
@@ -237,18 +272,16 @@ def wrapper_search_ranking(
     ``warcraft resolve``) so no provider's local scale can crowd the others out.
     ``provider_top_row`` marks the provider's own first row, the only row that can anchor a page.
     ``intent_family_fit`` is the sum of the family boosts the query's intents gave the row: below zero,
-    the query asked for a different kind of source than this row's provider.
+    the query asked for a different kind of source than this row's provider. A row that does not
+    cover the query (``covers_query``) is not rescaled up, so it cannot outrank a title match from
+    another provider for leading its own provider's weak answer.
     """
     provider = str(row.get("provider") or "").strip()
     family = RANKING_POLICY["provider_families"].get(provider, "unknown")
     kind = row.get("kind")
     raw_score = candidate_score(row)
-    if provider_max_score is None:
-        score = raw_score
-        reasons: list[str] = [f"provider_score:{score}"]
-    else:
-        score = normalized_provider_score(raw_score, provider_max_score=provider_max_score)
-        reasons = [f"normalized_provider_score:{score}(raw {raw_score}/{provider_max_score})"]
+    covers_query = _row_covers_query(row)
+    score, reasons = _base_score(raw_score, provider_max_score=provider_max_score, covers_query=covers_query)
     intents = query_intents(query)
     family_fit = 0
     for intent in intents:
@@ -297,6 +330,7 @@ def wrapper_search_ranking(
         "intent_family_fit": family_fit,
         "anchor": anchor,
         "stale_guide": _provider_flagged_stale(row),
+        "covers_query": covers_query,
         "provider_score": raw_score,
         "provider_max_score": provider_max_score,
     }

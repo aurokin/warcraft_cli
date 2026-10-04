@@ -815,6 +815,22 @@ def _build_reference_total(bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> 
     return max(2, holders)
 
 
+def _evidence_block(
+    rows: list[dict[str, Any]],
+    key: str,
+    membership: dict[str, set[str]],
+    bundle_descriptors: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """One comparison family: its rows split into keys every bundle shares and keys only some do."""
+    return {
+        "count": len(rows),
+        "shared": [row[key] for row in rows if row["shared_across_all_bundles"]],
+        "partial": [row[key] for row in rows if not row["shared_across_all_bundles"]],
+        "unique_by_bundle": _comparison_unique_rows(bundle_descriptors=bundle_descriptors, membership_by_key=membership),
+        "items": rows,
+    }
+
+
 def compare_article_bundles(bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> dict[str, Any]:
     if len(bundle_inputs) < 2:
         raise ValueError("compare_article_bundles requires at least two bundles")
@@ -846,35 +862,10 @@ def compare_article_bundles(bundle_inputs: list[tuple[Path, dict[str, Any]]]) ->
         "bundles": bundle_descriptors,
         "section_evidence": {
             "matching_rule": "exact_normalized_section_title",
-            "count": len(section_rows),
-            "shared": [row["section_title_key"] for row in section_rows if row["shared_across_all_bundles"]],
-            "partial": [row["section_title_key"] for row in section_rows if not row["shared_across_all_bundles"]],
-            "unique_by_bundle": _comparison_unique_rows(
-                bundle_descriptors=bundle_descriptors,
-                membership_by_key=section_membership,
-            ),
-            "items": section_rows,
+            **_evidence_block(section_rows, "section_title_key", section_membership, bundle_descriptors),
         },
-        "analysis_surface_tags": {
-            "count": len(analysis_rows),
-            "shared": [row["tag"] for row in analysis_rows if row["shared_across_all_bundles"]],
-            "partial": [row["tag"] for row in analysis_rows if not row["shared_across_all_bundles"]],
-            "unique_by_bundle": _comparison_unique_rows(
-                bundle_descriptors=bundle_descriptors,
-                membership_by_key=analysis_membership,
-            ),
-            "items": analysis_rows,
-        },
-        "build_references": {
-            "count": len(build_rows),
-            "shared": [row["reference_key"] for row in build_rows if row["shared_across_all_bundles"]],
-            "partial": [row["reference_key"] for row in build_rows if not row["shared_across_all_bundles"]],
-            "unique_by_bundle": _comparison_unique_rows(
-                bundle_descriptors=bundle_descriptors,
-                membership_by_key=build_membership,
-            ),
-            "items": build_rows,
-        },
+        "analysis_surface_tags": _evidence_block(analysis_rows, "tag", analysis_membership, bundle_descriptors),
+        "build_references": _evidence_block(build_rows, "reference_key", build_membership, bundle_descriptors),
         "citations": {
             "bundle_paths": bundle_paths,
         },

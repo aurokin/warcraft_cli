@@ -429,6 +429,14 @@ def test_decode_and_identify_a_build_from_a_repo_profile(require, checkout: Chec
         assert not unranked, f"{tree} rows without a real rank: {unranked}"
     assert f"decoded via {checkout.root}" in " ".join(decoded["source_notes"])
 
+    # A split option on top of the hash overwrites the rank SimC gave that talent; rank 0 removes it.
+    dropped = next(talent for talent in decoded["talents_by_tree"]["class"] if talent["max_rank"] == 1)
+    overridden = run(
+        "simc", "decode-build", "--talents", checkout.talents, "--actor-class", ACTOR_CLASS, "--spec", SPEC,
+        "--class-talents", f"{dropped['entry']}:0",
+    ).data["decoded"]
+    assert dropped["entry"] not in {talent["entry"] for talent in overridden["talents_by_tree"]["class"]}, dropped
+
 
 def _simc_rejection(oracle: Result) -> str:
     """The reason SimC gave for rejecting a profile, without the player and hash it names."""
@@ -1306,6 +1314,15 @@ def test_sim_run_and_log_analysis_chain(require, checkout: Checkout, out_dir: Pa
     assert (settings["fight_style"], settings["desired_targets"], settings["vary_combat_length"]) == ("LightMovement", 3, 0.0), inline.describe()
     assert data["run_settings"]["desired_targets"] == 1, simmed.describe()
 
+    # A profile's own run settings (a Raidbots input carries them) win over the preset unless a flag is given.
+    own = run(
+        "simc", "sim", "--profile-text", f"{checkout.profile.read_text()}\nmax_time=45\niterations=30\n",
+        "--threads", "1", timeout=300,
+    )
+    assert own.data["run_settings"]["max_time"] == 45, own.describe()
+    assert own.data["run_settings"]["iterations_requested"] == 30, own.describe()
+    assert own.data["disclosures"][0].startswith("Kept the profile's own max_time=45, iterations=30"), own.describe()
+
     # Without output= the text report is on stdout; result_lines keeps each actor's header above its metrics.
     run_json = out_dir / "run.json"
     plain = run(
@@ -1421,6 +1438,14 @@ def test_harness_validate_compare_and_report_workflow(require, checkout: Checkou
     generated = Path(validated.data["profile_path"])
     assert generated.is_file()
     assert "actions" in generated.read_text()
+    assert validated.data["warnings"] == []
+
+    # SimC exits 0 after dropping an option it does not know, so the warning is what makes it invalid.
+    typo_apl = out_dir / "typo.simc"
+    typo_apl.write_text(checkout.apl.read_text() + "\nactions+=/wait,sec=1,iff=1\n")
+    typo = run("simc", "validate-apl", str(harness_path), str(typo_apl), "--label", "typo", "--out-dir", str(out_dir), timeout=300)
+    assert (typo.data["valid"], typo.data["returncode"]) == (False, 0), typo.describe()
+    assert any("unknown option 'iff'" in line for line in typo.data["warnings"]), typo.describe()
 
     report_path = out_dir / "report.json"
     compared = run(
@@ -1635,19 +1660,11 @@ def test_bad_input_paths_exit_4(require, checkout: Checkout, out_dir: Path) -> N
         ("first-cast", str(missing), "tiger_palm"),
         ("variant-report", str(missing)),
         ("inspect", str(missing)),
+        ("validate-apl", str(missing), str(checkout.apl)),
+        ("compare-apls", str(checkout.profile), "--base-apl", str(missing)),
     ):
         result = run("simc", *args, expect=EXIT_NOT_FOUND, error_code="not_found")
         assert str(missing) in result.payload["error"]["message"], result.describe()
-
-    invalid_harness = run(
-        "simc",
-        "validate-apl",
-        str(missing),
-        str(checkout.apl),
-        expect=EXIT_GENERIC,
-        error_code="validate_apl_failed",
-    )
-    assert str(missing) in invalid_harness.payload["error"]["message"]
 
 
 def test_usage_errors_exit_2_with_an_error_envelope(require, checkout: Checkout) -> None:

@@ -646,18 +646,17 @@ def _validate_talent_transport_simc_split_forms(
         return
     if not isinstance(split, dict):
         raise ValueError("Talent transport packet simc_split_talents must be an object.")
+    present: list[str] = []
     for key in ("class_talents", "spec_talents", "hero_talents"):
-        if key not in split or split.get(key) is None:
-            continue
         value = split.get(key)
+        if value is None:
+            continue
         if not (isinstance(value, str) and value.strip()):
             raise ValueError(
                 f"Talent transport packet simc_split_talents.{key} must be a non-empty string when present."
             )
-    if not any(
-        isinstance(value := split.get(key), str) and bool(value.strip())
-        for key in ("class_talents", "spec_talents", "hero_talents")
-    ):
+        present.append(value)
+    if not present:
         raise ValueError(
             "Talent transport packet simc_split_talents must include at least one non-empty class/spec/hero string."
         )

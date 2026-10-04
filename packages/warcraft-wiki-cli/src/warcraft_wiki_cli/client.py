@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any
 
-import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, CachedHttpClient, json_cache_key, request_with_retries
 from warcraft_core.paths import provider_cache_root
 
 from warcraft_wiki_cli.page_parser import normalize_article_ref, parse_article_page, parse_search_results
@@ -41,43 +38,15 @@ def load_warcraft_wiki_cache_settings_from_env() -> tuple[CacheSettings, int, in
     return settings, settings.ttls.search_suggestions, settings.ttls.page_html
 
 
-class WarcraftWikiClient:
+class WarcraftWikiClient(CachedHttpClient):
     def __init__(self) -> None:
-        self._http_client: httpx.Client | None = None
         settings, search_ttl, page_ttl = load_warcraft_wiki_cache_settings_from_env()
         self._cache_store = build_cache_store(settings) if settings.enabled else None
         self._search_ttl = search_ttl
         self._page_ttl = page_ttl
 
-    def close(self) -> None:
-        if self._http_client is not None:
-            self._http_client.close()
-            self._http_client = None
-
-    def __enter__(self) -> WarcraftWikiClient:
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        self.close()
-
-    def _client(self) -> httpx.Client:
-        if self._http_client is None:
-            self._http_client = build_client(timeout=20.0)
-        return self._http_client
-
     def _cache_key(self, namespace: str, params: dict[str, Any]) -> str:
-        raw = json.dumps({"namespace": namespace, "params": params}, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        return f"{namespace}:{hashlib.sha256(raw).hexdigest()}"
-
-    def _read_cache(self, key: str) -> Any | None:
-        if self._cache_store is None:
-            return None
-        return self._cache_store.get(key)
-
-    def _write_cache(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
-        if self._cache_store is None:
-            return
-        self._cache_store.set(key, payload, ttl_seconds=ttl_seconds)
+        return json_cache_key(namespace, {"namespace": namespace, "params": params})
 
     def _api_json(self, *, namespace: str, ttl_seconds: int, params: dict[str, Any]) -> dict[str, Any]:
         key = self._cache_key(namespace, params)

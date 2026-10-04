@@ -85,14 +85,15 @@ linked entities and analysis surfaces, but no pages or build references.
 ### Build references
 
 `build_references` carries explicit build evidence from the page, never a guess from the slug or
-title. Two reference types are emitted:
+title. Three reference types are emitted:
 
 | `reference_type` | Source on the page | `url` |
 | --- | --- | --- |
 | `wowhead_talent_calc_url` | an embedded Wowhead talent-calc link | the talent-calc URL |
 | `wow_talent_export` | a published WoW loadout import string (the `Copy` blocks on the talents pages) | the import string itself, because the reference has no link |
+| `icy_veins_talent_calc_url` | an embedded Icy Veins talent calculator, read on `pvp` pages only | the Icy Veins talent calculator URL with the build's hash |
 
-Both types set `build_code`, so `warcraft guide-builds-simc` collects either one. It counts the
+The first two types are what `warcraft guide-builds-simc` hands to simc. It counts the
 build in `summary.identify_success_count` only when simc identifies one class and spec; otherwise the
 identify leg fails `build_not_identified`. Decoding needs a class and a spec, and the two types supply
 them differently:
@@ -107,6 +108,17 @@ without `--actor-class` or `--spec` (verified against the Fury Warrior talents p
 
 The Icy Veins builds/talents pages publish import strings rather than talent-calc links, so in
 practice the rows you get back are `wow_talent_export`.
+
+The PvP talents-and-builds pages publish no import strings: each build is an embed of Icy Veins' own
+talent calculator, labelled by its build tab ("Best 3v3 Frost Mage Build"). Each distinct build becomes an
+`icy_veins_talent_calc_url` row. When several tabs embed the same build, the row's `label` joins their
+names with " / " ("Best 3v3 Talents / Best Battleground Blitz Talents"). Its `build_code` is the calculator's hash, which includes the PvP talents.
+The hash is Icy Veins' own encoding, not a WoW import string. Only its spec id is read, which gives
+`build_identity` its class and spec with `confidence: high`. simc cannot decode the hash, so
+`guide-builds-simc` excludes these rows with `unsupported_reference_type:icy_veins_talent_calc_url`.
+Open the `url` and use the calculator's export button to get the import string. PvE pages embed the
+calculator too (builds/talents, easy-mode and Mythic+ tips pages), but no rows are read from those
+embeds, so a PvE build that appears only in the calculator is not in `build_references`.
 
 ### Partial guide bundles
 

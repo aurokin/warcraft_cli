@@ -53,11 +53,18 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
 `warcraft <command> --help`.
 
 - `warcraft doctor` — wrapper and per-provider readiness: tier, auth, expansion support, runtime paths.
+  A provider with a cache failure carries it in `cache_error` as `{code, message}` (`null`
+  otherwise): `cache_unavailable` for an unreachable Redis, `invalid_cache_config` for an invalid
+  `<PROVIDER>_CACHE_BACKEND`. The row's `status` is `degraded`, or `error` when the provider's own
+  doctor failed because of it.
 - `warcraft search` — fan out to every search-ready provider and rank the merged candidates. Each
   provider row carries `ok` and `error`, so a failed provider is distinguishable from an empty result.
   Each provider's scores are rescaled against that provider's own best row before the merge, so a
   provider with a larger local score scale cannot take every slot; the divisor has a floor, so a
-  provider whose best row is weak does not get a full score for topping its own empty field.
+  provider whose best row is weak does not get a full score for topping its own empty field. A row
+  its provider says does not cover the query (a Lorrgs row with `unmatched_terms`, a wiki row that
+  matched only on its snippet) is not rescaled up at all (`wrapper_ranking.covers_query: false`), so
+  it cannot outrank another provider's title match.
   `count` is the rows on the page and `truncated` says whether `--limit` cut the merged candidates;
   `merge_policy.provider_total_matches` keeps each provider's own `total_matches` (`null` for a stub or
   a provider in `failed_providers`). The merged
@@ -98,8 +105,8 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   alias (`oce`, `oceanic`) is looked up as `us`, the region Oceanic realms belong to.
   `sources.raiderio.summary.raids[]` reports every raid Raider.IO returned, progression joined to its
   own normal/heroic/mythic world, region, and realm ranks by `raid_slug` (`0` means unranked). There
-  is no `active_raid`: Raider.IO orders those rows by slug and carries no raid start/end window, so
-  naming one of them "active" would be a guess. Cross-reference `raiderio raids` when you need the
+  is no `active_raid`: the raiderio CLI sorts those rows by raid slug; Raider.IO's payload carries no
+  raid start/end window, so naming one of them "active" would be a guess. Cross-reference `raiderio raids` when you need the
   currently running tier. The Raider.IO call's provenance is `sources.raiderio.provenance`; the raw
   envelope is not repeated (`warcraft raiderio guild` returns it).
 - `warcraft actor-profile` — cross-walk a Warcraft Logs report actor to a Raider.IO profile. The report
@@ -128,9 +135,13 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   `lorrgs.message` names the real reason (only a `not_found` is reported as "not cached"). The phase
   windows then come from the Warcraft Logs fight's phase transitions (`phase.source:
   "warcraftlogs"`; `"lorrgs"` when Lorrgs served the fight): windows are numbered P1, P2, ... in
-  order as on the Lorrgs path, so `--phase` and the top-parse comparison pick the same window, and
-  each window carries the encounter phase's `phase_id` and `name` (a boss that returns to phase 1
-  has P1 and P3 both with `phase_id` 1). A fight with no
+  order, one per transition, and each window carries the encounter phase's `phase_id` and `name` (a
+  boss that returns to phase 1 has P1 and P3 both with `phase_id` 1). Lorrgs places its own markers
+  (on some bosses only the intermission ends), so its P2 can be a different stretch of the fight.
+  The top parses are then segmented by their own Warcraft Logs phase transitions
+  (`sources.warcraftlogs_top_parse_phase_transitions`) the same way. A sample whose window of that
+  number is another encounter phase gets `phase_unavailable_reason: "phase_not_in_top_parse"`, and one
+  whose transitions could not be read gets `"top_parse_phase_lookup_failed"`. A fight with no
   phase transitions, or a failed lookup (`sources.warcraftlogs_phase_transitions.error`), leaves
   `phase.status: "unavailable"`, `phase.selected` null, and `phase.requested` echoing the `--phase`
   that could not be applied.

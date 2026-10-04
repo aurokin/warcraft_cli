@@ -35,9 +35,12 @@ TALENT_DEBUG_RE = re.compile(
 # SimC prints this once per hero tree the build actually selected, in two shapes depending on which
 # code path activated it: `activating sub tree Sunfury (id=39)` from a hash, `... (39)` otherwise.
 SUB_TREE_DEBUG_RE = re.compile(r"activating sub tree (?P<name>.+?) \((?:id=)?(?P<id>\d+)\)")
-# SimC's `log=1` line when a talent option overwrites a rank the talent hash already allocated. It is
-# the only place SimC reports the per-entry ranks it spread over a tiered node.
-OVERWRITE_LOG_RE = re.compile(r"Overwriting talent (?P<name>.+?) \((?P<entry>\d+)\), rank (?P<rank>\d+) -> 0")
+# SimC's `log=1` line when a talent option overwrites a rank already allocated (by the hash or an
+# earlier option); the new rank is already clamped to the talent's maximum. It is also the only place
+# SimC reports the per-entry ranks it spread over a tiered node.
+OVERWRITE_LOG_RE = re.compile(
+    r"Overwriting talent (?P<name>.+?) \((?P<entry>\d+)\), rank (?P<rank>\d+) -> (?P<new_rank>\d+)"
+)
 # SimC keeps simulating after this one: the decode profile carries no gear on purpose.
 BENIGN_INIT_ERROR = "has no weapon equipped"
 # SimC's debug stream does not always end a line before writing an error, so the marker is matched
@@ -520,6 +523,9 @@ def _single_line_build_spec(spec: BuildSpec, non_empty_lines: list[str]) -> Buil
 
 
 def _parse_simc_build_text_lines(spec: BuildSpec, non_empty_lines: list[str]) -> None:
+    """Read the first actor's build. A later actor (a class line or ``copy=``) ends it, as ``simc sim``
+    reports players[0]; reading on would pair one actor's class with another's talents."""
+    actors: list[str] = []
     for raw_line in non_empty_lines:
         line = raw_line.split("#", 1)[0].strip()
         if not line or "=" not in line:
@@ -527,10 +533,13 @@ def _parse_simc_build_text_lines(spec: BuildSpec, non_empty_lines: list[str]) ->
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip('"')
-        actor_match = ACTOR_LINE_RE.match(line)
-        if actor_match and key in DEFAULT_RACE_BY_CLASS:
-            spec.actor_class = key
-            spec.source_notes.append(f"actor line: {key}")
+        if key == "copy" or (ACTOR_LINE_RE.match(line) and key in DEFAULT_RACE_BY_CLASS):
+            actors.append(f"{key}={value}")
+            if len(actors) == 1 and key != "copy":
+                spec.actor_class = key
+                spec.source_notes.append(f"actor line: {key}")
+            continue
+        if len(actors) > 1:
             continue
         if key == "spec":
             spec.spec = value
@@ -542,6 +551,10 @@ def _parse_simc_build_text_lines(spec: BuildSpec, non_empty_lines: list[str]) ->
             spec.spec_talents = value
         elif key == "hero_talents":
             spec.hero_talents = value
+    if len(actors) > 1:
+        spec.source_notes.append(
+            f"read the first of {len(actors)} actors ({actors[0]}); ignored {', '.join(actors[1:])}"
+        )
 
 
 def extract_build_spec_from_text(text: str) -> BuildSpec:
@@ -619,14 +632,16 @@ def parse_debug_talents(output: str) -> dict[str, list[DecodedTalent]]:
         name = match.group("name")
         if tree == "selection":
             continue
-        rank = int(match.group("rank"))
+        max_rank = int(match.group("max_rank"))
+        # SimC prints the requested rank but stores it clamped to the maximum (allocate_trait).
+        rank = min(int(match.group("rank")), max_rank)
         talents_by_tree[tree].append(
             DecodedTalent(
                 tree=tree,
                 name=name,
                 token=tokenize_talent_name(name),
                 rank=rank,
-                max_rank=int(match.group("max_rank")),
+                max_rank=max_rank,
                 entry=int(match.group("entry")),
                 rank_known=rank > 0,
             )
@@ -882,6 +897,40 @@ def _probe_candidates(repo: RepoPaths, build_spec: BuildSpec, *, narrow: bool) -
     return candidates, f"the {len(candidates)} {hint} {noun}" if hint else f"the {len(candidates)} {noun} SimulationCraft knows"
 
 
+# The WoW talent export's base64 alphabet. Its header is an 8-bit version and then a 16-bit spec id,
+# read least significant bit first.
+_EXPORT_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+
+def export_spec(repo: RepoPaths, talents: str | None) -> tuple[str, str] | None:
+    """The class and spec a WoW talent export's header names, when SimC knows that spec id."""
+    head = (talents or "")[:4]
+    if len(head) < 4 or any(char not in _EXPORT_ALPHABET for char in head):
+        return None
+    bits = sum(_EXPORT_ALPHABET.index(char) << (6 * index) for index, char in enumerate(head))
+    spec_id = (bits >> 8) & 0xFFFF
+    return next((pair for pair, known_id in _known_specs(repo).items() if known_id == spec_id), None)
+
+
+def _raise_rejected_export(repo: RepoPaths, build_spec: BuildSpec, candidates: list[tuple[str, str]]) -> None:
+    """Report SimC's own error for an export whose header names a spec that then rejects it.
+
+    Such an export usually predates the current talent tree, so asking for a class and spec would not help.
+    """
+    pair = export_spec(repo, build_spec.talents)
+    if pair is None or pair not in candidates:
+        return
+    try:
+        decode_build(repo, replace(build_spec, actor_class=pair[0], spec=pair[1]))
+    except SimcBuildError as exc:
+        raise SimcBuildError(
+            f"The talent export names {' '.join(pair)} but likely predates the current talent tree (export the "
+            f"build again in game); SimC rejects it: {exc}",
+            output_preview=exc.output_preview,
+            returncode=exc.returncode,
+        ) from exc
+
+
 def _probe_build_matches(repo: RepoPaths, build_spec: BuildSpec, candidates: list[tuple[str, str]]) -> list[tuple[str, str]]:
     matches: list[tuple[str, str]] = []
     for actor_class, spec in candidates:
@@ -1003,6 +1052,8 @@ def _identify_build(
 
     candidates, probe_scope = _probe_candidates(repo, build_spec, narrow=narrow)
     matches = _probe_build_matches(repo, build_spec, candidates)
+    if not matches:
+        _raise_rejected_export(repo, build_spec, candidates)
 
     if len(matches) == 1:
         actor_class, spec = matches[0]
@@ -1102,7 +1153,28 @@ def _probe_overwritten_ranks(repo: RepoPaths, build_spec: BuildSpec, zeroed: dic
         hero_talents=_join_talent_options(build_spec.hero_talents, "/".join(zeroed.get("hero", []))),
     )
     run = _run_simc(repo, build_profile_text(probe), extra_args=("log=1",))
-    return {int(match.group("entry")): int(match.group("rank")) for match in OVERWRITE_LOG_RE.finditer(run.output)}
+    ranks: dict[int, int] = {}
+    for match in OVERWRITE_LOG_RE.finditer(run.output):
+        # An entry's first overwrite carries the rank the hash gave it, whether the build's own talent
+        # options or the zeroing changed it; apply_rank_overwrites applies the options afterwards.
+        ranks.setdefault(int(match.group("entry")), int(match.group("rank")))
+    return ranks
+
+
+def apply_rank_overwrites(output: str, talents_by_tree: dict[str, list[DecodedTalent]]) -> None:
+    """Apply the ranks talent options overwrote on top of the hash, dropping a talent set to rank 0.
+
+    A ``class_talents``/``spec_talents``/``hero_talents`` entry for a talent the hash already took
+    prints no ``adding`` line, only SimC's overwrite line; without it the decode reports the hash's rank.
+    """
+    final = {int(match.group("entry")): int(match.group("new_rank")) for match in OVERWRITE_LOG_RE.finditer(output)}
+    if not final:
+        return
+    for tree in ("class", "spec", "hero"):
+        for talent in talents_by_tree[tree]:
+            if talent.entry in final:
+                talent.rank, talent.rank_known = final[talent.entry], True
+        talents_by_tree[tree] = [talent for talent in talents_by_tree[tree] if talent.taken]
 
 
 def _expand_tiered_talents(repo: RepoPaths, build_spec: BuildSpec, talents_by_tree: dict[str, list[DecodedTalent]]) -> None:
@@ -1197,6 +1269,7 @@ def decode_build(repo: RepoPaths, build_spec: BuildSpec) -> BuildResolution:
             returncode=run.returncode,
         )
     _expand_tiered_talents(repo, build_spec, talents_by_tree)
+    apply_rank_overwrites(output, talents_by_tree)
 
     hero_trees = parse_active_hero_trees(output)
     hero_tree = hero_trees[0] if len(hero_trees) == 1 else None
@@ -1233,8 +1306,12 @@ def _split_inactive_hero_talents(
     which flips APL branches that dispatch on a hero keystone.
     """
     hero_talents = talents_by_tree["hero"]
-    if not hero_trees or not hero_talents:
+    if not hero_talents:
         return []
+    if not hero_trees:
+        # No hero tree selected at all: SimC disables every hero talent the hash granted.
+        talents_by_tree["hero"] = []
+        return hero_talents
     active_ids = {tree.id for tree in hero_trees}
     sub_trees = load_trait_table(repo.root).hero_sub_tree_by_entry
     active: list[DecodedTalent] = []

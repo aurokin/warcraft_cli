@@ -491,6 +491,37 @@ def test_bare_encounter_name_resolves_to_the_composition_ranking_not_the_boss_ro
     assert data["candidates"][0]["ranking"]["score"] == data["candidates"][1]["ranking"]["score"]
 
 
+def test_a_possessive_s_matches_nothing(monkeypatch) -> None:
+    # Live 2026-10-03: "Mimiron's Head mount" matched Sun King's Salvation on the lone "s" both split off.
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["search", "Mimiron's Head mount"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["data"]["results"] == []
+
+
+def test_an_apostrophe_name_still_resolves_high(monkeypatch) -> None:
+    # Dropping every one-letter word split "L'ura" to "ura", which no longer named the boss, so a
+    # resolve of the exact boss name fell to medium. Apostrophes join the word instead.
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["resolve", "L'ura"])
+    assert result.exit_code == 0
+    data = json.loads(result.stdout)["data"]
+    assert data["resolved"] is True
+    assert data["confidence"] == "high"
+    assert data["next_command"] == "lorrgs comp-ranking lura"
+
+
+def test_one_shared_word_of_a_longer_question_scores_under_the_wrapper_floor(monkeypatch) -> None:
+    # "captain" is one of four words; with the old base of 24 it scored 42, which the wrapper's score
+    # floor (40) rescaled to a full 100.
+    _patch_client(monkeypatch)
+    result = runner.invoke(app, ["search", "where is Captain Fareeya"])
+    assert result.exit_code == 0
+    top = json.loads(result.stdout)["data"]["results"][0]
+    assert top["name"] == "Composition ranking for Sikran, Captain of the Sureki"
+    assert top["ranking"]["score"] < 40
+
+
 def test_resolve_refuses_to_pick_between_two_specs_that_share_a_name(monkeypatch) -> None:
     # "frost <boss>" fits Frost Mage and Frost Death Knight equally well. Resolving it to one of them
     # answered a question nobody asked; the tie must surface as both candidates and no next command.

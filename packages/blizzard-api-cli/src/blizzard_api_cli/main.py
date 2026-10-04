@@ -7,7 +7,7 @@ import typer
 from warcraft_core.cli import emit, fail, guarded_run, install_common_callback
 from warcraft_core.provider import ProviderError
 
-from blizzard_api_cli.client import BlizzardClient, verification_note
+from blizzard_api_cli.client import CHARACTER_SECTIONS, BlizzardClient, verification_note
 from blizzard_api_cli.provider import PROVIDER, PROVIDER_NAME, fetch
 
 app = typer.Typer(
@@ -32,9 +32,13 @@ _REGION_OPTION = typer.Option(None, "--region", "-r", help="Blizzard region (us,
 _CLASSIC_OPTION = typer.Option(
     False,
     "--classic",
-    help="Shorthand for --game-version classic. Classic Game Data routing is live-confirmed; the Profile API has no classic namespace.",
+    help="Shorthand for --game-version classic: progression Classic (Mists of Pandaria Classic today), not Era or Anniversary.",
 )
-_GAME_VERSION_OPTION = typer.Option(None, "--game-version", help="Game version to route: retail (default) or classic.")
+_GAME_VERSION_OPTION = typer.Option(
+    None,
+    "--game-version",
+    help="Game version to route: retail (default), classic (progression Classic), classic-era, or classic-anniversary.",
+)
 _LOCALE_OPTION = typer.Option(None, "--locale", help="Locale passed through to Blizzard (default en_US). Not validated.")
 
 
@@ -107,19 +111,38 @@ def character(
     classic: bool = _CLASSIC_OPTION,
     game_version: str | None = _GAME_VERSION_OPTION,
     locale: str | None = _LOCALE_OPTION,
+    section: str | None = typer.Option(
+        None,
+        "--section",
+        help=f"Read one sub-resource instead of the profile summary: {', '.join(CHARACTER_SECTIONS)}.",
+    ),
 ) -> None:
-    """Fetch a character profile from the profile namespace (retail only): REALM NAME --region R, or REGION REALM NAME."""
+    """Fetch a character profile from the profile namespace: REALM NAME --region R, or REGION REALM NAME.
+
+    ``--section`` reads one linked sub-resource instead (PvP ratings, professions, collections),
+    which the summary only names as hrefs that need the OAuth token to follow.
+    """
     if region_first_name is not None:
         if region is not None and region.strip().lower() != realm_slug.strip().lower():
             fail(ctx, "invalid_query", f"The region is given twice: {realm_slug!r} as an argument and {region!r} as --region.")
         region, realm_slug, name = realm_slug, name, region_first_name
-    query = {"realm": realm_slug, "name": name, "region": region, "game_version": game_version, "classic": classic, "locale": locale}
+    query = {
+        "realm": realm_slug,
+        "name": name,
+        "region": region,
+        "game_version": game_version,
+        "classic": classic,
+        "locale": locale,
+        "section": section,
+    }
     _run_command(
         ctx,
         "character",
-        "character",
+        "character_section" if section else "character",
         query,
-        lambda client: client.fetch_character(realm_slug, name, region=region, game_version=game_version, classic=classic, locale=locale),
+        lambda client: client.fetch_character(
+            realm_slug, name, region=region, game_version=game_version, classic=classic, locale=locale, section=section
+        ),
     )
 
 

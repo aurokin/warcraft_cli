@@ -68,6 +68,15 @@ def test_doctor_reports_configured_when_key_present(monkeypatch: pytest.MonkeyPa
     assert (payload["data"]["status"], payload["data"]["capabilities"]["addon"]) == ("ready", "ready")
 
 
+def test_doctor_is_degraded_when_the_cache_config_is_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every addon lookup fails with invalid_cache_config under this setting, so doctor must not say ready.
+    monkeypatch.setenv("CURSEFORGE_API_KEY", "abc123")
+    monkeypatch.setenv("CURSEFORGE_CACHE_BACKEND", "bogus")
+    data = json.loads(runner.invoke(app, ["doctor"]).stdout)["data"]
+    assert data["status"] == "degraded"
+    assert data["cache"]["error"]["code"] == "invalid_cache_config"
+
+
 def test_load_curseforge_auth_config_reads_env_local(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     env_local = tmp_path / ".env.local"

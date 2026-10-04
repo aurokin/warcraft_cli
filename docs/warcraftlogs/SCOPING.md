@@ -32,7 +32,7 @@ A `--fight-id`, `--encounter-id`, or `--difficulty` that matches no fight in the
 - `--difficulty`: Warcraft Logs difficulty id or retail name (`lfr` = 1, `normal` = 3, `heroic` = 4, `mythic` = 5)
 - `--zone-id`: provider zone id
 - `--start-time` / `--end-time`: on report slices (`report-events`, `report-table`, `report-graph`, `report-player-details`), milliseconds from the report start; on `reports`, `guild-reports` and the sampled commands, UNIX epoch milliseconds or an ISO-8601 date (UTC)
-- `--window-start-ms` / `--window-end-ms`: encounter-relative timestamps on supported `report-encounter*` commands; a window that starts at or after the fight's end fails with `invalid_query` (exit 2) instead of answering zero
+- `--window-start-ms` / `--window-end-ms`: encounter-relative timestamps on supported `report-encounter*` commands; a window that starts at or after the fight's end fails with `invalid_query` (exit 2) instead of answering zero, and one that ends past the fight is clamped to it (`query.effective_window_*`, `query.window_clamped` and a note)
 - `--left-window-start-ms` / `--left-window-end-ms` and `--right-window-start-ms` / `--right-window-end-ms`: explicit comparison windows for `report-encounter-aura-compare`
 - `--boss-id` / `--boss-name`: sampled cross-report boss scope where supported
 
@@ -40,8 +40,8 @@ A `--fight-id`, `--encounter-id`, or `--difficulty` that matches no fight in the
 
 Use identity flags when the question is about one actor, target, ability, event family, or table grouping:
 
-- `--source-id`: source actor id
-- `--target-id`: target actor id
+- `--source-id`: source actor id; on Buffs tables it pins the grouping actor (the aura holder under `--view-by source`, the caster under `--view-by target`) and the rows then name the other one
+- `--target-id`: target actor id; on Buffs tables it filters the actor the rows do not group by
 - `--ability-id`: ability game id
 - `--hostility-type`: `Friendlies` or `Enemies`
 - `--kill-type`: `All`, `Encounters`, `Kills`, `Trash` or `Wipes`
@@ -66,10 +66,14 @@ Sampled analytics commands such as `boss-kills`, `top-kills`, `spec-kill-samples
 `spec-kill-samples` requires `--spec-name` (alongside boss scope): it returns the participant filter as an explicit, labeled cohort (`cohort: spec_filtered_participant_kill_cohort`) rather than as an optional refinement of `boss-kills`.
 
 One real pull that two raiders both uploaded is collapsed into a single sampled kill (same
-encounter, difficulty, raid size and guild, with wall-clock start and end within 5 s of another
-report of that pull).
+encounter, difficulty and raid size, and either the same guild with wall-clock start and end
+within 5 s, or the same players within 30 s).
 `sample.duplicates_removed` counts the collapse and the kept kill's `duplicate_reports` cites the
-folded-in report codes and fight ids.
+folded-in report codes and fight ids. A kill timed like an earlier one whose roster differs, where
+either report has no guild, is kept and marked `possible_duplicate_of`; `sample.possible_duplicates`
+counts those.
+`sample.difficulty_counts` and `sample.keystone_level_counts` show when a cohort mixes difficulties
+or Mythic+ key levels, and a note says their kill times are not comparable.
 
 Keep sample size, exclusions, truncation, deduplication, freshness, and citations with any
 downstream analysis.

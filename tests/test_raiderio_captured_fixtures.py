@@ -49,6 +49,7 @@ def test_raiderio_guild_payload_parses_a_captured_guild_profile(monkeypatch) -> 
         "faction": "horde",
         "profile_url": "https://raider.io/guilds/us/malganis/gn",
         "member_count": 12,
+        "last_crawled_at": "2026-09-18T21:46:24.000Z",
     }
     progression = {row["raid_slug"]: row for row in data["raiding"]["progression"]}
     assert progression["the-venomous-abyss"] == {
@@ -183,6 +184,9 @@ def test_raiderio_character_recent_runs_parse_a_captured_profile(monkeypatch) ->
         "keystone_time_ms": 2040999,
         "run_id": 16930919,
         "url": "https://raider.io/mythic-plus-runs/season-mn-2/16930919-10-murder-row",
+        "spec": "Arms",
+        "spec_slug": "arms",
+        "role": "dps",
     }
 
 

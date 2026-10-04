@@ -473,6 +473,15 @@ def test_a_guide_question_does_not_resolve_to_spec_metadata(require) -> None:
     assert guide.data["fallback_search_command"] == "lorrgs search 'frost mage guide'", guide.describe()
 
 
+def test_a_non_lorrgs_question_matches_no_row_on_a_possessive_or_one_word(require) -> None:
+    """``Mimiron's Head mount`` matched Sun King's Salvation on the lone "s" (2026-10); one shared word of
+    four (``captain``) scored 42, which the wrapper rescaled to a full match."""
+    require("lorrgs")
+    assert run("lorrgs", "search", "Mimiron's Head mount").data["results"] == []
+    for row in run("lorrgs", "search", "where is Captain Fareeya").data["results"]:
+        assert row["ranking"]["score"] < 40, row
+
+
 def test_search_ranks_the_spec_ranking_surface_first(catalog: Catalog) -> None:
     result = run("lorrgs", "search", f"{catalog.spec_slug} {catalog.boss_slug}", "--limit", "5")
     results = result.data["results"]

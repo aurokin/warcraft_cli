@@ -1040,3 +1040,26 @@ def test_guide_bundle_queries_refuse_a_blank_query(tmp_path: Path, command: str)
     result = runner.invoke(app, [command, *target])
     assert result.exit_code == 2, result.output
     assert json.loads(result.stderr)["error"] == {"code": "invalid_query", "message": "Query cannot be empty."}
+
+
+def test_guide_bundle_inspect_selects_a_bundle_by_title_or_part_of_it(tmp_path: Path) -> None:
+    """A guide name in place of a path: an exact title, then a part of one. A selector that matches no bundle
+    or several, or a root with no bundles, used to exit 1 as invalid_bundle."""
+    root = tmp_path / "wowhead_exports"
+    empty = runner.invoke(app, ["guide-bundle-inspect", "frost", "--root", str(tmp_path / "none")])
+    assert (empty.exit_code, json.loads(empty.stderr)["error"]["code"]) == (4, "not_found")
+
+    for guide_id, title in [(3143, "Frost Death Knight Guide"), (3144, "Frost Death Knight Guide Classic"), (3145, "Unholy Death Knight Guide")]:
+        write_bundle_fixture(root, dir_name=f"guide-{guide_id}", guide_id=guide_id, title=title)
+
+    def inspect(selector: str):
+        return runner.invoke(app, ["guide-bundle-inspect", selector, "--root", str(root), "--summary"])
+
+    # The exact title wins over the other bundle whose title holds it.
+    assert json.loads(inspect("frost death knight guide").stdout)["data"]["guide"]["id"] == 3143
+    assert json.loads(inspect("unholy").stdout)["data"]["guide"]["id"] == 3145
+    ambiguous = inspect("frost")
+    assert (ambiguous.exit_code, json.loads(ambiguous.stderr)["error"]["code"]) == (2, "invalid_argument")
+    assert "guide-3143, guide-3144" in json.loads(ambiguous.stderr)["error"]["message"]
+    missing = inspect("balance druid")
+    assert (missing.exit_code, json.loads(missing.stderr)["error"]["code"]) == (4, "not_found")

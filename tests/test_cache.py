@@ -421,6 +421,28 @@ def test_inspect_and_clear_redis_cache_support_prefix_and_namespaces() -> None:
     ]
 
 
+def test_inspect_redis_cache_reports_a_redis_that_drops_between_its_two_scans() -> None:
+    class DroppingRedisClient:
+        def scan_iter(self, match: str) -> list[str]:
+            if match == "*":
+                raise ConnectionError("Connection reset by peer")
+            return ["wowhead_cli:entity_response:a"]
+
+    class FakeRedisModule:
+        @staticmethod
+        def from_url(url: str, **_: object) -> DroppingRedisClient:
+            return DroppingRedisClient()
+
+    summary = inspect_redis_cache(
+        "redis://cache.example:6379/3",
+        prefix="wowhead_cli",
+        include_prefix_visibility=True,
+        import_module_func=lambda name: FakeRedisModule,
+    )
+
+    assert (summary["available"], summary["error"]) == (False, "Connection reset by peer")
+
+
 def test_load_cache_settings_from_env_supports_redis_and_ttl_overrides(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

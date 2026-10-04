@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -52,14 +53,14 @@ def word_bounded_pattern(action: str) -> str:
     return f"{prefix}{escaped}{suffix}"
 
 
-def _fuzzy_glob(base: Path, needle: str, pattern: str = "*") -> list[Path]:
-    compact = needle.replace("_", "").replace("-", "")
-    matches: list[Path] = []
-    for path in base.rglob(pattern):
-        normalized = path.stem.lower().replace("_", "").replace("-", "")
-        if compact in normalized:
-            matches.append(path)
-    return sorted(matches)
+_SEPARATORS_RE = re.compile(r"[\s_\-]+")
+
+
+def _named(files: Iterable[Path], query: str) -> list[Path]:
+    """The files whose name holds every word of ``query``, separators ignored: ``frost mage``,
+    ``death-knight`` and ``mage.cpp`` name ``mage_frost.simc``, ``deathknight_blood.simc`` and ``sc_mage.cpp``."""
+    words = [word for word in _SEPARATORS_RE.split(query.lower()) if word]
+    return sorted(path for path in files if all(word in _SEPARATORS_RE.sub("", path.name.lower()) for word in words))
 
 
 def _rg(args: list[str]) -> str:
@@ -110,20 +111,14 @@ def spec_file_search(paths: RepoPaths, query: str | None) -> dict[str, list[Path
             "spell_dump": [],
         }
     q = query.lower()
-    results = {
-        "default_apl": sorted(p for p in paths.apl_default.glob("*.simc") if q in p.stem.lower()),
-        "assisted_apl": sorted(p for p in paths.apl_assisted.glob("*.simc") if q in p.stem.lower()),
-        "cpp": sorted(p for p in paths.class_modules.rglob("*.cpp") if q in p.name.lower()) or _rg_files(q, paths.class_modules, "*.cpp"),
-        "hpp": sorted(p for p in paths.class_modules.rglob("*.hpp") if q in p.name.lower()) or _rg_files(q, paths.class_modules, "*.hpp"),
-        "spell_dump": sorted(p for p in paths.spell_dump.glob("*.txt") if q in p.name.lower()) or _rg_files(q, paths.spell_dump, "*.txt"),
+    # Source files and spell dumps no file name matches fall back to a search of their contents.
+    return {
+        "default_apl": _named(paths.apl_default.glob("*.simc"), q),
+        "assisted_apl": _named(paths.apl_assisted.glob("*.simc"), q),
+        "cpp": _named(paths.class_modules.rglob("*.cpp"), q) or _rg_files(q, paths.class_modules, "*.cpp"),
+        "hpp": _named(paths.class_modules.rglob("*.hpp"), q) or _rg_files(q, paths.class_modules, "*.hpp"),
+        "spell_dump": _named(paths.spell_dump.glob("*.txt"), q) or _rg_files(q, paths.spell_dump, "*.txt"),
     }
-    if not any(results.values()):
-        results["default_apl"] = _fuzzy_glob(paths.apl_default, q, "*.simc")
-        results["assisted_apl"] = _fuzzy_glob(paths.apl_assisted, q, "*.simc")
-        results["cpp"] = _fuzzy_glob(paths.class_modules, q, "*.cpp")
-        results["hpp"] = _fuzzy_glob(paths.class_modules, q, "*.hpp")
-        results["spell_dump"] = _fuzzy_glob(paths.spell_dump, q, "*.txt")
-    return results
 
 
 def _names_class(path: Path, root: Path, module_name: str) -> bool:

@@ -8,7 +8,8 @@ confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verif
 
 - authoritative World of Warcraft data straight from the official Battle.net API
 - realm and item records from the Game Data APIs
-- character profiles from the Profile API
+- character profiles from the Profile API, plus a character's PvP ratings, professions, and
+  mount/pet/toy collections
 - a canonical source to cross-check community providers
 
 ## Start With
@@ -16,7 +17,11 @@ confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verif
 - readiness + auth/region posture: `warcraft blizzard doctor`
 - a realm: `warcraft blizzard realm <slug>` (e.g. `illidan`)
 - an item: `warcraft blizzard item <id>` (e.g. `19019`)
-- a character: `warcraft blizzard character <realm> <name>` (retail only; `<region> <realm> <name>` works too)
+- a character: `warcraft blizzard character <realm> <name>` (`<region> <realm> <name>` works too)
+- a character's PvP, professions or collections: add `--section pvp-summary`,
+  `--section pvp-bracket/3v3` (also `2v2`, `rbg`, or a `shuffle-<class>-<spec>` bracket that
+  `pvp-summary` lists), `--section professions`, or `--section collections/mounts` (also `pets`,
+  `toys`); a bracket the character has not played is `not_found`
 - realms may be a slug or a display name (`malganis`, `Mal'Ganis`, `Tarren Mill`), including a
   native-script name (`Ревущий фьорд`, `아즈샤라`), which is looked up in the realm index
 
@@ -37,8 +42,9 @@ confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verif
   `provenance.cache.oldest_hit_ttl_seconds` old (a day for items, 15 minutes for realms and characters)
 - use `--game-version classic` (or the `--classic` shorthand), after the subcommand
   (`warcraft blizzard item 19019 --classic`), for the current progression Classic namespace
-  (Mists of Pandaria Classic today); Classic Era and Season of Discovery are not available, and
-  character profiles are retail-only
+  (Mists of Pandaria Classic today); `--game-version classic-era` reads Classic Era realms such as
+  Whitemane and `--game-version classic-anniversary` the Anniversary realms such as Dreamscythe.
+  Each works for realms, items and characters. Season of Discovery is not verified
 - `--locale` passes through (default `en_US`)
 - a bad `--region` or `--game-version`, a blank realm or a blank character name is rejected
   offline with exit 2 (usage): fix the input instead of retrying
@@ -47,6 +53,8 @@ confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verif
   reached to confirm it
 - prefer Blizzard for the official record; prefer community providers for analytics, rankings,
   and guide content
+- not covered: PvP leaderboards and Gladiator cutoffs, achievements, and auction or commodity
+  prices
 
 ## Boundaries
 

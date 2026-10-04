@@ -109,11 +109,13 @@ def test_captured_buffs_tables_give_real_aura_compare_deltas() -> None:
         )
         return _aura_summary_rows(summary)
 
-    rows = _aura_compare_rows(left_rows=window_rows("left_table_report"), right_rows=window_rows("right_table_report"))
+    rows = _aura_compare_rows(
+        left_rows=window_rows("left_table_report"), right_rows=window_rows("right_table_report"), actor_field="aura_holder"
+    )
 
-    # The real Buffs table carries totalUptime/totalUses per source, not total/activeTime.
+    # The real Buffs table carries totalUptime/totalUses per aura holder, not total/activeTime.
     assert [
-        (row["source"]["name"], row["left_reported_total_uptime"], row["right_reported_total_uptime"],
+        (row["aura_holder"]["name"], row["left_reported_total_uptime"], row["right_reported_total_uptime"],
          row["reported_total_uptime_delta"], row["reported_total_uses_delta"])
         for row in rows
     ] == [("Augvoker", 8054, 59976, 51922, 8)]

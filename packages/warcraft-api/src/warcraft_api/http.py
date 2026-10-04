@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import random
 import threading
@@ -8,10 +10,13 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from importlib.metadata import PackageNotFoundError, version
-from typing import Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Self
 from urllib.parse import urlsplit
 
 import httpx
+
+if TYPE_CHECKING:
+    from warcraft_api.cache import CacheStore
 
 DEFAULT_RETRY_ATTEMPTS = 3
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
@@ -120,6 +125,54 @@ def build_client(
     return httpx.Client(timeout=timeout, follow_redirects=follow_redirects, headers=merged_headers, **kwargs)
 
 
+class CachedHttpClient:
+    """Plumbing every cached provider client shares.
+
+    One httpx client built on first use and closed by ``close`` or the ``with`` block, and an
+    optional cache store whose reads miss and writes do nothing while caching is disabled.
+    Subclasses set ``_timeout_seconds`` and ``_cache_store`` in ``__init__``.
+    """
+
+    _http_client: httpx.Client | None = None
+    _timeout_seconds: float = 20.0
+    _cache_store: CacheStore | None = None
+
+    def close(self) -> None:
+        if self._http_client is not None:
+            self._http_client.close()
+            self._http_client = None
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.close()
+
+    def _client(self) -> httpx.Client:
+        if self._http_client is None:
+            self._http_client = build_client(timeout=self._timeout_seconds)
+        return self._http_client
+
+    def _read_cache(self, key: str) -> Any | None:
+        if self._cache_store is None:
+            return None
+        return self._cache_store.get(key)
+
+    def _write_cache(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
+        if self._cache_store is None:
+            return
+        self._cache_store.set(key, payload, ttl_seconds=ttl_seconds)
+
+
+def json_cache_key(namespace: str, payload: Mapping[str, Any]) -> str:
+    """``<namespace>:<sha256>`` over the compact, key-sorted JSON of ``payload``.
+
+    Each client passes the dict its keys have always hashed, so adopting this keeps stored entries.
+    """
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return f"{namespace}:{hashlib.sha256(raw).hexdigest()}"
+
+
 def request_with_retries(
     client: httpx.Client,
     url: str,
@@ -136,13 +189,7 @@ def request_with_retries(
         if rate_limiter is not None:
             rate_limiter.wait(url)
         try:
-            method_func = getattr(client, request_method.lower(), None)
-            if callable(method_func):
-                response = cast(httpx.Response, method_func(url, params=params, **request_kwargs))
-            else:
-                response = client.request(request_method, url, params=params, **request_kwargs)
-            if not isinstance(response, httpx.Response):
-                raise TypeError(f"HTTP client returned unexpected response type for {request_method} {url!r}.")
+            response = client.request(request_method, url, params=params, **request_kwargs)
         except httpx.RequestError:
             if attempt >= attempts:
                 raise

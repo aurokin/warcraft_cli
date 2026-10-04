@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import time
@@ -13,7 +12,7 @@ from urllib.parse import urlencode
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
 from warcraft_api.client_credentials import TOKEN_SKEW_SECONDS, ClientTokenCache
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, CachedHttpClient, json_cache_key, request_with_retries
 from warcraft_core.auth import load_provider_auth_state
 from warcraft_core.env import find_env_file, read_env_keys
 from warcraft_core.exit_codes import error_code_for_http_status
@@ -790,6 +789,8 @@ query ReportFights($code: String!, $difficulty: Int, $allowUnlisted: Boolean) {
         bossPercentage
         averageItemLevel
         size
+        keystoneLevel
+        keystoneTime
       }
     }
   }
@@ -1371,7 +1372,7 @@ def load_warcraftlogs_cache_settings_from_env() -> tuple[CacheSettings, int, int
     )
 
 
-class WarcraftLogsClient:
+class WarcraftLogsClient(CachedHttpClient):
     def __init__(
         self,
         *,
@@ -1381,7 +1382,6 @@ class WarcraftLogsClient:
     ) -> None:
         auth = load_warcraftlogs_auth_config()
         self._site = site
-        self._http_client: httpx.Client | None = None
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
         self._client_id = auth.client_id or ""
@@ -1400,22 +1400,6 @@ class WarcraftLogsClient:
         # replayed out of the cache.
         self._cache_hit_count = 0
         self._upstream_request_count = 0
-
-    def close(self) -> None:
-        if self._http_client is not None:
-            self._http_client.close()
-            self._http_client = None
-
-    def __enter__(self) -> WarcraftLogsClient:
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        self.close()
-
-    def _client(self) -> httpx.Client:
-        if self._http_client is None:
-            self._http_client = build_client(timeout=self._timeout_seconds)
-        return self._http_client
 
     def _post_graphql(self, url: str, *, token: str, body: dict[str, Any]) -> httpx.Response:
         """One GraphQL POST, counted so callers can report how much of a payload came from upstream."""
@@ -1438,13 +1422,10 @@ class WarcraftLogsClient:
         return {"cache_hit_count": self._cache_hit_count, "upstream_request_count": self._upstream_request_count}
 
     def _cache_key(self, namespace: str, payload: dict[str, Any]) -> str:
-        raw = json.dumps({"site": self._site.key, "namespace": namespace, "payload": payload}, sort_keys=True, separators=(",", ":"))
-        return f"{namespace}:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
+        return json_cache_key(namespace, {"site": self._site.key, "namespace": namespace, "payload": payload})
 
     def _read_cache(self, key: str) -> Any | None:
-        if self._cache_store is None:
-            return None
-        cached = self._cache_store.get(key)
+        cached = super()._read_cache(key)
         if cached is not None:
             self._cache_hit_count += 1
         return cached
@@ -1461,9 +1442,9 @@ class WarcraftLogsClient:
     def _write_cache(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
         # A partial-error response is a transient upstream failure: caching it (for 24h on a finished
         # report) would keep serving the gap after Warcraft Logs recovers.
-        if self._cache_store is None or (isinstance(payload, dict) and GRAPHQL_WARNINGS_KEY in payload):
+        if isinstance(payload, dict) and GRAPHQL_WARNINGS_KEY in payload:
             return
-        self._cache_store.set(key, payload, ttl_seconds=ttl_seconds)
+        super()._write_cache(key, payload, ttl_seconds=ttl_seconds)
 
     def _has_client_credentials(self) -> bool:
         return bool(self._client_id and self._client_secret)

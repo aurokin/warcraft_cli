@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import unquote, urlparse
 
@@ -132,7 +133,11 @@ def _guild_rankings_summary(rankings: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _recent_run_summary(row: dict[str, Any]) -> dict[str, Any]:
     """One profile run under the leaderboard's field names: the profile calls the timer ``par_time_ms``
-    and the chest count ``num_keystone_upgrades``, and names the dungeon as a plain string."""
+    and the chest count ``num_keystone_upgrades``, and names the dungeon as a plain string.
+
+    ``spec``/``role`` are what the character played in that run, which need not be its active spec.
+    """
+    spec = as_dict(row.get("spec"))
     return {
         "mythic_level": row.get("mythic_level"),
         "dungeon": row.get("dungeon"),
@@ -144,6 +149,9 @@ def _recent_run_summary(row: dict[str, Any]) -> dict[str, Any]:
         "keystone_time_ms": row.get("par_time_ms"),
         "run_id": row.get("keystone_run_id"),
         "url": row.get("url"),
+        "spec": spec.get("name"),
+        "spec_slug": spec.get("slug"),
+        "role": row.get("role") or spec.get("role"),
     }
 
 
@@ -177,6 +185,9 @@ def _character_identity(profile: dict[str, Any]) -> dict[str, Any]:
         "faction": profile.get("faction"),
         "profile_url": profile.get("profile_url"),
         "thumbnail_url": profile.get("thumbnail_url"),
+        # When Raider.IO last read this character from Blizzard: the age of every field here, which
+        # `freshness.fetched_at` (the request time) is not.
+        "last_crawled_at": profile.get("last_crawled_at"),
     }
 
 
@@ -233,17 +244,29 @@ def _character_payload(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[
     }
 
 
-def _guild_roster_preview(members: list[Any]) -> list[dict[str, Any]]:
-    """Return the first ten roster entries with normalized class/spec identity."""
+# Raider.IO's guild roster roles, renamed to the tank/healer/dps every other row and filter here uses.
+ROSTER_ROLE_NAMES: dict[str | None, str] = {"TANK": "tank", "HEALING": "healer", "DPS": "dps"}
+
+
+def _guild_roster_preview(members: list[Any], *, limit: int) -> list[dict[str, Any]]:
+    """The ``limit`` highest-ranked roster entries (guild master first) with class/spec identity.
+
+    Raider.IO lists members in no useful order, so they are sorted by guild rank before the cut.
+    """
+    rows = sorted((as_dict(row) for row in members), key=lambda row: rank if isinstance(rank := row.get("rank"), int) else float("inf"))
     preview: list[dict[str, Any]] = []
-    for row in members[:10]:
-        character = as_dict(as_dict(row).get("character"))
+    for row in rows[:limit]:
+        character = as_dict(row.get("character"))
         preview.append(
             {
                 "name": character.get("name"),
-                "realm": character.get("realm"),
+                # `realm` is the slug and `realm_name` the display name, as on the guild itself.
+                "realm": _profile_realm_slug(character),
+                "realm_name": character.get("realm"),
+                "rank": row.get("rank"),
                 "class_name": character.get("class"),
                 "active_spec_name": character.get("active_spec_name"),
+                "active_spec_role": ROSTER_ROLE_NAMES.get(role := character.get("active_spec_role"), role),
                 "class_spec_identity": raiderio_class_spec_identity(
                     character.get("class"),
                     character.get("active_spec_name"),
@@ -254,7 +277,7 @@ def _guild_roster_preview(members: list[Any]) -> list[dict[str, Any]]:
     return preview
 
 
-def _guild_payload(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[str, Any]:
+def _guild_payload(fetched: FetchedJson, *, cache_ttl_seconds: int, roster_limit: int = 10) -> dict[str, Any]:
     """Build the ``raiderio guild`` payload from a Raider.IO guild profile."""
     profile = fetched.payload
     members = as_list(profile.get("members"))
@@ -268,14 +291,17 @@ def _guild_payload(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[str,
             "realm_name": profile.get("realm"),
             "faction": profile.get("faction"),
             "profile_url": profile.get("profile_url"),
+            # Members Raider.IO tracks, which can be fewer than the in-game roster.
             "member_count": len(members),
+            "last_crawled_at": profile.get("last_crawled_at"),
         },
         "raiding": {
             "raid_count": len(raid_progression),
             "progression": raid_progression,
             "rankings": raid_rankings,
         },
-        "roster_preview": _guild_roster_preview(members),
+        "roster_preview": _guild_roster_preview(members, limit=roster_limit),
+        "roster_truncated": len(members) > roster_limit,
         "freshness": page_freshness(fetched, cache_ttl_seconds=cache_ttl_seconds),
         "citations": {
             "profile": profile.get("profile_url"),
@@ -286,11 +312,8 @@ def _guild_payload(fetched: FetchedJson, *, cache_ttl_seconds: int) -> dict[str,
 @app.command("doctor")
 def doctor(ctx: typer.Context) -> None:
     """Report Raider.IO readiness, per-command capabilities, and resolved cache settings."""
-    payload = PROVIDER.doctor()
-    error = payload.get("error")
-    if error is not None:
-        fail(ctx, error["code"], error["message"])
-    emit(ctx, payload)
+    with _command_errors(ctx):
+        emit(ctx, PROVIDER.doctor())
 
 
 @app.command("search")
@@ -337,11 +360,14 @@ def guild(
     region: str = typer.Argument(..., help="Region slug such as us or eu."),
     realm: str = typer.Argument(..., help="Realm slug or title."),
     name: str = typer.Argument(..., help="Guild name."),
+    roster_limit: int = typer.Option(
+        10, "--roster-limit", min=0, max=1000, help="Roster members to return, highest guild rank first (Raider.IO tracks up to 1000)."
+    ),
 ) -> None:
-    """Return a guild profile with raid progression, raid rankings, and a roster preview."""
+    """Return a guild profile with raid progression, raid rankings, and the roster by guild rank."""
     with _command_errors(ctx), open_client() as client:
         fetched = client.guild_profile(region=region, realm=realm, name=name)
-        payload = _guild_payload(fetched, cache_ttl_seconds=client.guild_profile_ttl_seconds)
+        payload = _guild_payload(fetched, cache_ttl_seconds=client.guild_profile_ttl_seconds, roster_limit=roster_limit)
     emit(ctx, raiderio_envelope(command=command_path(ctx), kind="guild_profile", payload=payload))
 
 
@@ -564,6 +590,18 @@ def _cutoff_population(block: Any) -> dict[str, Any] | None:
     }
 
 
+def _iso_updated_at(value: Any) -> Any:
+    """Raider.IO's JavaScript ``Date`` string (``Sat Oct 03 2026 10:36:16 GMT+0000 (...)``) as ISO-8601 UTC.
+
+    A value in any other shape is passed through unchanged rather than dropped.
+    """
+    try:
+        parsed = datetime.strptime(str(value).split(" (", 1)[0], "%a %b %d %Y %H:%M:%S GMT%z")
+    except ValueError:
+        return value
+    return parsed.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
 def _cutoffs_payload(fetched: FetchedJson, *, season: str, region: str, cache_ttl_seconds: int) -> dict[str, Any]:
     """The ``raiderio cutoffs`` payload: the lowest rating inside each top percentile, overall and per faction."""
     cutoffs = as_dict(fetched.payload.get("cutoffs"))
@@ -580,7 +618,7 @@ def _cutoffs_payload(fetched: FetchedJson, *, season: str, region: str, cache_tt
     ]
     return {
         "query": {"season": season, "region": region},
-        "updated_at": cutoffs.get("updatedAt"),
+        "updated_at": _iso_updated_at(cutoffs.get("updatedAt")),
         "count": len(rows),
         "cutoffs": rows,
         "freshness": page_freshness(fetched, cache_ttl_seconds=cache_ttl_seconds),

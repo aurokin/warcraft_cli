@@ -87,6 +87,7 @@ def raid_ranking_row(row: dict[str, Any]) -> dict[str, Any]:
     realm = as_dict(guild.get("realm"))
     region = as_dict(guild.get("region"))
     path = guild.get("path")
+    privacy = as_dict(row.get("guildPrivacy"))
     defeated = [_defeated_encounter(entry) for entry in as_list(row.get("encountersDefeated")) if isinstance(entry, dict)]
     pulled = [_pulled_encounter(entry) for entry in as_list(row.get("encountersPulled")) if isinstance(entry, dict)]
     return {
@@ -104,6 +105,12 @@ def raid_ranking_row(row: dict[str, Any]) -> dict[str, Any]:
         "encounters_pulled_count": len(pulled),
         "encounters_defeated": defeated,
         "encounters_pulled": pulled,
+        # A guild can hide its pull counts and best percents; theirs then read null in
+        # `encounters_pulled`, which these flags tell apart from Raider.IO lacking the data.
+        "privacy": {
+            "raid_pulls_hidden": privacy.get("wereRaidPullsRestricted") is True,
+            "raid_percents_hidden": privacy.get("wereRaidPercentsRestricted") is True,
+        },
     }
 
 

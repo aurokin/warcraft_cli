@@ -70,7 +70,8 @@ season-cutoffs endpoint. This is player rating, the score on a character profile
 `threshold` works on. `query` names the season and region (the current season when `--season` is
 omitted, read from the leaderboard); each `cutoffs` row has `percentile`, `quantile`, and `all`,
 `horde` and `alliance` blocks with `rating` (the lowest rating inside the percentile),
-`population_count` and `total_population`. `updated_at` is Raider.IO's own refresh time.
+`population_count` and `total_population`. `updated_at` is Raider.IO's own refresh time as
+ISO-8601 UTC (`2026-10-03T10:36:16Z`); a value Raider.IO sends in another shape is passed through.
 `--region` takes `us`, `eu`, `kr`, `tw`, `cn` or an alias; `world` is `invalid_query`.
 
 Scope flags (all Mythic+ commands): `--season` (slug, or empty/`current` for the Raider.IO current
@@ -140,7 +141,10 @@ The payload carries `freshness` (`fetched_at`, `cache_hit`, `cache_ttl_seconds`)
 - `rows`: one per guild with `rank`, `region_rank`, `guild` (`name`, `realm` slug,
   `realm_name`, `region`, `faction`, `profile_url` on raider.io), `encounters_defeated_count`,
   `encounters_pulled_count`, `encounters_defeated` (`slug`, `first_defeated`, `last_defeated`), and
-  `encounters_pulled` (`slug`, `num_pulls`, `best_percent`, `is_defeated`, `pull_started_at`).
+  `encounters_pulled` (`slug`, `num_pulls`, `best_percent`, `is_defeated`, `pull_started_at`), and
+  `privacy` (`raid_pulls_hidden`, `raid_percents_hidden`). A guild can hide its pull counts and best
+  percents from Raider.IO; `num_pulls`/`best_percent` are then `null`, and `privacy` says the guild
+  hid them rather than Raider.IO lacking the data.
   `rank` is relative to the requested scope: world position for `--region world`, region position
   for a region, and realm position when `--realm` is set. `region_rank` is always region-wide.
   There is no separate realm-rank field: Raider.IO does not send one on this endpoint.
@@ -207,6 +211,17 @@ raiderio cutoffs --region us
   realm slug and `realm_name` the display name, as on search and leaderboard rows. The slug is
   Raider.IO's own, read from `profile_url` (`howling-fjord` for `Ревущий фьорд`); a character's
   guild on another realm is slugged from its name.
+- `character.last_crawled_at` and `guild.last_crawled_at` are when Raider.IO last read the profile
+  from Blizzard. That is the age of the identity, guild, spec and score fields, and it can be months
+  old for an inactive character; `freshness.fetched_at` is only when this CLI fetched it.
+- `guild` returns `roster_preview`, the `--roster-limit` (default 10, up to 1000) highest-ranked
+  members, guild master (`rank` 0) first, each with `name`, `realm` (slug), `realm_name`, `rank`,
+  `class_name`, `active_spec_name`, `active_spec_role` (`tank`, `healer` or `dps`, the same words as
+  run rows and `--contains-role`) and `class_spec_identity`.
+  `roster_truncated: true` means more members exist than were returned. `guild.member_count`
+  counts the members Raider.IO tracks, which can be fewer than the in-game roster.
+- `progression` and `rankings` rows are sorted by raid slug by the CLI. Raider.IO's payload carries
+  no start/end window, so join `raid_slug` to `raiderio raids` to find the current raid.
 - `character` reports `mythic_plus.best_runs`, Raider.IO's best run in each dungeon the character
   has completed this season (`best_run_count` rows; a dungeon not listed has no completed run), and
   every recent run Raider.IO returns (up to 10) in `recent_runs`, so `recent_run_count` is the
@@ -216,7 +231,8 @@ raiderio cutoffs --region us
   `num_chests` (0 means not timed), plus `run_id` and `logged_run_id`, Raider.IO's own integer id
   for a logged run (`null` when there is none; it is not a Warcraft Logs report code). `character` best and recent runs use the same names: `dungeon` (name),
   `short_name`, `mythic_level`, `score`, `completed_at`, `clear_time_ms`, `keystone_time_ms`,
-  `num_chests`, `run_id`, and the run's raider.io `url`.
+  `num_chests`, `run_id`, and the run's raider.io `url`, plus `spec`, `spec_slug` and `role`: what
+  the character played in that run, which need not be its active spec.
 - Every payload with provenance carries `freshness` and `citations`; those also form the envelope's
   `provenance` block. `freshness.fetched_at` is when the response came off the wire, so a replay
   reports the age of what it replayed and `cache_hit: true` says it is a replay; the data can be up

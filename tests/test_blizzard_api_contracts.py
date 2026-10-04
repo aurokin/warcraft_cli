@@ -189,17 +189,58 @@ def test_classic_flag_selects_classic_category(monkeypatch: pytest.MonkeyPatch) 
     assert payload["provenance"]["game_version"] == "classic"
 
 
-def test_classic_profile_unsupported(monkeypatch: pytest.MonkeyPatch) -> None:
-    # --classic on a profile read is a bad flag combination, not an internal failure: usage exit code.
+@pytest.mark.parametrize(
+    ("flags", "namespace"),
+    [
+        (["--classic"], "profile-classic-us"),
+        (["--game-version", "classic-era"], "profile-classic1x-us"),
+        (["--game-version", "classic-anniversary"], "profile-classicann-us"),
+    ],
+)
+def test_classic_character_reads_route_to_the_flavor_profile_namespace(
+    monkeypatch: pytest.MonkeyPatch, flags: list[str], namespace: str
+) -> None:
+    # Live 2026-10-03: profile-classic-us, profile-classic1x-us and profile-classicann-us all answer
+    # character lookups, which `--classic` used to refuse as classic_profile_unsupported.
     _install_recorder(monkeypatch)
-    result = runner.invoke(app, ["character", "faerlina", "Someone", "--classic"])
-    assert result.exit_code == 2
-    payload = json.loads(result.stderr)
-    assert payload["ok"] is False
-    assert payload["error"]["code"] == "classic_profile_unsupported"
-    assert payload["error"]["message"] == (
-        "The Blizzard Profile API has no classic namespace; character lookups are retail-only."
-    )
+    result = runner.invoke(app, ["character", "whitemane", "Someone", *flags])
+    assert result.exit_code == 0, result.output
+    prov = json.loads(result.stdout)["provenance"]
+    assert prov["namespace"] == namespace
+
+
+@pytest.mark.parametrize(
+    ("args", "path"),
+    [
+        (["--section", "pvp-summary"], "/profile/wow/character/illidan/imonthegcd/pvp-summary"),
+        (["--section", "pvp-bracket/3v3"], "/profile/wow/character/illidan/imonthegcd/pvp-bracket/3v3"),
+        (["--section", "collections/mounts"], "/profile/wow/character/illidan/imonthegcd/collections/mounts"),
+    ],
+)
+def test_character_section_reads_one_linked_sub_resource(monkeypatch: pytest.MonkeyPatch, args: list[str], path: str) -> None:
+    requested: list[str] = []
+
+    def _fake(client: Any, url: str, *, method: str = "GET", **kwargs: Any) -> _FakeResponse:
+        if url.endswith("/token"):
+            return _FakeResponse({"access_token": "fake-token", "expires_in": 3600}, url)
+        requested.append(url.split(".api.blizzard.com")[1])
+        return _FakeResponse({"rating": 2869}, url)
+
+    monkeypatch.setattr(client_module, "request_with_retries", _fake)
+    result = runner.invoke(app, ["character", "illidan", "Imonthegcd", *args])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert (payload["kind"], payload["query"]["section"]) == ("character_section", args[1])
+    assert requested == [path]
+
+
+@pytest.mark.parametrize("section", ["../../data/wow/realm/illidan", "pvp-bracket/3v3/../..", "achievements", "pvp-bracket/"])
+def test_a_section_outside_the_allowlist_is_a_usage_error_without_a_request(monkeypatch: pytest.MonkeyPatch, section: str) -> None:
+    token_calls = _install_recorder(monkeypatch)
+    result = runner.invoke(app, ["character", "illidan", "Imonthegcd", "--section", section])
+    assert result.exit_code == 2, result.output
+    assert json.loads(result.stderr)["error"]["code"] == "invalid_query"
+    assert token_calls == []
 
 
 def test_help_doctor_and_payloads_state_one_verification_posture(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -245,11 +286,13 @@ def test_an_oceanic_region_alias_routes_to_us(monkeypatch: pytest.MonkeyPatch, a
 
 def test_unsupported_game_version_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_recorder(monkeypatch)
-    result = runner.invoke(app, ["item", "19019", "--game-version", "classic-era"])
+    result = runner.invoke(app, ["item", "19019", "--game-version", "classic1x"])
     assert result.exit_code == 2
     payload = json.loads(result.stderr)
     assert payload["error"]["code"] == "unsupported_game_version"
-    assert payload["error"]["message"].startswith("--game-version must be one of: retail, classic; got 'classic-era'.")
+    assert payload["error"]["message"] == (
+        "--game-version must be one of: retail, classic, classic-era, classic-anniversary; got 'classic1x'."
+    )
 
 
 @pytest.mark.parametrize("command", ["search", "resolve"])
@@ -617,6 +660,16 @@ def test_a_realm_typed_in_its_native_script_is_found_through_the_realm_index(
     index_params = next(params for path, params in requested if path == "/data/wow/realm/index")
     assert index_params == {"namespace": "dynamic-eu"}
     assert requested[-1][0] == found
+
+
+def test_a_classic_character_realm_is_looked_up_in_that_flavor_realm_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The retail index does not list Era realms, so the fallback must read the flavor's own index.
+    requested = _install_index_recorder(monkeypatch)
+    result = runner.invoke(app, ["character", "Ревущий фьорд", "Lerepam", "--region", "eu", "--game-version", "classic-era"])
+    assert result.exit_code == 0, result.output
+    index_params = next(params for path, params in requested if path == "/data/wow/realm/index")
+    assert index_params == {"namespace": "dynamic-classic1x-eu"}
+    assert requested[-1] == ("/profile/wow/character/howling-fjord/lerepam", {"namespace": "profile-classic1x-eu", "locale": "en_US"})
 
 
 def test_a_native_name_two_realms_share_stays_not_found(monkeypatch: pytest.MonkeyPatch) -> None:

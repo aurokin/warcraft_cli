@@ -185,6 +185,36 @@ def test_region_and_game_version_change_the_namespace(require) -> None:
     assert explicit.data == classic.data, "--game-version classic and --classic must read one dataset"
 
 
+# A progression Classic character found on the classic 3v3 leaderboard (dynamic-classic-us), and one
+# realm per other flavor; realm records outlive any one character.
+CLASSIC_CHARACTER = ("us", "arugal-au", "Nukkz")
+FLAVOR_REALMS = (("classic-era", "dynamic-classic1x-us", "whitemane", "Classic Era"), ("classic-anniversary", "dynamic-classicann-us", "dreamscythe", "Anniversary"))
+
+
+def test_each_classic_flavor_routes_to_its_own_namespace(require) -> None:
+    require("blizzard-api")
+    character = run("blizzard", "character", *CLASSIC_CHARACTER, "--classic")
+    _assert_the_namespace_reached_the_api(character, "profile-classic-us")
+    assert character.data["name"] == CLASSIC_CHARACTER[2]
+    assert character.data["realm"]["slug"] == CLASSIC_CHARACTER[1]
+
+    for game_version, namespace, slug, category in FLAVOR_REALMS:
+        realm = run("blizzard", "realm", slug, "--game-version", game_version)
+        _assert_the_namespace_reached_the_api(realm, namespace)
+        # The progression namespace answers Whitemane as a Legacy realm; only the flavor's own
+        # namespace knows it as the live Era realm.
+        assert realm.data["category"] == category, realm.describe()
+
+
+def test_character_section_reads_a_linked_sub_resource(require) -> None:
+    require("blizzard-api")
+    result = run("blizzard", "character", GUILD_REALM, CHARACTER_NAME, "--section", "pvp-summary")
+    assert result.payload["kind"] == "character_section"
+    assert "/pvp-summary?" in result.payload["provenance"]["source_url"]
+    assert result.data["character"]["name"].lower() == CHARACTER_NAME.lower()
+    assert isinstance(result.data["honor_level"], int)
+
+
 def test_search_and_resolve_are_structured_coming_soon_stubs(require) -> None:
     require("blizzard-api")
     for command in ("search", "resolve"):
@@ -229,11 +259,17 @@ def test_bad_routing_flags_are_usage_errors_refused_before_the_network(require) 
     )
     assert "--classic conflicts with" in conflict.payload["error"]["message"]
 
-    profile = run(
-        "blizzard", "character", GUILD_REALM, CHARACTER_NAME, "--classic",
-        expect=EXIT_USAGE, error_code="classic_profile_unsupported", env=offline,
+    flavor = run(
+        "blizzard", "item", str(ITEM_ID), "--game-version", "classic1x",
+        expect=EXIT_USAGE, error_code="unsupported_game_version", env=offline,
     )
-    assert "retail-only" in profile.payload["error"]["message"]
+    assert "classic-era" in flavor.payload["error"]["message"]
+
+    section = run(
+        "blizzard", "character", GUILD_REALM, CHARACTER_NAME, "--section", "../../data/wow/realm/illidan",
+        expect=EXIT_USAGE, error_code="invalid_query", env=offline,
+    )
+    assert "pvp-summary" in section.payload["error"]["message"]
 
     # A blank realm would fetch the realm index as if it were a realm.
     for args in (("realm", " "), ("character", " ", CHARACTER_NAME), ("character", GUILD_REALM, " ")):

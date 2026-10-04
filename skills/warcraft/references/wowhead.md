@@ -27,6 +27,13 @@
   include the page's relation tabs (a zone's NPCs and quests, a faction's members) as
   `source_kind: "listview"` links, and both take `--url <Wowhead entity URL>` in place of `<type> <id>`
   (not both)
+- for "who drops / sells X", read the links whose `listview` is `dropped-by` or `sold-by`; their
+  `listview_data` holds the drop sample (`count` of `outof`) or vendor `cost` and `stock` as Wowhead
+  sends them, and the `entity` preview lists them first within each type
+- `facts` (on `entity` and `entity-page`) carries the page's Quick Facts lines (side, level, patch,
+  an NPC's reaction), a quest's `start`/`end` NPC, object or item (an item's `name` is null), the
+  quest or achievement chain in order (`series`), and an NPC's or object's `locations` (zone, spawn
+  `count`); only `entity-page` lists each location's `coords`. Keys appear only when the page has them
 - tier sets ("battlegear of wrath") come back as `item-set` rows; open one with `entity item-set <id>`
 - `tooltip.text` spells out money units (`87s 50c`) and names a currency cost (`Cost: 180 Darkmoon
   Prize Ticket`), so quote prices from it as written
@@ -58,7 +65,9 @@
   rather than the rendered `posted` string; rows Wowhead timestamps in a form the CLI cannot read
   are left out of the window and counted in `scan.unparsed_timestamps`
 - `search --entity-type` and `resolve --entity-type` cover the types Wowhead's suggestion endpoint
-  labels; mounts, recipes, and battle pets are not among them and come back as items, spells, or NPCs
+  labels; mounts, recipes, and battle pets are not among them and come back as items, spells, or NPCs.
+  A query word still works: "Mimiron's Head mount" or "Mr. Bigglesworth battle pet" resolves to the
+  item, spell, or NPC Wowhead files it under
 - an entity type outside the known list that Wowhead does not answer fails `invalid_argument` with
   the known types, not `not_found`: usually a typo (`entity items 19019`), but Wowhead's tooltip
   endpoint also lacks some real page types (`class`, `title`, `skill`), so when the message says so,
@@ -96,7 +105,10 @@
   answers with such a row at high confidence only when it is of a type the query names ("resto druid
   guide" resolves to the Restoration Druid guide). A row's type name counts as its text, so
   "hogger npc" holds every word of NPC "Hogger"; when Wowhead returns no row of a type the query
-  names, the query is sent again without its type words (`search_query` says which text was used).
+  names and no row named exactly the query ("Battle Pet Training"), the query is sent again without
+  its type words (`search_query` says which text was used).
+  A row of the named type is also matched without its type words, so "<exact quest name> quest"
+  resolves to that quest.
   A name starts with or contains the query only on whole words ("shadow" does not match
   "Shadowfeather"). Internal "(DNT)" test entries are left out
 - `resolve` answers with a database entity: news posts and world events sit behind every entity in

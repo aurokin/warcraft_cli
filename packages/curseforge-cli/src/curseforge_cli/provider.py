@@ -49,7 +49,8 @@ def _cache_payload() -> dict[str, Any]:
     try:
         settings, ttl = load_curseforge_cache_settings_from_env()
     except ValueError as exc:
-        return {"error": {"code": "invalid_cache_config", "message": str(exc)}}
+        # Every read fails on this config, so doctor must not report the provider ready.
+        return {"available": False, "error": {"code": "invalid_cache_config", "message": str(exc)}}
     return {
         "enabled": settings.enabled,
         "backend": settings.backend,
@@ -67,7 +68,7 @@ def doctor_envelope() -> Envelope:
     cache = _cache_payload()
     data: dict[str, Any] = {
         # The addon lookup needs the API key, so without one the provider can do nothing useful; a
-        # Redis cache that does not answer also degrades it.
+        # Redis cache that does not answer or a cache config that does not parse also degrades it.
         "status": "ready" if auth.configured and cache.get("available") is not False else "degraded",
         "tier": TIER,
         "installed": True,

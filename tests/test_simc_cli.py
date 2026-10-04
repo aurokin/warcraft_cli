@@ -3522,7 +3522,7 @@ def test_simc_build_harness_compare_report_and_verify_clean(monkeypatch, tmp_pat
     assert compare_stdout["report_path"] == str((tmp_path / "report.json").resolve())
     assert [row["label"] for row in compare_stdout["ranking"]] == ["base", "wowhead"]
     assert compare_stdout["comparisons"][0]["dps_delta"] == -1.0
-    assert compare_stdout["sampling"]["action_sequence_iterations"] == 1
+    assert compare_stdout["sampling"]["iterations_simulated"] == 250
     assert compare_stdout["disclosures"] == [DEFAULT_GEAR_DISCLOSURE]
 
     report_result = runner.invoke(simc_app, ["variant-report", str(tmp_path / "report.json")])
@@ -3837,8 +3837,9 @@ def test_simc_first_cast_and_log_actions(monkeypatch, tmp_path: Path) -> None:
     log_path.write_text(
         "\n".join(
             [
-                "0.100 schedules execute for Action 'rising_sun_kick'",
-                "0.250 performs Action 'rising_sun_kick'",
+                "0.100 Player 'example' schedules execute for Action 'rising_sun_kick' (0)",
+                "0.200 Player 'example_xuen' performs Action 'rising_sun_kick' (0) (0)",
+                "0.250 Player 'example' performs Action 'rising_sun_kick' (107428) (100)",
             ]
         )
         + "\n"
@@ -3866,7 +3867,12 @@ def test_simc_first_cast_and_log_actions(monkeypatch, tmp_path: Path) -> None:
     assert log_result.exit_code == 0
     log_payload = json.loads(log_result.stdout)
     assert log_payload["data"]["count"] == 1
-    assert log_payload["data"]["hits"][0]["performed_at"] == 0.25
+    assert log_payload["data"]["hits"][0]["performed_at"] == 0.2
+    assert log_payload["data"]["hits"][0]["actor"] == "example_xuen"
+
+    player_result = runner.invoke(simc_app, ["log-actions", str(log_path), "rising_sun_kick", "--actor", "example"])
+    player_hit = json.loads(player_result.stdout)["data"]["hits"][0]
+    assert (player_hit["scheduled_at"], player_hit["performed_at"], player_hit["actor"]) == (0.1, 0.25, "example")
 
     directory_result = runner.invoke(simc_app, ["log-actions", str(tmp_path), "rising_sun_kick"])
     assert directory_result.exit_code == 4
@@ -4801,3 +4807,184 @@ def test_simc_build_inputs_fail_not_found_for_a_missing_file(tmp_path: Path, arg
     error = json.loads(result.stderr)["error"]
     assert error["code"] == "not_found"
     assert missing in error["message"]
+
+
+def test_simc_modify_build_refuses_a_swap_source_of_another_spec_by_name(tmp_path: Path) -> None:
+    """A Fire build as the class tree source of an Arcane build failed with SimC's bare 'Wrong specialization'."""
+    rejected = "Error: Initialization error: Player 'p': Hash 'C8DAAA': Wrong specialization.\n"
+    fake = _FakeSimcBinary({"C4DAAA": CAPTURED_ARCANE_MAGE, "C8DAAA": rejected})
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake):
+        result = runner.invoke(
+            simc_app,
+            ["--repo-root", str(_checkout(tmp_path)), "modify-build", "--talents", "C4DAAA",
+             "--actor-class", "mage", "--spec", "arcane", "--swap-class-tree-from", "C8DAAA"],
+        )
+
+    payload = json.loads(result.stderr)
+    assert (result.exit_code, payload["error"]["code"]) == (2, "invalid_query")
+    assert payload["error"]["message"].startswith("The class tree source is a mage fire build")
+
+
+def _stub_validation(monkeypatch, *, stderr: str) -> None:
+    monkeypatch.setattr(
+        "simc_cli.compare.run_profile",
+        lambda paths, profile_path, simc_args: CommandResult(command=[], cwd=None, returncode=0, stdout="", stderr=stderr),
+    )
+
+
+IGNORED_OPTION_WARNING = (
+    "Trivial: Warning: Player 'simc_decode' Action 'frostbolt' (116) unknown option 'iff' with value '1', ignoring."
+)
+
+
+def test_simc_validate_apl_is_invalid_when_simc_ignored_an_option(monkeypatch, tmp_path: Path) -> None:
+    """SimC exits 0 after dropping a mistyped condition, so the action would run unconditionally."""
+    harness = tmp_path / "harness.simc"
+    harness.write_text('mage="h"\n')
+    apl = tmp_path / "apl.simc"
+    apl.write_text("actions=frostbolt,iff=1\n")
+    _stub_validation(monkeypatch, stderr=f"{IGNORED_OPTION_WARNING}\n")
+
+    exit_code, payload = _invoke(tmp_path, "validate-apl", str(harness), str(apl), "--out-dir", str(tmp_path / "out"))
+
+    assert exit_code == 0
+    assert (payload["data"]["valid"], payload["data"]["returncode"]) == (False, 0)
+    assert payload["data"]["warnings"] == [IGNORED_OPTION_WARNING]
+
+
+def test_simc_compare_apls_stops_when_validation_finds_an_ignored_option(monkeypatch, tmp_path: Path) -> None:
+    harness = tmp_path / "harness.simc"
+    harness.write_text('mage="h"\n')
+    apl = tmp_path / "apl.simc"
+    apl.write_text("actions=frostbolt,iff=1\n")
+    _stub_validation(monkeypatch, stderr=f"{IGNORED_OPTION_WARNING}\n")
+
+    exit_code, payload = _invoke(tmp_path, "compare-apls", str(harness), "--base-apl", str(apl), "--out-dir", str(tmp_path / "out"))
+
+    assert (exit_code, payload["error"]["code"]) == (1, "compare_apls_failed")
+    assert "SimC ignored part of the profile" in payload["error"]["message"]
+    assert "unknown option 'iff'" in payload["error"]["message"]
+
+
+@pytest.mark.parametrize("command", ["validate-apl", "compare-apls"])
+def test_simc_apl_commands_answer_not_found_for_a_missing_apl_and_write_nothing(tmp_path: Path, command: str) -> None:
+    harness = tmp_path / "harness.simc"
+    harness.write_text('mage="h"\n')
+    missing = tmp_path / "missing.simc"
+    args = [str(harness), str(missing)] if command == "validate-apl" else [str(harness), "--base-apl", str(missing)]
+
+    exit_code, payload = _invoke(tmp_path, command, *args)
+
+    assert (exit_code, payload["error"]["code"]) == (4, "not_found")
+    assert str(missing) in payload["error"]["message"]
+    # compare-apls without --out-dir used to leave an empty simc-cli-compare-* directory behind.
+    assert not list(tmp_path.rglob("simc-cli-compare-*"))
+
+
+def _stub_sim_args(monkeypatch) -> list[list[str]]:
+    calls: list[list[str]] = []
+
+    def _run(paths, profile_path, simc_args):
+        calls.append(simc_args)
+        json_path = Path(next(arg.split("=", 1)[1] for arg in simc_args if arg.startswith("json2=")))
+        json_path.write_text(json.dumps(_sim_json2([{"name": "a", "collected_data": {"dps": {"mean": 1.0}}}])))
+        return CommandResult(command=[], cwd=None, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("simc_cli.main.run_profile", _run)
+    return calls
+
+
+def test_simc_sim_keeps_the_profiles_own_run_settings_unless_a_flag_replaces_them(monkeypatch, tmp_path: Path) -> None:
+    """A Raidbots input's iterations/target_error/max_time were silently replaced by the preset's."""
+    profile = tmp_path / "p.simc"
+    profile.write_text("mage=a\nmax_time=60\niterations=500\ntarget_error=0.5\n")
+    calls = _stub_sim_args(monkeypatch)
+
+    exit_code, payload = _invoke(tmp_path, "sim", str(profile))
+
+    assert exit_code == 0
+    assert [arg for arg in calls[0] if not arg.startswith("json2=")] == []
+    assert payload["data"]["run_settings"]["iterations_requested"] == 500
+    assert payload["data"]["disclosures"][0].startswith("Kept the profile's own max_time=60, iterations=500, target_error=0.5")
+
+    exit_code, payload = _invoke(tmp_path, "sim", str(profile), "--iterations", "50")
+
+    assert exit_code == 0
+    assert [arg for arg in calls[1] if not arg.startswith("json2=")] == ["iterations=50", "target_error=0"]
+    assert payload["data"]["run_settings"]["iterations_requested"] == 50
+    assert payload["data"]["disclosures"][0] == (
+        "Command-line flags replaced the profile's own run settings: iterations=500 -> 50, target_error=0.5 -> 0."
+    )
+
+
+def test_simc_sim_reads_several_run_settings_on_one_profile_line(monkeypatch, tmp_path: Path) -> None:
+    """SimC splits a line on whitespace; `iterations=50 max_time=60` was read as one iterations value."""
+    profile = tmp_path / "p.simc"
+    profile.write_text("mage=a\niterations=50 max_time=60\n")
+    calls = _stub_sim_args(monkeypatch)
+
+    exit_code, payload = _invoke(tmp_path, "sim", str(profile))
+
+    assert exit_code == 0
+    assert [arg for arg in calls[0] if not arg.startswith("json2=")] == []
+    assert payload["data"]["run_settings"]["iterations_requested"] == 50
+    assert payload["data"]["disclosures"][0].startswith("Kept the profile's own iterations=50, max_time=60 instead")
+
+
+def test_simc_sim_fills_unset_run_settings_from_the_preset(monkeypatch, tmp_path: Path) -> None:
+    profile = tmp_path / "p.simc"
+    profile.write_text("mage=a\n")
+    calls = _stub_sim_args(monkeypatch)
+
+    exit_code, payload = _invoke(tmp_path, "sim", str(profile), "--preset", "high-accuracy")
+
+    assert exit_code == 0
+    assert [arg for arg in calls[0] if not arg.startswith("json2=")] == ["iterations=5000", "target_error=0", "max_time=300"]
+    assert payload["data"]["disclosures"] == []
+
+
+def test_simc_sim_profileset_rows_carry_simcs_error_and_iterations(monkeypatch, tmp_path: Path) -> None:
+    """Without mean_error a ranking between two profilesets could not be judged against noise."""
+    profile = tmp_path / "p.simc"
+    profile.write_text("mage=a\n")
+    row = {"name": "no_shimmer", "mean": 317812.0, "stddev": 21000.0, "mean_stddev": 1490.0, "mean_error": 2920.4, "iterations": 199}
+    _stub_sim_run(monkeypatch, _sim_json2([{"name": "a", "collected_data": {}}], profilesets={"results": [row]}))
+
+    exit_code, payload = _invoke(tmp_path, "sim", str(profile))
+
+    assert exit_code == 0
+    result = payload["data"]["profilesets"]["results"][0]
+    assert (result["mean_error"], result["mean_stddev"], result["iterations"]) == (2920.4, 1490.0, 199)
+
+
+def test_spec_file_search_matches_every_word_of_a_class_and_spec_query(monkeypatch, tmp_path: Path) -> None:
+    """`frost mage` and `death knight` found no APL: a spell-dump content match hid the file-name fallback."""
+    from simc_cli.repo import discover_repo
+    from simc_cli.search import spec_file_search
+
+    monkeypatch.setattr("simc_cli.search._rg_files", lambda needle, base, pattern: [base / "content_match.txt"])
+    repo_root = _checkout(tmp_path)
+    for name in ("mage_frost", "mage_fire", "deathknight_blood"):
+        (repo_root / "ActionPriorityLists" / "default" / f"{name}.simc").write_text("actions=x\n")
+
+    paths = discover_repo(repo_root)
+    assert [path.stem for path in spec_file_search(paths, "frost mage")["default_apl"]] == ["mage_frost"]
+    assert [path.stem for path in spec_file_search(paths, "death knight")["default_apl"]] == ["deathknight_blood"]
+
+
+def test_spec_file_search_matches_a_query_that_names_the_extension(monkeypatch, tmp_path: Path) -> None:
+    """`sc_mage.cpp` and `mage.cpp` found nothing once only the file stem was compared."""
+    from simc_cli.repo import discover_repo
+    from simc_cli.search import spec_file_search
+
+    monkeypatch.setattr("simc_cli.search._rg_files", lambda needle, base, pattern: [])
+    repo_root = _checkout(tmp_path)
+    modules = repo_root / "engine" / "class_modules"
+    modules.mkdir(parents=True, exist_ok=True)
+    for name in ("sc_mage.cpp", "sc_warrior.cpp"):
+        (modules / name).write_text("// synthetic\n")
+
+    paths = discover_repo(repo_root)
+    assert [path.name for path in spec_file_search(paths, "sc_mage.cpp")["cpp"]] == ["sc_mage.cpp"]
+    assert [path.name for path in spec_file_search(paths, "mage.cpp")["cpp"]] == ["sc_mage.cpp"]

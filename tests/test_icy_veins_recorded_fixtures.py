@@ -234,6 +234,69 @@ def test_astro_talents_fixture_extracts_published_loadout_import_strings() -> No
     assert builds[0]["source"] == {"provider": "icy-veins", "source": "guide_talent_export_string"}
 
 
+PVP_TALENTS_URL = "https://www.icy-veins.com/wow/arms-warrior-pvp-talents-and-builds"
+
+
+def test_astro_pvp_talents_fixture_reads_builds_from_the_talent_calculator_embeds() -> None:
+    """PvP build pages publish no import strings; each build is an embed of Icy Veins' own talent calculator."""
+    payload = parse_guide_page(load_fixture_text(FIXTURE_DIR, "astro_pvp_talents_and_builds.html"), source_url=PVP_TALENTS_URL)
+
+    builds = payload["build_references"]
+    # The page comments out its Colossus build: the script stays, the build's div and tab button do not.
+    assert [row["label"] for row in builds] == ["Slayer - Arms Warrior"]
+    (build,) = builds
+    assert build["reference_type"] == "icy_veins_talent_calc_url"
+    assert build["build_code"].startswith("HB-DJTGheCKroW4cSoRiLTSKKqYECC0ED77CAA-")
+    assert build["url"] == f"https://www.icy-veins.com/wow/midnight-talent-calculator#{build['build_code']}"
+    assert build["source"] == {"provider": "icy-veins", "source": "guide_talent_calculator_embed"}
+    assert build["build_identity"]["class_spec_identity"]["identity"] == {"actor_class": "warrior", "spec": "arms"}
+
+
+def test_calculator_embeds_are_read_on_pvp_pages_only() -> None:
+    """PvE pages embed the calculator too, for builds simc cannot take; their import strings are the build evidence."""
+    html = (
+        '<div class="guide-page-content">'
+        '<div id="midnight-skill-builder-1"></div>'
+        '<script>const args = ["midnight-skill-builder-1", "#OE-HIKJ-JgKG-AAAA-RSOa-"]; new MidnightTalentCalculator(...args);</script>'
+        "</div>"
+    )
+    pve_url = "https://www.icy-veins.com/wow/mistweaver-monk-pve-healing-mythic-plus-tips"
+    pvp_url = "https://www.icy-veins.com/wow/mistweaver-monk-pvp-talents-and-builds"
+
+    assert parse_guide_page(html, source_url=pve_url)["build_references"] == []
+    (build,) = parse_guide_page(html, source_url=pvp_url)["build_references"]
+    assert build["label"] is None
+    assert build["build_identity"]["class_spec_identity"]["identity"] == {"actor_class": "monk", "spec": "mistweaver"}
+
+
+def test_calculator_builds_take_their_tab_by_position_and_share_one_row_per_hash() -> None:
+    """Synthetic, after discipline-priest-pvp-talents-and-builds: a repeated button id, and two tabs on one build."""
+
+    def embed(area: str, builder: str, code: str) -> str:
+        return (
+            f'<div class="image_block_content" id="{area}"><div id="{builder}"></div>'
+            f'<script>const args = ["{builder}", "#{code}"]; new MidnightTalentCalculator(...args);</script></div>'
+        )
+
+    html = (
+        '<div class="guide-page-content"><div class="image_block">'
+        '<div class="image_block_header"><div class="image_block_header_buttons">'
+        '<span id="area_1_button">Best 3v3 Talents</span><span id="area_2_button">Best 2v2 Talents</span>'
+        '<span id="area_2_button">Best Battleground Blitz Talents</span>'
+        "</div></div>"
+        + embed("area_1", "builder-1", "AE-BUWZ-AAAA-")
+        + embed("area_2", "builder-2", "AE-BUWk-BBBB-")
+        + embed("area_3", "builder-3", "AE-BUWZ-AAAA-")
+        + "</div></div>"
+    )
+    builds = parse_guide_page(html, source_url="https://www.icy-veins.com/wow/discipline-priest-pvp-talents-and-builds")["build_references"]
+
+    assert [(row["build_code"], row["label"]) for row in builds] == [
+        ("AE-BUWZ-AAAA-", "Best 3v3 Talents / Best Battleground Blitz Talents"),
+        ("AE-BUWk-BBBB-", "Best 2v2 Talents"),
+    ]
+
+
 def test_recorded_fixtures_stay_small() -> None:
     """Captured pages are trimmed per docs/architecture/FIXTURE_MAINTENANCE.md."""
     oversized = {path.name: path.stat().st_size for path in FIXTURE_DIR.glob("*.html") if path.stat().st_size > 100_000}

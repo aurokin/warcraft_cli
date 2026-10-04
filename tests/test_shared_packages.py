@@ -85,26 +85,11 @@ def test_retry_after_seconds_parses_numeric_header() -> None:
 def test_request_with_retries_honors_retry_after_header(monkeypatch) -> None:
     sleep_calls: list[float] = []
 
-    class FakeClient:
-        def __init__(self) -> None:
-            self._responses = [
-                httpx.Response(
-                    429,
-                    headers={"Retry-After": "2"},
-                    request=httpx.Request("GET", "https://example.invalid"),
-                ),
-                httpx.Response(
-                    200,
-                    text="ok",
-                    request=httpx.Request("GET", "https://example.invalid"),
-                ),
-            ]
-
-        def get(self, url: str, params=None):  # noqa: ANN001
-            return self._responses.pop(0)
+    responses = [httpx.Response(429, headers={"Retry-After": "2"}), httpx.Response(200, text="ok")]
+    client = httpx.Client(transport=httpx.MockTransport(lambda _request: responses.pop(0)))
 
     monkeypatch.setattr("warcraft_api.http.time.sleep", sleep_calls.append)
-    response = request_with_retries(FakeClient(), "https://example.invalid", retry_attempts=2)
+    response = request_with_retries(client, "https://example.invalid", retry_attempts=2)
 
     assert response.status_code == 200
     assert response.text == "ok"
@@ -114,47 +99,26 @@ def test_request_with_retries_honors_retry_after_header(monkeypatch) -> None:
 def test_request_with_retries_falls_back_to_backoff_without_retry_after(monkeypatch) -> None:
     sleep_calls: list[float] = []
 
-    class FakeClient:
-        def __init__(self) -> None:
-            self._responses = [
-                httpx.Response(
-                    503,
-                    request=httpx.Request("GET", "https://example.invalid"),
-                ),
-                httpx.Response(
-                    200,
-                    text="ok",
-                    request=httpx.Request("GET", "https://example.invalid"),
-                ),
-            ]
-
-        def get(self, url: str, params=None):  # noqa: ANN001
-            return self._responses.pop(0)
+    responses = [httpx.Response(503), httpx.Response(200, text="ok")]
+    client = httpx.Client(transport=httpx.MockTransport(lambda _request: responses.pop(0)))
 
     monkeypatch.setattr("warcraft_api.http.backoff_seconds", lambda attempt: 0.75)
     monkeypatch.setattr("warcraft_api.http.time.sleep", sleep_calls.append)
-    response = request_with_retries(FakeClient(), "https://example.invalid", retry_attempts=2)
+    response = request_with_retries(client, "https://example.invalid", retry_attempts=2)
 
     assert response.status_code == 200
     assert sleep_calls == [0.75]
 
 
 def test_request_with_retries_supports_post_requests() -> None:
-    class FakeClient:
-        def __init__(self) -> None:
-            self.calls: list[tuple[str, dict[str, object]]] = []
+    seen: list[httpx.Request] = []
 
-        def post(self, url: str, params=None, **kwargs):  # noqa: ANN001
-            self.calls.append((url, {"params": params, **kwargs}))
-            return httpx.Response(
-                200,
-                text="ok",
-                request=httpx.Request("POST", url),
-            )
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, text="ok")
 
-    client = FakeClient()
     response = request_with_retries(
-        client,
+        httpx.Client(transport=httpx.MockTransport(handler)),
         "https://example.invalid/token",
         method="POST",
         data={"grant_type": "client_credentials"},
@@ -162,12 +126,6 @@ def test_request_with_retries_supports_post_requests() -> None:
     )
 
     assert response.status_code == 200
-    assert client.calls == [
-        (
-            "https://example.invalid/token",
-            {
-                "params": None,
-                "data": {"grant_type": "client_credentials"},
-            },
-        )
+    assert [(request.method, str(request.url), request.content) for request in seen] == [
+        ("POST", "https://example.invalid/token", b"grant_type=client_credentials")
     ]

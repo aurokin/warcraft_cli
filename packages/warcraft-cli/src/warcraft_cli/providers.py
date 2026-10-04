@@ -53,6 +53,7 @@ from warcraft_core.provider import ProviderSurface
 from warcraft_core.shapes import as_dict
 from warcraft_wiki_cli.main import app as warcraft_wiki_app
 from warcraft_wiki_cli.provider import PROVIDER as warcraft_wiki_provider
+from warcraft_wiki_cli.search import QUERY_COVERAGE_REASONS as WIKI_QUERY_COVERAGE_REASONS
 from warcraftlogs_cli.main import app as warcraftlogs_app
 from warcraftlogs_cli.provider import PROVIDER as warcraftlogs_provider
 from wowhead_cli.main import app as wowhead_app
@@ -62,6 +63,7 @@ from wowhead_cli.ranking import STALE_GUIDE_REASON
 __all__ = [
     "PROVIDERS",
     "STALE_GUIDE_REASON",
+    "WIKI_QUERY_COVERAGE_REASONS",
     "wrapper_envelope",
     "DescribeOptions",
     "PacketInput",
@@ -639,12 +641,8 @@ def _call_surface(
         except Exception as exc:
             failure, exit_code = error_envelope_for(provider, command, exc)
             return exit_code, {**failure, "query": query}
-    payload = with_cache_provenance(envelope, ledger)
-    if payload.get("ok") is False:
-        error = payload.get("error")
-        code = error.get("code") if isinstance(error, dict) else None
-        return exit_code_for(code) if isinstance(code, str) else EXIT_GENERIC, payload
-    return 0, payload
+    # Surfaces raise on failure, so an envelope that comes back is a success.
+    return 0, with_cache_provenance(envelope, ledger)
 
 
 def provider_search(
@@ -848,6 +846,22 @@ def shared_failure(failed_rows: list[dict[str, Any]]) -> tuple[str, int]:
     return ("upstream_error" if exit_code == EXIT_NETWORK else "providers_failed"), exit_code
 
 
+def _doctor_cache_error(payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    """A provider doctor's cache failure as ``{code, message}``, or ``None``.
+
+    A broken cache config or an unreachable Redis fails every read the provider makes. Some doctors
+    report it in ``data.cache.error`` (a Redis ping's message, or an ``invalid_cache_config`` object);
+    others fail outright with ``invalid_cache_config`` as their envelope error.
+    """
+    raw = as_dict(as_dict(payload.get("data")).get("cache")).get("error")
+    if isinstance(raw, str) and raw:
+        return {"code": "cache_unavailable", "message": raw}
+    error = as_dict(raw) or as_dict(payload.get("error"))
+    if raw or error.get("code") == "invalid_cache_config":
+        return {"code": error.get("code"), "message": error.get("message")}
+    return None
+
+
 def provider_doctor(provider: str, *, requested_expansion: str | None = None) -> dict[str, Any]:
     registration = get_provider(provider)
     expansion_options: dict[str, str] = {}
@@ -856,11 +870,14 @@ def provider_doctor(provider: str, *, requested_expansion: str | None = None) ->
     code, payload = _call_surface(
         provider, "doctor", lambda: registration.surface.doctor(**registration.doctor_options, **expansion_options)
     )
-    raw_auth = as_dict(payload.get("data")).get("auth")
+    data = as_dict(payload.get("data"))
+    raw_auth = data.get("auth")
     auth_details = raw_auth if isinstance(raw_auth, dict) else None
+    cache_error = _doctor_cache_error(payload)
     return {
         "provider": registration.name,
-        "status": registration.status if code == 0 else "error",
+        "status": "error" if code != 0 else "degraded" if cache_error else registration.status,
+        "cache_error": cache_error,
         "command": registration.command,
         "tier": registration.tier,
         # The provider package imported, so the surface is always reachable in-process.

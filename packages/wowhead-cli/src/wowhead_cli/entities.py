@@ -8,7 +8,7 @@ into ``main``.
 from __future__ import annotations
 
 import shlex
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from wowhead_cli.expansion_profiles import ExpansionProfile
@@ -76,6 +76,10 @@ def _normalize_link_name(value: Any, *, entity_type: str | None) -> str | None:
             return None
     if normalized in LOW_SIGNAL_LINK_NAMES:
         return None
+    # Entity names are capitalized; an all-lowercase text is a link's prose ("crates", "this
+    # achievement", "t"), not the name of what it links to.
+    if name == normalized:
+        return None
     return name
 
 
@@ -100,11 +104,14 @@ def _link_source_rank(record: dict[str, Any]) -> int:
     return 3
 
 
-def _preview_sort_key(record: dict[str, Any], *, source_entity_type: str) -> tuple[int, int, int, int]:
+def _preview_sort_key(record: dict[str, Any], *, source_entity_type: str) -> tuple[int, int, int, int, int]:
+    """Named links first, then by type, then relation-tab rows (an item's "dropped-by" NPC) ahead of
+    rows only the page's body or comments link."""
     link_id = record.get("id")
     return (
         _link_name_rank(record),
         preview_type_rank(record, source_entity_type=source_entity_type),
+        0 if record.get("listview") else 1,
         _link_source_rank(record),
         link_id if isinstance(link_id, int) else 0,
     )
@@ -120,36 +127,45 @@ def _preferred_source_kind(record: dict[str, Any]) -> str | None:
     return None
 
 
+def _distinct_strings(values: Iterable[Any]) -> list[str]:
+    distinct: list[str] = []
+    for value in values:
+        if isinstance(value, str) and value and value not in distinct:
+            distinct.append(value)
+    return distinct
+
+
+def _merged_link_name(existing: dict[str, Any], candidate: dict[str, Any], *, link_type: str) -> Any:
+    """Gatherer and relation-tab rows carry Wowhead's own name; an href's is only its anchor text."""
+    existing_name = _normalize_link_name(existing.get("name"), entity_type=link_type)
+    candidate_name = _normalize_link_name(candidate.get("name"), entity_type=link_type)
+    anchor_only = link_source_kinds(existing) == ["href"] and candidate.get("source_kind") != "href"
+    if candidate_name is not None and (existing_name is None or anchor_only):
+        return candidate_name
+    return existing.get("name") if existing_name is None else existing_name
+
+
 def _merge_link_records(existing: dict[str, Any], candidate: dict[str, Any], *, link_type: str) -> dict[str, Any]:
     merged = dict(existing)
-
-    existing_name = _normalize_link_name(merged.get("name"), entity_type=link_type)
-    candidate_name = _normalize_link_name(candidate.get("name"), entity_type=link_type)
-    if existing_name is None and candidate_name is not None:
-        merged["name"] = candidate_name
-    elif existing_name is not None:
-        merged["name"] = existing_name
+    merged["name"] = _merged_link_name(existing, candidate, link_type=link_type)
 
     for link_field in (
         "url",
         "citation_url",
         "source_url",
         "gatherer_data_type",
+        "listview",
+        "listview_data",
     ):
         if merged.get(link_field) in (None, "") and candidate.get(link_field) not in (None, ""):
             merged[link_field] = candidate[link_field]
 
-    source_urls: list[str] = []
-    for value in (merged.get("source_url"), candidate.get("source_url")):
-        if isinstance(value, str) and value and value not in source_urls:
-            source_urls.append(value)
-    if source_urls:
-        merged["source_urls"] = source_urls
+    for single, plural in (("source_url", "source_urls"), ("listview", "listviews")):
+        values = _distinct_strings([*merged.get(plural, [merged.get(single)]), candidate.get(single)])
+        if values:
+            merged[plural] = values
 
-    source_kinds: list[str] = []
-    for value in link_source_kinds(existing) + link_source_kinds(candidate):
-        if value not in source_kinds:
-            source_kinds.append(value)
+    source_kinds = _distinct_strings(link_source_kinds(existing) + link_source_kinds(candidate))
     if source_kinds:
         merged["sources"] = sorted(source_kinds, key=lambda value: (SOURCE_KIND_PRIORITY.get(value, 99), value))
 
@@ -168,9 +184,10 @@ def _normalize_link_record(record: dict[str, Any]) -> dict[str, Any]:
         normalized["source_kind"] = sources[0]
     elif "sources" in normalized:
         normalized.pop("sources", None)
-    source_url = normalized.get("source_url")
-    if isinstance(source_url, str) and source_url:
-        normalized["source_urls"] = [source_url]
+    for single, plural in (("source_url", "source_urls"), ("listview", "listviews")):
+        value = normalized.get(single)
+        if isinstance(value, str) and value:
+            normalized[plural] = [value]
     return normalized
 
 
@@ -250,12 +267,17 @@ def truncated_link_block(deduped: list[dict[str, Any]], *, max_links: int) -> di
 
 def _summarize_linked_entity(record: dict[str, Any]) -> dict[str, Any]:
     entity_type = record.get("entity_type") if isinstance(record.get("entity_type"), str) else None
-    return {
+    summary = {
         "type": record.get("entity_type"),
         "id": record.get("id"),
         "name": _normalize_link_name(record.get("name"), entity_type=entity_type),
         "url": record.get("url"),
     }
+    # The relation tab that lists the link ("dropped-by", "sold-by") and its drop or vendor numbers.
+    for field in ("listview", "listview_data"):
+        if record.get(field):
+            summary[field] = record[field]
+    return summary
 
 
 def entity_page_fetch_more_command(

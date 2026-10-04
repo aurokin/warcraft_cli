@@ -839,6 +839,8 @@ def test_search_type_hints_match_whole_words_only() -> None:
         assert search_type_hints(query) == set(), query
     assert search_type_hints("frost mage guide") == {"guide"}
     assert search_type_hints("hunter pet taming") == {"pet"}
+    # Types Wowhead's suggestions never carry bring the types it returns them as.
+    assert search_type_hints("ashes of al'ar mount") == {"mount", "item", "spell"}
 
 
 def test_resolve_is_not_confident_in_a_row_that_holds_only_some_of_the_query_words() -> None:
@@ -910,6 +912,78 @@ def test_a_type_word_wowhead_cannot_match_is_dropped_from_the_upstream_text(monk
     assert calls == ["frost mage guide"]
     assert found["search_query"] == "frost mage guide"
 
+
+def test_a_mount_or_battle_pet_query_keeps_the_untyped_answer_of_a_stand_in_type(monkeypatch) -> None:
+    """Live resolves (2026-10): "Mimiron's Head mount" and "Mr. Bigglesworth battle pet" answered nothing and
+    "Invincible mount" only news posts. Wowhead returns mounts as items or spells and battle pets as NPCs or
+    items, so the untyped answer never held a mount or battle-pet row and was thrown away."""
+    calls: list[str] = []
+    upstream = {
+        "mimiron's head mount": [],
+        "mimiron's head": [
+            {"type": 3, "id": 45693, "name": "Mimiron's Head", "typeName": "Item"},
+            {"type": 6, "id": 63796, "name": "Mimiron's Head", "typeName": "Spell"},
+        ],
+        "invincible mount": [{"type": 162, "id": 142214, "name": "New Mount: Invincible Charger", "typeName": "News"}],
+        "invincible": [{"type": 6, "id": 72286, "name": "Invincible", "typeName": "Spell"}],
+        "mr. bigglesworth battle pet": [],
+        "mr. bigglesworth": [{"type": 1, "id": 16998, "name": "Mr. Bigglesworth", "typeName": "NPC"}],
+    }
+
+    def fake_search(self, query: str):
+        calls.append(query)
+        rows = upstream[query]
+        return {"search": query, "results": rows, "categories": {"database": rows}}
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    for query, sent, command in (
+        ("Mimiron's Head mount", "mimiron's head", "wowhead entity item 45693"),
+        ("Invincible mount", "invincible", "wowhead entity spell 72286"),
+        ("Mr. Bigglesworth battle pet", "mr. bigglesworth", "wowhead entity npc 16998"),
+    ):
+        calls.clear()
+        resolved = json.loads(runner.invoke(app, ["resolve", query]).stdout)["data"]
+        assert calls == [query.lower(), sent]
+        assert (resolved["search_query"], resolved["confidence"], resolved["next_command"]) == (sent, "high", command)
+
+
+def test_a_type_word_inside_an_exact_name_does_not_trigger_the_untyped_retry(monkeypatch) -> None:
+    """Live `wowhead resolve "Battle Pet Training"` (2026-10) answered an unrelated "training" item: the spell
+    named exactly that is no battle-pet stand-in type, so the untyped retry replaced it."""
+    calls: list[str] = []
+    upstream = {
+        "battle pet training": [{"type": 6, "id": 119467, "name": "Battle Pet Training", "typeName": "Spell"}],
+        "training": [{"type": 3, "id": 250314, "name": "Initiate's Training Glaive", "typeName": "Item"}],
+    }
+
+    def fake_search(self, query: str):
+        calls.append(query)
+        rows = upstream[query]
+        return {"search": query, "results": rows, "categories": {"database": rows}}
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", fake_search)
+    resolved = json.loads(runner.invoke(app, ["resolve", "Battle Pet Training"]).stdout)["data"]
+    assert calls == ["battle pet training"]
+    assert (resolved["search_query"], resolved["confidence"], resolved["next_command"]) == (
+        "battle pet training",
+        "high",
+        "wowhead entity spell 119467",
+    )
+
+
+def test_a_row_of_the_named_type_gets_exact_name_credit_without_the_type_word() -> None:
+    """Live `wowhead resolve "Heritage of the Lightforged quest"` (2026-10) resolved low: the quest named
+    exactly that scored no `exact_name` because the type word stayed in the compared text."""
+    quest = {"type": 5, "id": 49782, "name": "Heritage of the Lightforged", "typeName": "Quest"}
+    achievement = {**quest, "type": 10, "id": 12414, "typeName": "Achievement"}
+    query = "heritage of the lightforged quest"
+
+    _, quest_reasons = search_result_score_and_reasons(quest, query=query, ranking_query=query)
+    _, achievement_reasons = search_result_score_and_reasons(achievement, query=query, ranking_query=query)
+
+    assert {"exact_name", "name_prefix", "all_terms_match", "type_hint"} <= set(quest_reasons)
+    # A row of another type still has to match the whole text, type word included.
+    assert achievement_reasons == ["some_terms_match"]
 
 def test_search_leaves_out_internal_dnt_test_entries(monkeypatch) -> None:
     """Live `warcraft resolve "warbound until equipped"` (2026-10) answered "Test Warbound until equipped (DNT)"."""

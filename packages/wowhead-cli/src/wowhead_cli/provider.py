@@ -210,6 +210,10 @@ def _fetch_ranked(
     return ranked, {**merge, "unmatched_rows_dropped": unmatched}
 
 
+def _has_exact_row(ranked: list[dict[str, Any]]) -> bool:
+    return any({"exact_name", "exact_display_name"} & set(row["ranking"]["match_reasons"]) for row in ranked)
+
+
 def _ranked_suggestions(
     client: WowheadClient,
     query: str,
@@ -224,8 +228,10 @@ def _ranked_suggestions(
     "Body and Soul" are spells, not "soul" plus a follow-up word.
 
     Wowhead matches every word against row names, so a type word ("hogger npc") finds nothing unless
-    the names hold it, as guide titles hold "guide". When no row has a type the query names, the
-    text is sent again without its type words, and that answer is kept when it has such a row.
+    the names hold it, as guide titles hold "guide". When no row has a type the query names, and no
+    row is named exactly the query ("Battle Pet Training" is a spell), the text is sent again without
+    its type words, and that answer is kept when it has such a row. A mount, battle pet or recipe
+    counts as named by the types Wowhead returns it as (item, spell, NPC).
     """
     literal_query = " ".join(query.lower().split())
     stripped_query = search_ranking_query(query)
@@ -233,14 +239,19 @@ def _ranked_suggestions(
         ranked, merge = _fetch_ranked(
             client, literal_query, query=query, profile=profile, entity_types=entity_types, literal=True
         )
-        if any({"exact_name", "exact_display_name"} & set(row["ranking"]["match_reasons"]) for row in ranked):
+        if _has_exact_row(ranked):
             return literal_query, ranked, merge
     ranked, merge = _fetch_ranked(
         client, stripped_query, query=query, profile=profile, entity_types=entity_types, literal=False
     )
     hinted = search_type_hints(query)
     untyped_query = untyped_search_query(stripped_query)
-    if hinted and untyped_query not in ("", stripped_query) and not any(row["entity_type"] in hinted for row in ranked):
+    if (
+        hinted
+        and untyped_query not in ("", stripped_query)
+        and not _has_exact_row(ranked)
+        and not any(row["entity_type"] in hinted for row in ranked)
+    ):
         untyped_ranked, untyped_merge = _fetch_ranked(
             client, untyped_query, query=query, profile=profile, entity_types=entity_types, literal=False
         )

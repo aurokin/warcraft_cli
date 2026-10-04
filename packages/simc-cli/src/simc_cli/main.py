@@ -68,6 +68,7 @@ from simc_cli.build_input import (
     decode_build,
     diff_talent_trees,
     encode_build,
+    export_spec,
     extract_build_spec_from_text,
     has_talent_data,
     identify_build,
@@ -82,6 +83,7 @@ from simc_cli.compare import (
     compare_apl_variants,
     output_previews,
     profile_disclosures,
+    simc_warnings,
     validate_profile_file,
     variant_report_payload,
     verify_clean_payload,
@@ -568,6 +570,8 @@ def _load_identified_build_spec_or_raise(
     except SimcNotReadyError as exc:
         # The checkout, not the caller's input, is what failed; this is not a usage error.
         raise ProviderError("identify_failed", str(exc)) from exc
+    except SimcBuildError as exc:
+        raise _build_error(paths, exc, code="invalid_build") from exc
     except UnsupportedBuildReference as exc:
         raise ProviderError(
             "unsupported_build_reference",
@@ -926,10 +930,10 @@ def inspect(
 @app.command("spec-files")
 def spec_files(
     ctx: typer.Context,
-    query: str | None = typer.Argument(None, help="Optional substring to narrow APL and class-module files."),
+    query: str | None = typer.Argument(None, help="Optional words every matching file name holds, e.g. 'frost mage'."),
     limit: int = typer.Option(25, "--limit", min=1, max=200, help="Maximum file rows to return per category."),
 ) -> None:
-    """List APL and class-module files in the checkout, optionally narrowed by a substring."""
+    """List APL and class-module files in the checkout, optionally narrowed by the words of a query."""
     paths = _repo_paths(ctx)
     _require_checkout(ctx, paths)
     try:
@@ -1404,12 +1408,14 @@ def validate_apl_command(
     if not LABEL_RE.fullmatch(label):
         fail(ctx, "invalid_query", f"Label '{label}' must be a plain file name (letters, digits, '_', '.', '-').")
     paths = _repo_paths(ctx)
+    _require_input_files(ctx, {"Harness profile": harness_path, "APL file": apl_path})
     _require_binary(ctx, paths)
     try:
         profile_path = build_variant_profile(harness_path, apl_path, label=label, out_dir=out_dir)
         validation = validate_profile_file(paths, profile_path)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         _fail_build_error(ctx, exc, code="validate_apl_failed")
+    warnings = simc_warnings(validation.result.stderr)
     _emit(
         ctx,
         {
@@ -1417,11 +1423,21 @@ def validate_apl_command(
             "label": label,
             "apl_path": str(Path(apl_path).expanduser().resolve()),
             "profile_path": str(profile_path),
-            "valid": validation.result.returncode == 0,
+            # SimC exits 0 after ignoring an unknown option, so a warning makes the APL invalid too.
+            "valid": validation.result.returncode == 0 and not warnings,
             "returncode": validation.result.returncode,
+            "warnings": warnings,
             **output_previews(validation.result.stdout, validation.result.stderr),
         },
     )
+
+
+def _require_input_files(ctx: typer.Context, files: dict[str, str]) -> None:
+    """Answer ``not_found`` for a missing harness or APL before anything is written for it."""
+    for label, value in files.items():
+        resolved = Path(value).expanduser().resolve()
+        if not resolved.is_file():
+            fail(ctx, "not_found", f"{label} not found: {resolved}")
 
 
 @app.command("compare-apls")
@@ -1444,6 +1460,11 @@ def compare_apls_command(
         variant_specs = _parse_variant_specs(variant, base_label=base_label)
     except ValueError as exc:
         fail(ctx, "invalid_query", str(exc))
+    _require_input_files(
+        ctx,
+        {"Harness profile": harness_path, "APL file": base_apl}
+        | {f"APL file for variant '{label}'": str(path) for label, path in variant_specs},
+    )
     _require_binary(ctx, paths)
     try:
         payload = compare_apl_variants(
@@ -2555,12 +2576,13 @@ def log_actions_command(
     ctx: typer.Context,
     log_path: str = typer.Argument(..., help="Path to a SimulationCraft combat log."),
     actions: list[str] = typer.Argument(..., help="One or more action names to inspect."),
+    actor: str | None = typer.Option(None, "--actor", help="Only count this actor's casts, e.g. the player and not its pets."),
 ) -> None:
     """Report when actions were first scheduled and performed in a SimC combat log."""
     resolved = Path(log_path).expanduser().resolve()
     if not resolved.is_file():
         fail(ctx, "not_found", f"Log file not found: {resolved}")
-    hits = first_action_hits(resolved, list(actions))
+    hits = first_action_hits(resolved, list(actions), actor)
     _emit(
         ctx,
         {
@@ -2572,6 +2594,7 @@ def log_actions_command(
                     "action": hit.action,
                     "scheduled_at": hit.scheduled_at,
                     "performed_at": hit.performed_at,
+                    "actor": hit.actor,
                 }
                 for hit in hits
             ],
@@ -2627,7 +2650,7 @@ def sync(
 @app.command("build")
 def build(
     ctx: typer.Context,
-    target: str | None = typer.Option(None, "--target", help="Optional build target passed to cmake."),
+    target: str = typer.Option("simc", "--target", help="Build target passed to cmake; the default builds only the simc binary."),
 ) -> None:
     """Build the local SimulationCraft binary with cmake."""
     paths = _repo_paths(ctx)
@@ -2667,7 +2690,7 @@ class _SimProfileInput:
 
 @dataclass(slots=True)
 class _SimOverrides:
-    """SimC engine settings from the command line; iterations/max_time are None until the preset default is applied."""
+    """SimC engine settings from the command line; each is None when its flag was not given."""
 
     iterations: int | None
     max_time: int | None
@@ -2709,13 +2732,51 @@ def _sim_json_report_path(json_out: str | None, cleanup_paths: list[Path]) -> Pa
     return json_path
 
 
-def _sim_engine_args(overrides: _SimOverrides, *, json_path: Path) -> list[str]:
-    args = [
-        f"iterations={overrides.iterations}",
-        "target_error=0",
-        f"max_time={overrides.max_time}",
-        f"json2={json_path}",
-    ]
+# The run settings a profile may set for itself; Raidbots inputs carry all three.
+_PROFILE_RUN_KEYS = ("iterations", "target_error", "max_time")
+
+
+def _profile_run_settings(text: str) -> dict[str, str]:
+    """The iterations, target_error and max_time a profile sets; the last assignment wins, as in SimC.
+
+    SimC splits each line on whitespace, so ``iterations=50 max_time=60`` on one line is two options.
+    """
+    settings: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        for token in raw_line.split("#", 1)[0].split():
+            key, sep, value = token.partition("=")
+            if sep and key in _PROFILE_RUN_KEYS:
+                settings[key] = value
+    return settings
+
+
+def _sim_run_settings(overrides: _SimOverrides, profile: dict[str, str], *, preset: str) -> tuple[dict[str, str], list[str]]:
+    """The iterations, target_error and max_time to pass SimC, and disclosures of what that did to the profile's own.
+
+    A flag always wins and names the profile setting it replaced. The preset fills only what the profile
+    leaves unset, so a profile with its own iterations or target_error (a Raidbots input) runs as written.
+    """
+    preset_iterations, preset_max_time = _sim_preset_settings(preset=preset)
+    passed: dict[str, str] = {}
+    if overrides.iterations is not None or not {"iterations", "target_error"} & profile.keys():
+        passed = {"iterations": str(overrides.iterations or preset_iterations), "target_error": "0"}
+    if overrides.max_time is not None or "max_time" not in profile:
+        passed["max_time"] = str(overrides.max_time or preset_max_time)
+    replaced = [f"{key}={profile[key]} -> {value}" for key, value in passed.items() if profile.get(key, value) != value]
+    kept = [f"{key}={value}" for key, value in profile.items() if key not in passed]
+    disclosures = []
+    if replaced:
+        disclosures.append(f"Command-line flags replaced the profile's own run settings: {', '.join(replaced)}.")
+    if kept:
+        disclosures.append(
+            f"Kept the profile's own {', '.join(kept)} instead of the {preset} preset's; "
+            "pass --iterations or --max-time to override."
+        )
+    return passed, disclosures
+
+
+def _sim_engine_args(overrides: _SimOverrides, run_settings: dict[str, str], *, json_path: Path) -> list[str]:
+    args = [*(f"{key}={value}" for key, value in run_settings.items()), f"json2={json_path}"]
     if overrides.fight_style:
         args.append(f"fight_style={overrides.fight_style}")
     if overrides.threads is not None:
@@ -2744,9 +2805,6 @@ def _sim(
     if preset not in {"quick", "high-accuracy"}:
         fail(ctx, "invalid_query", f"Unsupported sim preset: {preset}")
     paths = _repo_paths(ctx)
-    default_iterations, default_max_time = _sim_preset_settings(preset=preset)
-    overrides.iterations = overrides.iterations or default_iterations
-    overrides.max_time = overrides.max_time or default_max_time
     profile = _sim_profile_input(ctx, profile_path=profile_path, profile_text=profile_text)
     try:
         _require_binary(ctx, paths)
@@ -2770,7 +2828,10 @@ def _run_sim(
     ctx: typer.Context, paths: RepoPaths, profile: _SimProfileInput, *, preset: str, json_out: str | None, overrides: _SimOverrides
 ) -> None:
     json_path = _sim_json_report_path(json_out, profile.cleanup_paths)
-    result = run_profile(paths, profile.path, simc_args=_sim_engine_args(overrides, json_path=json_path))
+    profile_text = profile.path.read_text()
+    profile_settings = _profile_run_settings(profile_text)
+    run_settings, run_disclosures = _sim_run_settings(overrides, profile_settings, preset=preset)
+    result = run_profile(paths, profile.path, simc_args=_sim_engine_args(overrides, run_settings, json_path=json_path))
     previews = output_previews(result.stdout, result.stderr)
     _fail_if_nothing_to_sim(ctx, result, previews)
     if result.returncode != 0:
@@ -2803,10 +2864,14 @@ def _run_sim(
             input_source=profile.source,
             json_report_path=str(json_path) if json_out is not None else None,
             command=result.command,
-            iterations_requested=overrides.iterations,
-            disclosures=profile_disclosures(profile.path.read_text()),
+            iterations_requested=_int_or_none(run_settings.get("iterations", profile_settings.get("iterations"))),
+            disclosures=[*run_disclosures, *profile_disclosures(profile_text)],
         ),
     )
+
+
+def _int_or_none(value: str | None) -> int | None:
+    return int(value) if value is not None and value.isdigit() else None
 
 
 @app.command("sim")
@@ -3018,6 +3083,14 @@ def _resolve_modify_tree_entries(
             actor_class=base_spec.actor_class,
             spec_name=base_spec.spec,
         )
+        source_pair = export_spec(paths, swap_spec.talents)
+        if source_pair and source_pair != (base_spec.actor_class, base_spec.spec):
+            fail(
+                ctx,
+                "invalid_query",
+                f"The {tree_name} tree source is a {' '.join(source_pair)} build; --swap-{tree_name}-tree-from "
+                f"takes a build of the base's own spec ({base_spec.actor_class} {base_spec.spec}).",
+            )
         try:
             swap_resolution = decode_build(paths, swap_spec)
         except (FileNotFoundError, RuntimeError, ValueError) as exc:

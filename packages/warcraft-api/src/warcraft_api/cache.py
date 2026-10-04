@@ -457,13 +457,7 @@ def clear_file_cache(
 
 
 def _redis_iter_keys(client: Any, pattern: str) -> list[str]:
-    scan_iter = getattr(client, "scan_iter", None)
-    if callable(scan_iter):
-        return [str(key) for key in scan_iter(match=pattern)]
-    keys = getattr(client, "keys", None)
-    if callable(keys):
-        return [str(key) for key in keys(pattern)]
-    raise ValueError("Redis cache inspection requires scan_iter or keys support.")
+    return [str(key) for key in client.scan_iter(match=pattern)]
 
 
 def inspect_redis_cache(
@@ -485,6 +479,8 @@ def inspect_redis_cache(
     try:
         client = _build_redis_client(redis_url, import_module_func=import_module_func)
         keys = _redis_iter_keys(client, f"{prefix}:*")
+        # Read in the same try: a Redis that drops between the two scans is unavailable, not a crash.
+        all_keys = _redis_iter_keys(client, "*") if include_prefix_visibility else []
     except Exception as exc:
         return {
             "kind": "redis",
@@ -508,7 +504,6 @@ def inspect_redis_cache(
     if not include_prefix_visibility:
         return summary
 
-    all_keys = _redis_iter_keys(client, "*")
     prefix_counts: dict[str, int] = {}
     for key in all_keys:
         key_prefix = key.split(":", 1)[0] if ":" in key else key
@@ -546,9 +541,6 @@ def clear_redis_cache(
     removed_by_namespace: dict[str, int] = {}
     patterns = [f"{prefix}:{namespace}:*" for namespace in namespaces] if namespaces else [f"{prefix}:*"]
     seen: set[str] = set()
-    delete = getattr(client, "delete", None)
-    if not callable(delete):
-        raise ValueError("Redis cache clearing requires delete support.")
     for pattern in patterns:
         for key in _redis_iter_keys(client, pattern):
             if key in seen:
@@ -556,7 +548,7 @@ def clear_redis_cache(
             seen.add(key)
             raw = key[len(prefix) + 1:] if key.startswith(f"{prefix}:") else key
             namespace = raw.split(":", 1)[0] if raw else "cache"
-            deleted = delete(key)
+            deleted = client.delete(key)
             if deleted:
                 removed_by_namespace[namespace] = removed_by_namespace.get(namespace, 0) + int(deleted)
     return {

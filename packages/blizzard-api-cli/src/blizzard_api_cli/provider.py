@@ -30,6 +30,7 @@ from blizzard_api_cli.auth import (
 )
 from blizzard_api_cli.client import (
     CLIENT_CREDENTIALS_STATE_PROVIDER,
+    SUPPORTED_GAME_VERSIONS,
     SUPPORTED_REGIONS,
     VERIFIED_REGIONS,
     BlizzardClient,
@@ -52,7 +53,6 @@ _EXIT_CODE_BY_CLIENT_CODE = {
     "missing_client_credentials": EXIT_AUTH,
     "unsupported_region": EXIT_USAGE,
     "unsupported_game_version": EXIT_USAGE,
-    "classic_profile_unsupported": EXIT_USAGE,
 }
 
 def provider_error(exc: BlizzardClientError | httpx.HTTPError) -> ProviderError:
@@ -95,8 +95,7 @@ def _region_payload(auth: BlizzardAuthConfig) -> dict[str, Any]:
         "namespace_classes": ["dynamic", "static", "profile"],
         "routing": "ready",
         "verification": {
-            "retail": "live_confirmed",
-            "classic": "live_confirmed",
+            **dict.fromkeys(SUPPORTED_GAME_VERSIONS, "live_confirmed"),
             "verified_regions": sorted(VERIFIED_REGIONS),
             "unverified_regions": sorted(set(SUPPORTED_REGIONS) - VERIFIED_REGIONS),
             "note": verification_note(),
@@ -108,7 +107,8 @@ def _cache_payload() -> dict[str, Any]:
     try:
         settings, static_ttl, dynamic_ttl = load_blizzard_cache_settings_from_env()
     except ValueError as exc:
-        return {"error": {"code": "invalid_cache_config", "message": str(exc)}}
+        # Every read fails on this config, so doctor must not report the provider ready.
+        return {"available": False, "error": {"code": "invalid_cache_config", "message": str(exc)}}
     return {
         "enabled": settings.enabled,
         "backend": settings.backend,
@@ -131,7 +131,7 @@ def doctor_envelope() -> Envelope:
         command="doctor",
         kind="doctor",
         data={
-            # A Redis cache that does not answer degrades every read too.
+            # A Redis cache that does not answer, or a cache config that does not parse, degrades every read too.
             "status": "ready" if auth.configured and cache.get("available") is not False else "degraded",
             "tier": TIER,
             "installed": True,
