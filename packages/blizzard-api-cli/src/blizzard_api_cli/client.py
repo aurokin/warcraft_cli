@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -11,7 +12,7 @@ from urllib.parse import quote
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
 from warcraft_api.client_credentials import TOKEN_SKEW_SECONDS, ClientTokenCache
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, CachedHttpClient, request_with_retries
 from warcraft_core.paths import provider_cache_root
 from warcraft_core.wow_normalization import normalize_region, profile_region, realm_slug_variants, slug_parts
 
@@ -24,16 +25,24 @@ CLIENT_CREDENTIALS_STATE_PROVIDER = "blizzard-api-client-credentials"
 # which are NOT valid Blizzard hosts, so the resolver validates against this tuple explicitly.
 SUPPORTED_REGIONS = ("us", "eu", "kr", "tw", "cn")
 
-# Game versions this slice routes. Retail + the current classic line are documented + stable;
-# era/Season-of-Discovery namespaces (e.g. "classic1x") are deferred until a live spike confirms
-# them, so anything outside this set is rejected rather than guessed at.
-SUPPORTED_GAME_VERSIONS = ("retail", "classic")
+# Game versions this slice routes, each with the infix Blizzard puts in its namespaces
+# (``static-classic1x-us``). "classic" is the progression Classic line (Mists of Pandaria Classic
+# today). All four answer live for Game Data and Profile reads; anything else is rejected rather
+# than guessed at.
+_NAMESPACE_INFIX = {"retail": "", "classic": "classic-", "classic-era": "classic1x-", "classic-anniversary": "classicann-"}
+SUPPORTED_GAME_VERSIONS = tuple(_NAMESPACE_INFIX)
+
+# Character sub-resources `blizzard character --section` reads, each live-confirmed on retail. A PvP
+# bracket is any name pvp-summary lists (2v2, 3v3, rbg, shuffle-<class>-<spec>); the pattern keeps
+# the value a single path segment so it cannot reach another endpoint with the bearer token.
+CHARACTER_SECTIONS = ("pvp-summary", "pvp-bracket/<bracket>", "professions", "collections/mounts", "collections/pets", "collections/toys")
+_CHARACTER_SECTION_PATTERN = re.compile(r"pvp-summary|pvp-bracket/[a-z0-9-]+|professions|collections/(?:mounts|pets|toys)")
 
 DEFAULT_LOCALE = "en_US"
 DEFAULT_REGION = "us"
 
 # Regions whose API host, OAuth token URL, and namespace strings have been confirmed against live
-# Blizzard endpoints (retail and classic Game Data, retail Profile). CN routes through a different
+# Blizzard endpoints (Game Data and Profile, every game version). CN routes through a different
 # host and OAuth server that is unreachable from outside China, so it stays unconfirmed and its
 # payloads keep provenance.verified=false.
 VERIFIED_REGIONS = frozenset({"us", "eu", "kr", "tw"})
@@ -49,8 +58,8 @@ _UNVERIFIED_CN_NOTE = (
 )
 _VERIFIED_NOTE = (
     "Host, OAuth token URL, and namespace strings are confirmed against live Blizzard endpoints for "
-    f"{'/'.join(region for region in SUPPORTED_REGIONS if region in VERIFIED_REGIONS)} (retail and "
-    "classic Game Data, retail Profile), whose payloads report provenance.verified=true. "
+    f"{'/'.join(region for region in SUPPORTED_REGIONS if region in VERIFIED_REGIONS)} (Game Data "
+    "and Profile, every game version), whose payloads report provenance.verified=true. "
     + _UNVERIFIED_CN_NOTE
 )
 
@@ -112,7 +121,7 @@ def resolve_game_version(*, game_version: str | None, classic: bool) -> str:
     resolved = (game_version or "retail").strip().lower()
     if classic and explicit and resolved != "classic":
         # --classic is shorthand for --game-version classic. Pairing it with any *other* explicit
-        # version — including the retail default spelled out, or a deferred era/SoD string — is a
+        # version — including the retail default spelled out or classic-era — is a
         # contradiction we refuse rather than silently letting --classic win the routing. (--classic
         # alone leaves game_version=None, so explicit is False and the shorthand still works.)
         raise BlizzardClientError(
@@ -125,8 +134,7 @@ def resolve_game_version(*, game_version: str | None, classic: bool) -> str:
     if resolved not in SUPPORTED_GAME_VERSIONS:
         raise BlizzardClientError(
             "unsupported_game_version",
-            f"--game-version must be one of: {', '.join(SUPPORTED_GAME_VERSIONS)}; got {resolved!r}. "
-            "Classic-era / Season of Discovery namespaces are deferred pending a live spike.",
+            f"--game-version must be one of: {', '.join(SUPPORTED_GAME_VERSIONS)}; got {resolved!r}.",
         )
     return resolved
 
@@ -147,13 +155,7 @@ def resolve_routing(
             f"--region must be one of: {', '.join(SUPPORTED_REGIONS)}; got {(region_input or '').strip()!r}.",
         )
     resolved_version = resolve_game_version(game_version=game_version, classic=classic)
-    if resolved_version == "classic" and namespace_class == "profile":
-        raise BlizzardClientError(
-            "classic_profile_unsupported",
-            "The Blizzard Profile API has no classic namespace; character lookups are retail-only.",
-        )
-    infix = "classic-" if resolved_version == "classic" else ""
-    namespace = f"{namespace_class}-{infix}{region}"
+    namespace = f"{namespace_class}-{_NAMESPACE_INFIX[resolved_version]}{region}"
     return BlizzardRouting(
         region=region,
         host=_api_host(region),
@@ -165,7 +167,7 @@ def resolve_routing(
     )
 
 
-class BlizzardClient:
+class BlizzardClient(CachedHttpClient):
     def __init__(
         self,
         *,
@@ -183,7 +185,6 @@ class BlizzardClient:
         self._dynamic_ttl = dynamic_ttl
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
-        self._http_client: httpx.Client | None = None
         self._access_token: str | None = None
         self._token_region: str | None = None
         self._token_expires_at = 0.0
@@ -191,16 +192,6 @@ class BlizzardClient:
     @property
     def configured(self) -> bool:
         return bool(self._client_id and self._client_secret)
-
-    def close(self) -> None:
-        if self._http_client is not None:
-            self._http_client.close()
-            self._http_client = None
-
-    def _client(self) -> httpx.Client:
-        if self._http_client is None:
-            self._http_client = build_client(timeout=self._timeout_seconds)
-        return self._http_client
 
     def _token(self, routing: BlizzardRouting) -> str:
         now = time.time()
@@ -292,7 +283,7 @@ class BlizzardClient:
         index_routing = (
             routing
             if routing.namespace_class == "dynamic"
-            else replace(routing, namespace=f"dynamic-{routing.region}", namespace_class="dynamic")
+            else replace(routing, namespace=f"dynamic-{_NAMESPACE_INFIX[routing.game_version]}{routing.region}", namespace_class="dynamic")
         )
         realms = self._get(index_routing, "/data/wow/realm/index", localized=False, ttl_seconds=self._static_ttl)["payload"].get("realms")
         wanted = "".join(slug_parts(realm))
@@ -374,10 +365,16 @@ class BlizzardClient:
         game_version: str | None = None,
         classic: bool = False,
         locale: str | None = None,
+        section: str | None = None,
     ) -> dict[str, Any]:
         # A name of only dots would be a dot segment that climbs the path, and must not be blank.
         if not name.strip(" ."):
             raise BlizzardClientError("invalid_query", "Character name must not be blank.")
+        suffix = f"/{section}" if section else ""
+        if section is not None and not _CHARACTER_SECTION_PATTERN.fullmatch(section):
+            raise BlizzardClientError(
+                "invalid_query", f"--section must be one of: {', '.join(CHARACTER_SECTIONS)}; got {section!r}."
+            )
         routing = resolve_routing(
             region_input=region or self._default_region,
             game_version=game_version,
@@ -387,7 +384,7 @@ class BlizzardClient:
         )
         # Quoted so a slash, ? or # in the name cannot reach another endpoint with the bearer token.
         character = quote(name.lower(), safe="")
-        return self._get_realm_scoped(routing, realm, lambda realm_slug: f"/profile/wow/character/{realm_slug}/{character}")
+        return self._get_realm_scoped(routing, realm, lambda realm_slug: f"/profile/wow/character/{realm_slug}/{character}{suffix}")
 
 
 def verification_note(region: str | None = None) -> str:

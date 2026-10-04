@@ -16,6 +16,11 @@ a bare report ID or any URL containing `/report/{ID}`.
 | `raidbots input <url-or-id>` | Fetch the report's SimC input and emit it with a handoff: classification plus suggested local `simc` commands. |
 | `raidbots explain-input` | Classify SimC addon/profile text locally and explain the handoff. No network. |
 
+A Top Gear or Droptimizer report's ranked rows carry `name`, `mean`, `min`, `max`, `median`, `stddev`,
+`mean_stddev`, `mean_error` (SimC's confidence-interval half-width around `mean`; rows closer than it are
+a tie) and `iterations`. `simc sim -` on the report's input keeps the input's own `iterations`,
+`target_error` and `max_time`.
+
 Raidbots publishes no report index, so there is no `search` or `resolve` command; open a known report
 with `inspect-report`. The in-process surface the `warcraft` wrapper holds answers `search`/`resolve`
 with a `not_supported` stub, and the wrapper never fans out to it.

@@ -102,6 +102,11 @@ snippets only mention it. The upstream rank can still reorder two such partial t
 snippet points combined, so `sha of anger anniversary` returns `Sha of Anger (Anniversary)` ahead of `Sha of Anger`
 even when MediaWiki lists the base page first.
 
+A system word in the query adds `intent_systems` (18 points) only to that system's pages. `profession` lifts
+`profession_reference` pages, `zone` lifts `zone_reference` pages, `expansion` lifts `expansion_reference` pages,
+`faction` lifts `faction_reference` pages, and `renown` and `housing` lift `system_reference` pages. So
+`best profession for gold` no longer puts a class page that only shares a snippet word at the top.
+
 `resolve` reports `resolved: true` only when the top row carries a reason covering the whole query (`exact_title`,
 `exact_api_title`, `exact_handler_title`, `exact_event_title`, `title_prefix`, `title_contains_query`,
 `normalized_title_match`, `all_terms_match`, `guide_title_terms`, `expansion_alias_match`) and either no other row

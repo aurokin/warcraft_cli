@@ -66,9 +66,10 @@ def warcraftlogs_phase_windows(report: dict[str, Any], fight_id: int) -> list[di
     """One window per phase transition of a Warcraft Logs fight, in ms from the pull.
 
     ``report`` is the GraphQL ``report`` object with ``phases`` (the encounters' phase names) and
-    ``fights`` (``startTime``, ``endTime``, ``phaseTransitions``). Windows are numbered in order like
-    the Lorrgs ones, so ``--phase`` and the top-parse comparison mean the same window on either path;
-    ``phase_id`` and ``name`` are the encounter phase each window is (1, 2, 1, 2, 1 on a returning boss).
+    ``fights`` (``startTime``, ``endTime``, ``phaseTransitions``). Windows are numbered P1, P2, ... in
+    order; ``phase_id`` and ``name`` are the encounter phase each window is (1, 2, 1, 2, 1 on a returning
+    boss). Lorrgs places its own markers (often only some of these transitions), so a Lorrgs P2 is not
+    this P2 and the top-parse samples are segmented by their own Warcraft Logs transitions instead.
     """
     fight = next((row for row in as_list(report.get("fights")) if isinstance(row, dict) and row.get("id") == fight_id), {})
     start, end = int_or_none(fight.get("startTime")), int_or_none(fight.get("endTime"))
@@ -268,32 +269,52 @@ def normalize_warcraftlogs_actor_casts(
     }
 
 
-def _sample_for_fight(
-    report: dict[str, Any],
-    fight: dict[str, Any],
-    *,
-    phase: int,
-    spell_catalog: dict[int, dict[str, Any]],
-    boss_catalog: dict[int, dict[str, Any]],
-    spell_ids: set[int],
-    encounter_has_phases: bool,
-) -> dict[str, Any] | None:
-    """One top-parse comparison row, or ``None`` when the fight has no usable player.
+def _lorrgs_sample_window(
+    fight: dict[str, Any], *, phase: int, encounter_has_phases: bool
+) -> tuple[dict[str, Any] | None, str | None]:
+    """The top parse's window for ``phase`` from its Lorrgs markers, or why it has none.
 
     Lorrgs spec-ranking fights often carry no phase markers. Their single whole-fight window only
     stands for a phase when nothing shows the encounter has several, so on a multi-phase encounter a
     marker-less top parse gets no window instead of the whole fight's casts.
     """
-    players = as_list(fight.get("players"))
-    player = next((row for row in players if isinstance(row, dict)), None)
-    if player is None:
-        return None
     windows = build_phase_windows(as_list(fight.get("phases")), fight.get("duration"))
-    no_markers = len(windows) == 1 and encounter_has_phases
-    window = None if no_markers else selected_phase_window(windows, phase)
-    unavailable_reason = None
-    if window is None:
-        unavailable_reason = "top_parse_has_no_phase_markers" if no_markers else "phase_not_in_top_parse"
+    if len(windows) == 1 and encounter_has_phases:
+        return None, "top_parse_has_no_phase_markers"
+    window = selected_phase_window(windows, phase)
+    return window, None if window is not None else "phase_not_in_top_parse"
+
+
+def _warcraftlogs_sample_window(
+    windows: list[dict[str, Any]] | None, selected: dict[str, Any]
+) -> tuple[dict[str, Any] | None, str | None]:
+    """The top parse's window numbered like the player's ``selected`` Warcraft Logs window, or why it has none.
+
+    ``windows`` is ``None`` when the sample's phase transitions could not be read. A window with the
+    same number but another encounter phase (the top parse skipped or added a transition) is no match.
+    """
+    if windows is None:
+        return None, "top_parse_phase_lookup_failed"
+    if not windows:
+        return None, "top_parse_has_no_phase_markers"
+    window = selected_phase_window(windows, int(selected["phase"]))
+    if window is None or window.get("phase_id") != selected.get("phase_id"):
+        return None, "phase_not_in_top_parse"
+    return window, None
+
+
+def _sample_for_fight(
+    report: dict[str, Any],
+    fight: dict[str, Any],
+    player: dict[str, Any],
+    *,
+    window: dict[str, Any] | None,
+    unavailable_reason: str | None,
+    spell_catalog: dict[int, dict[str, Any]],
+    boss_catalog: dict[int, dict[str, Any]],
+    spell_ids: set[int],
+) -> dict[str, Any]:
+    """One top-parse comparison row; casts are counted only inside ``window``."""
     raw_boss = fight.get("boss")
     boss: dict[str, Any] = as_dict(raw_boss)
     casts: list[dict[str, Any]] = []
@@ -320,6 +341,45 @@ def _sample_for_fight(
         "selected_phase_casts": casts,
         "selected_phase_boss_casts": boss_casts,
     }
+
+
+def _sample_fights(
+    reports: list[Any], *, sample_limit: int, analyzed_fight: tuple[str, int]
+) -> tuple[list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]], bool]:
+    """The first ``sample_limit`` ranked ``(report, fight, player)`` rows, and whether the analyzed fight was skipped.
+
+    ``analyzed_fight`` (report code, fight id) is skipped when it is a top parse, so the player is
+    never compared with themselves. A fight without a player row is no sample.
+    """
+    picked: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+    excluded = False
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        for fight in as_list(report.get("fights")):
+            if len(picked) >= sample_limit:
+                return picked, excluded
+            if not isinstance(fight, dict):
+                continue
+            if (report.get("report_id"), fight.get("fight_id")) == analyzed_fight:
+                excluded = True
+                continue
+            player = next((row for row in as_list(fight.get("players")) if isinstance(row, dict)), None)
+            if player is not None:
+                picked.append((report, fight, player))
+    return picked, excluded
+
+
+def top_parse_fights(ranking_data: dict[str, Any], *, sample_limit: int, analyzed_fight: tuple[str, int]) -> list[tuple[str, int]]:
+    """``(report code, fight id)`` of each top parse ``top_parse_samples`` will sample."""
+    picked, _excluded = _sample_fights(
+        as_list(ranking_data.get("reports")), sample_limit=sample_limit, analyzed_fight=analyzed_fight
+    )
+    return [
+        (str(report.get("report_id")), fight_id)
+        for report, fight, _player in picked
+        if (fight_id := int_or_none(fight.get("fight_id"))) is not None
+    ]
 
 
 def _any_fight_has_phase_markers(reports: list[Any]) -> bool:
@@ -355,14 +415,18 @@ def top_parse_samples(
     spell_ids: set[int],
     player_phase_count: int,
     analyzed_fight: tuple[str, int],
+    warcraftlogs_phases: tuple[dict[str, Any], dict[tuple[str, int], list[dict[str, Any]]]] | None = None,
 ) -> dict[str, Any]:
     """Top-parse samples for the selected phase.
 
     ``status`` is ``no_phase_data`` when samples were read but none has a window for the phase, and
     ``sample_fraction`` counts only the samples that have one (``phase_sample_count``). The encounter
     has several phases when the player's fight or any top-parse fight shows more than one window.
-    ``analyzed_fight`` (report code, fight id) is skipped when it is a top parse, so the player is
-    never compared with themselves; ``excluded_analyzed_fight`` says when that happened.
+    ``excluded_analyzed_fight`` says when the analyzed fight was a top parse and was left out.
+
+    ``warcraftlogs_phases`` is ``(the player's selected window, {(report code, fight id): windows})``
+    when the player's windows came from Warcraft Logs: each sample is then segmented by its own
+    Warcraft Logs phase transitions, as the player's fight was, instead of by Lorrgs markers.
     """
     if ranking_data is None:
         return {
@@ -376,36 +440,29 @@ def top_parse_samples(
     data: dict[str, Any] = as_dict(ranking_data)
     reports = as_list(data.get("reports"))
     encounter_has_phases = player_phase_count > 1 or _any_fight_has_phase_markers(reports)
+    picked, excluded_analyzed_fight = _sample_fights(reports, sample_limit=sample_limit, analyzed_fight=analyzed_fight)
     samples: list[dict[str, Any]] = []
     frequency: Counter[int] = Counter()
     total_casts: Counter[int] = Counter()
-    excluded_analyzed_fight = False
-    for report in reports:
-        if len(samples) >= sample_limit:
-            break
-        if not isinstance(report, dict):
-            continue
-        for fight in as_list(report.get("fights")):
-            if len(samples) >= sample_limit:
-                break
-            if not isinstance(fight, dict):
-                continue
-            if (report.get("report_id"), fight.get("fight_id")) == analyzed_fight:
-                excluded_analyzed_fight = True
-                continue
-            sample = _sample_for_fight(
-                report,
-                fight,
-                phase=phase,
-                spell_catalog=spell_catalog,
-                boss_catalog=boss_catalog,
-                spell_ids=spell_ids,
-                encounter_has_phases=encounter_has_phases,
-            )
-            if sample is None:
-                continue
-            _record_sample_spells(sample["selected_phase_casts"], frequency, total_casts)
-            samples.append(sample)
+    for report, fight, player in picked:
+        if warcraftlogs_phases is None:
+            window, reason = _lorrgs_sample_window(fight, phase=phase, encounter_has_phases=encounter_has_phases)
+        else:
+            selected, windows_by_fight = warcraftlogs_phases
+            key = (str(report.get("report_id")), int_or_none(fight.get("fight_id")) or 0)
+            window, reason = _warcraftlogs_sample_window(windows_by_fight.get(key), selected)
+        sample = _sample_for_fight(
+            report,
+            fight,
+            player,
+            window=window,
+            unavailable_reason=reason,
+            spell_catalog=spell_catalog,
+            boss_catalog=boss_catalog,
+            spell_ids=spell_ids,
+        )
+        _record_sample_spells(sample["selected_phase_casts"], frequency, total_casts)
+        samples.append(sample)
     phase_sample_count = sum(1 for sample in samples if sample["phase_available"])
     return {
         "status": "no_phase_data" if samples and not phase_sample_count else "ready",

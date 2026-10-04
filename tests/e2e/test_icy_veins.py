@@ -548,6 +548,30 @@ def test_guide_full_walks_the_family_and_publishes_build_references(require) -> 
     assert all(codes) and len(set(codes)) == len(codes) >= 2, result.describe()
 
 
+# A spec's PvP talents page publishes no import strings: its builds live in Icy Veins' own talent calculator.
+PVP_TALENTS_QUERY = "mistweaver monk pvp talents and builds"
+
+
+def test_a_pvp_talents_page_publishes_its_builds_through_the_icy_veins_calculator(require) -> None:
+    require(PROVIDER)
+    search = run(BINARY, "search", PVP_TALENTS_QUERY, "--limit", "5")
+    slug = next((str(row["id"]) for row in search.data["results"] if str(row["id"]).endswith("-pvp-talents-and-builds")), None)
+    assert slug is not None, search.describe()
+
+    result = run(BINARY, "guide", slug)
+
+    builds = result.data["build_references"]["items"]
+    assert builds, f"{slug} returned no builds: the talent calculator embed markup moved\n{result.describe()}"
+    assert {row["reference_type"] for row in builds} == {"icy_veins_talent_calc_url"}, result.describe()
+    # Each build is labelled by its tab and names the page's own class and spec.
+    assert all(row["label"] for row in builds), result.describe()
+    identities = {tuple(row["build_identity"]["class_spec_identity"]["identity"].values()) for row in builds}
+    assert identities == {("monk", "mistweaver")}, result.describe()
+    assert all(row["url"].endswith(f"#{row['build_code']}") for row in builds)
+    # Tabs that embed one build share one row.
+    assert len({row["url"] for row in builds}) == len(builds), result.describe()
+
+
 def _first_guide_of_family(query: str, family: str) -> tuple[str, Result]:
     """The first guide of ``family`` search finds that Icy Veins still serves as itself.
 

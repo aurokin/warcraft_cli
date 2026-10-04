@@ -111,6 +111,13 @@ Fallen-King and Nexus-King) comes back with `resolved: false`, `confidence: "low
 `next_command: null`, the first tied row in `match`, and every tied candidate in `candidates` — narrow
 the query or pick a slug. A query with a word left over is `low` the same way.
 
+Free-text scores are the share of the query's words a candidate matched (up to 94, plus 1-2 for an
+exact or short-name match), with no base: one word out of four (`where is Captain Fareeya` matching
+Sikran, Captain of the Sureki) scores 24, so the `warcraft` wrapper does not rescale it to a full
+match. A possessive `'s` is dropped and other apostrophes join their word on both sides (`King's` is
+`king`, `L'ura` is `lura`), so `Mimiron's Head mount` no longer matches Sun King's Salvation and
+`lorrgs resolve "L'ura"` still names the boss.
+
 A difficulty word (`mythic`, `heroic`, `normal`, `lfr`) is not matched against specs or bosses; it is
 carried into the ranking handoff instead: `heroic frost mage chimaerus` resolves to
 `lorrgs spec-ranking mage-frost chimaerus-the-undreamt-god --difficulty heroic`. `comp-ranking` takes no

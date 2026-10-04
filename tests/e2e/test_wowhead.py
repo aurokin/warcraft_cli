@@ -489,13 +489,60 @@ def test_entity_page_links_what_the_page_lists_in_its_relation_tabs(require) -> 
     listed = [row for row in page.data["linked_entities"]["items"] if "listview" in (row.get("sources") or [row.get("source_kind")])]
     listed_types = {row["entity_type"] for row in listed}
     assert {"quest", "npc"} <= listed_types, page.describe()
-    assert all(row["listview"] for row in listed if row.get("source_kind") == "listview"), page.describe()
+    # A tab row that merged into an earlier body or gatherer link keeps its tab id too.
+    assert all(row["listview"] for row in listed), page.describe()
 
     # Isle of Dorn links more entities than entity-page can return, and the entity preview says so.
     dorn = run(BINARY, "entity", "zone", str(ISLE_OF_DORN_ZONE_ID), "--no-include-comments")
     preview = dorn.data["linked_entities"]
     assert preview["count"] > 2000 and preview["fetch_more_truncated"] is True, dorn.describe()
 
+
+def test_the_entity_preview_leads_with_the_npc_that_drops_the_item(require) -> None:
+    """``entity item 50818`` (Invincible's Reins) once previewed Onyxia, a comment link, and nothing marked
+    The Lich King, whom the page's "dropped-by" tab names, as the dropper."""
+    require("wowhead")
+    entity = run(BINARY, "entity", "item", "50818", "--no-include-comments")
+    npc = next(row for row in entity.data["linked_entities"]["items"] if row["type"] == "npc")
+    assert (npc["id"], npc["listview"]) == (36597, "dropped-by"), entity.describe()
+    sample = npc["listview_data"]
+    assert isinstance(sample["count"], int) and sample["outof"] > sample["count"] > 0, entity.describe()
+
+
+def test_a_mount_battle_pet_or_quest_word_still_resolves_to_the_entity(require) -> None:
+    """Wowhead's suggestions carry no mount or battle-pet type: "Mimiron's Head mount" and "Mr. Bigglesworth
+    battle pet" once answered nothing, and "Heritage of the Lightforged quest" resolved low because the type
+    word kept the quest from matching its name exactly."""
+    require("wowhead")
+    for query, sent, expected in (
+        ("Mimiron's Head mount", "mimiron's head", ("item", 45693)),
+        ("Mr. Bigglesworth battle pet", "mr. bigglesworth", ("npc", 16998)),
+        ("Heritage of the Lightforged quest", "heritage of the lightforged", ("quest", 49782)),
+    ):
+        resolved = run(BINARY, "resolve", query, "--limit", "5")
+        match = resolved.data["match"]
+        assert resolved.data["search_query"] == sent, resolved.describe()
+        assert (match["entity_type"], match["id"]) == expected, resolved.describe()
+        assert resolved.data["confidence"] == "high", resolved.describe()
+
+
+def test_entity_page_facts_give_a_quest_chain_its_giver_and_an_npc_location(require) -> None:
+    """Quest 24748 closes the Shadowmourne chain that Highlord Darion Mograine (NPC 37120) starts and ends;
+    the infobox and map data that say so were never read."""
+    require("wowhead")
+    quest = run(BINARY, "entity-page", "quest", "24748").data["facts"]
+    assert quest["start"]["id"] == quest["end"]["id"] == 37120, quest
+    chain = quest["series"][0]
+    assert [step["position"] for step in chain] == list(range(1, len(chain) + 1)), quest
+    assert chain[-1] == {**chain[-1], "id": 24748, "current": True}, quest
+    assert any(line.startswith("Side: ") for line in quest["quick_facts"]), quest
+
+    # The compact summary counts the spawns; entity-page lists their coordinates.
+    npc = run(BINARY, "entity", "npc", "37120", "--no-include-comments").data["facts"]
+    location = npc["locations"][0]
+    assert location["zone"] == "Icecrown Citadel" and location["count"] and "coords" not in location, npc
+    npc_page = run(BINARY, "entity-page", "npc", "37120").data["facts"]
+    assert npc_page["locations"][0]["coords"], npc_page
 
 def test_resolve_rejects_entity_types_the_suggestion_endpoint_cannot_emit(require) -> None:
     """``resolve`` answers with a database entity, so a type no suggestion row carries is a usage error.

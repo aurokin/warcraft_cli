@@ -8,11 +8,11 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
-from warcraft_content.guide_page import WOWHEAD_LINK_RE, extract_talent_export_builds
+from warcraft_content.guide_page import extract_build_references, extract_linked_entities
 from warcraft_content.html_sections import clean_text, extract_headings, extract_sections
 from warcraft_content.site_crawler import PageLink, PageRead
-from warcraft_core.identity import ability_identity_payload, build_reference_payload
-from warcraft_core.wow_specs import WOW_CLASS_NAMES, raiderio_class_slug
+from warcraft_core.identity import build_identity_payload
+from warcraft_core.wow_specs import WOW_CLASS_NAMES, WOW_SPECS, raiderio_class_slug
 
 ICY_VEINS_BASE_URL = "https://www.icy-veins.com"
 GUIDE_PATH_RE = re.compile(r"^/wow/(?P<slug>[^/?#]+)/?$")
@@ -112,6 +112,15 @@ DATA_LAYER_PATTERNS = (
 TALENT_EXPORT_SELECTOR = ".export-string"
 TALENT_EXPORT_CODE_SELECTOR = ".export-string__code"
 TALENT_EXPORT_TITLE_SELECTOR = ".export-string__title"
+# The PvP pages publish no import strings. Each build there is an embed of Icy Veins' own talent
+# calculator: an empty ``<div id="midnight-skill-builder-N">`` that a script fills by passing the div's
+# id and the calculator's URL hash in an ``args`` array. The build's tab button ``#area_K_button``
+# names the ``#area_K`` block the div sits in.
+TALENT_CALCULATOR_ARGS_RE = re.compile(r'\[\s*"(?P<target>[^"]+)"[^"\]]*"#(?P<hash>[A-Za-z0-9+:]+(?:-[A-Za-z0-9+:]*)+)"')
+TALENT_CALCULATOR_URL = f"{ICY_VEINS_BASE_URL}/wow/midnight-talent-calculator"
+# The calculator's hash alphabet: base64 with ``:`` for ``/``. Its first two characters are the spec id,
+# twelve bits read least significant first.
+TALENT_CALCULATOR_HASH_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+:"
 INTRO_SELECTOR = ".guide-intro, .page_content_header_intro"
 ARTICLE_SELECTOR = ".guide-page-content, .page_content_container > .page_content"
 # Page furniture that lives inside the article container but is not article prose. The first line is
@@ -391,93 +400,74 @@ def _clone_article(article: Tag) -> Tag:
     return cloned
 
 
-def _extract_linked_entities(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
-    items: dict[tuple[str, str | int], dict[str, Any]] = {}
-    for anchor in article.find_all("a", href=True):
-        href = anchor.get("href")
-        if not isinstance(href, str):
+def _talent_calculator_label(article: Tag, target: Tag) -> str | None:
+    """The build's tab name: the ``#area_K_button`` of its ``#area_K`` block, else the tab at the block's position.
+
+    A page can repeat a button id (two ``area_2_button`` tabs over ``#area_2`` and ``#area_3``).
+    """
+    area = target.find_parent(class_="image_block_content")
+    if not isinstance(area, Tag):
+        return None
+    button = article.find(id=f"{_attribute(area, 'id')}_button")
+    if not isinstance(button, Tag) and isinstance(block := area.parent, Tag):
+        tabs = block.select(".image_block_header_buttons > span")
+        position = block.find_all(class_="image_block_content", recursive=False).index(area)
+        button = tabs[position] if position < len(tabs) else None
+    return clean_text(button.get_text(" ", strip=True)) if isinstance(button, Tag) else None
+
+
+def _talent_calculator_identity(code: str) -> dict[str, object]:
+    """The build identity of a talent calculator hash: its spec id names the class and spec."""
+    spec_id = sum(TALENT_CALCULATOR_HASH_ALPHABET.index(char) << 6 * index for index, char in enumerate(code[:2]))
+    spec = next((spec for spec in WOW_SPECS if spec.spec_id == spec_id), None)
+    return build_identity_payload(
+        actor_class=spec.class_key if spec else None,
+        spec=spec.key if spec else None,
+        confidence="high" if spec else "none",
+        source="icy_veins_talent_calc_hash",
+        source_notes=(
+            "class/spec came from the spec id the Icy Veins talent calculator hash starts with",
+            "the hash is Icy Veins' own build encoding, not a WoW import string; simc cannot decode it",
+        ),
+    )
+
+
+def _talent_calculator_builds(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
+    """One build reference per distinct embedded Icy Veins talent calculator build, in page order.
+
+    The hash is Icy Veins' own encoding of the build (PvP talents included), not a WoW import string,
+    so only its spec id is read.
+    """
+    rows: dict[str, dict[str, Any]] = {}
+    for script in article.find_all("script"):
+        if "TalentCalculator(" not in (text := script.string or ""):
             continue
-        url = urljoin(source_url, href)
-        parsed = urlparse(url)
-        name = clean_text(anchor.get_text(" ", strip=True))
-        if "wowhead.com" in parsed.netloc:
-            path = parsed.path.lstrip("/")
-            match = WOWHEAD_LINK_RE.match(path)
-            if match is None:
+        for match in TALENT_CALCULATOR_ARGS_RE.finditer(text):
+            # A build the page has commented out keeps its script but loses its div.
+            if not isinstance(target := article.find(id=match["target"]), Tag):
                 continue
-            entity_type = match.group("entity_type")
-            entity_id: str | int = int(match.group("id"))
-            key = (entity_type, entity_id)
-        elif parsed.netloc.endswith("icy-veins.com") and (slug := guide_slug_from_url(url)) is not None:
-            entity_type = "page"
-            entity_id = slug
-            key = (entity_type, entity_id)
-        else:
-            continue
-        record = items.get(key)
-        if record is None:
-            row: dict[str, Any] = {
-                "type": entity_type,
-                "id": entity_id,
-                "name": name,
+            label = _talent_calculator_label(article, target)
+            url = f"{TALENT_CALCULATOR_URL}#{match['hash']}"
+            # Two tabs can embed the same build: one row, named by every tab.
+            if (row := rows.get(url)) is not None:
+                row["label"] = " / ".join(filter(None, (row["label"], label))) or None
+                continue
+            rows[url] = {
+                "kind": "build_reference",
+                "reference_type": "icy_veins_talent_calc_url",
                 "url": url,
+                "label": label,
+                "build_code": match["hash"],
                 "source_url": source_url,
+                "build_identity": _talent_calculator_identity(match["hash"]),
+                "source": {"provider": "icy-veins", "source": "guide_talent_calculator_embed"},
             }
-            # Spell links carry a Wowhead spell id, so they get a canonical ability identity.
-            # Other entity types (item/npc/page/...) are left unchanged.
-            if entity_type == "spell" and isinstance(entity_id, int):
-                row["ability_identity"] = ability_identity_payload(
-                    spell_id=entity_id,
-                    name=name or None,
-                    provider="icy-veins",
-                    source="guide_linked_entity",
-                )
-            items[key] = row
-            continue
-        if not record.get("name") and name:
-            record["name"] = name
-            if entity_type == "spell" and isinstance(entity_id, int) and isinstance(record.get("ability_identity"), dict):
-                record["ability_identity"] = ability_identity_payload(
-                    spell_id=entity_id,
-                    name=name or None,
-                    provider="icy-veins",
-                    source="guide_linked_entity",
-                )
-    return sorted(items.values(), key=lambda row: (row["type"], str(row["id"])))
+    return list(rows.values())
 
 
 def _talent_export_code(block: Tag) -> str | None:
     code_tag = block.select_one(TALENT_EXPORT_CODE_SELECTOR)
     return code_tag.get_text(strip=True) if isinstance(code_tag, Tag) else None
-
-
-def _extract_build_references(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
-    items: dict[str, dict[str, Any]] = {}
-    for anchor in article.find_all("a", href=True):
-        href = anchor.get("href")
-        if not isinstance(href, str):
-            continue
-        payload = build_reference_payload(
-            ref=urljoin(source_url, href),
-            provider="icy-veins",
-            source="guide_embedded_link",
-            source_url=source_url,
-            label=clean_text(anchor.get_text(" ", strip=True)),
-            notes=["embedded Icy Veins guide link"],
-        )
-        if payload is None:
-            continue
-        items[str(payload["url"])] = payload
-    for row in extract_talent_export_builds(
-        article,
-        source_url=source_url,
-        provider="icy-veins",
-        block_selector=TALENT_EXPORT_SELECTOR,
-        title_selector=TALENT_EXPORT_TITLE_SELECTOR,
-        read_code=_talent_export_code,
-    ):
-        items.setdefault(str(row["url"]), row)
-    return sorted(items.values(), key=lambda row: str(row["url"]))
 
 
 @dataclass(frozen=True, slots=True)
@@ -542,6 +532,7 @@ def _article_payload(
     *,
     canonical_url: str,
     section_title: str,
+    content_family: str | None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """Return the article block plus the linked entities and build references found inside it."""
     intro_text = _extract_intro_text(soup)
@@ -557,11 +548,19 @@ def _article_payload(
         "headings": extract_headings(article),
         "sections": extract_sections(article, fallback_title=section_title),
     }
-    return (
-        payload,
-        _extract_linked_entities(article, source_url=canonical_url),
-        _extract_build_references(article, source_url=canonical_url),
+    linked_entities = extract_linked_entities(article, source_url=canonical_url, provider="icy-veins", site_page=_site_link_slug)
+    build_references = extract_build_references(
+        article,
+        source_url=canonical_url,
+        provider="icy-veins",
+        site_label="Icy Veins",
+        block_selector=TALENT_EXPORT_SELECTOR,
+        title_selector=TALENT_EXPORT_TITLE_SELECTOR,
+        read_code=_talent_export_code,
     )
+    if content_family == "pvp":
+        build_references += _talent_calculator_builds(article_tag, source_url=canonical_url)
+    return payload, sorted(linked_entities, key=lambda row: (row["type"], str(row["id"]))), build_references
 
 
 def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
@@ -579,6 +578,7 @@ def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
         soup,
         canonical_url=canonical_url,
         section_title=section_title,
+        content_family=content_family,
     )
     page_type = data_layer.get("page_type")
     return {

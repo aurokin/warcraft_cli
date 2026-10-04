@@ -11,7 +11,11 @@ parses their JSON reports. It never talks to a web API.
   `modify-build`, `validate-talent-transport`, and the comparison commands
 - `rg` (ripgrep) on `PATH` for `spec-files`, `find-action`, and `trace-action`. Without it those three
   commands fail with `missing_dependency` and `simc doctor` marks them `unavailable`.
-- `git` and `cmake` for `sync`, `checkout`, and `build`
+- `git` and `cmake` for `sync`, `checkout`, and `build`. `simc build` builds only the `simc` target
+  (`--target` picks another) with one job per CPU. The first configure of a checkout asks for
+  `-DCMAKE_BUILD_TYPE=Release -DBUILD_GUI=OFF`: SimC's CMake otherwise leaves the build unoptimized and
+  builds the Qt GUI, which fails to configure without Qt. Once `build/CMakeCache.txt` exists it is left
+  alone, so a build type or GUI choice made by hand survives.
 
 `simc doctor` reports which of these are present.
 
@@ -71,7 +75,8 @@ These codes are worth knowing:
 - `not_found` (exit 4) — `spec-files`, `find-action`, and `trace-action` were pointed at a directory that
   is not a SimulationCraft checkout. They report this instead of returning zero hits as a success. An
   APL command also answers `not_found` for an APL file that is not there, and for a `--list` the file
-  has no action list of (`error.details.available_lists` names the ones it has). `sim` and `run`
+  has no action list of (`error.details.available_lists` names the ones it has). `validate-apl` and
+  `compare-apls` answer `not_found` for a missing harness or APL before writing anything. `sim` and `run`
   answer `not_found` for a profile path that is not a file (a directory included).
 - `invalid_query` (exit 2) — `sim` or `run` was given a profile SimC found nothing to sim in (an empty
   file, or text with no actor: SimC prints `Nothing to sim!`, which `error.details.stdout_preview`
@@ -154,11 +159,18 @@ exit code there.
   `inactive_talent_branch_total`. In `inactive-actions`, in each `spec-files` category and in each
   `find-action` / `trace-action` bucket, `count` is the total before the cut, beside `truncated`
   (and the shown `items` for the latter three), so read the list's length for the rows returned.
+- `spec-files QUERY` keeps the files whose name holds every word of the query, ignoring `_`, `-` and
+  spaces, so `frost mage`, `mage_frost` and `death-knight` all find the APLs and `mage.cpp` finds
+  `sc_mage.cpp`. Class-module sources and
+  spell dumps that no file name matches fall back to a search of their contents.
 - Every command's `build` block (`left`/`right` for `apl-branch-compare`) lists `enabled_talents` by
   token with `enabled_talent_count` beside it.
 - `analysis-packet --first-cast-action` needs `--sim-profile` or `--profile-path` to sim; without one it
   fails with `invalid_query`. `first-cast` leaves its per-seed logs in a temp directory (each result's
-  `log_path`) and removes the directory when a run fails. `validate-apl` without `--out-dir` writes its
+  `log_path`) and removes the directory when a run fails. It times only the profile's first actor (the
+  player `sim` reports), so a pet casting an action of the same name is not counted. `log-actions` names
+  the `actor` behind each hit's `performed_at`, which may be a pet (`<player>_<pet>`); `--actor NAME`
+  counts only that actor's lines. `validate-apl` without `--out-dir` writes its
   merged profile to a temp directory (`profile_path`) and leaves it there for you to read or delete.
 
 ## Build input flags
@@ -181,6 +193,9 @@ Analysis commands additionally take `--enable NAME` and `--disable NAME` (repeat
 to force talents on or off on top of the resolved build.
 
 Passing a build-input option with an empty value is a usage error, not the same as omitting it.
+
+A `--profile-path` or `--build-file` with several actors (a second class line or a `copy=` actor) is
+read for its first actor only, the player `simc sim` reports; `source_notes` names the actors it ignored.
 
 The class and spec an APL file name suggests (`mage_arcane.simc`) only fill what the caller left out.
 With a talent hash they are a guess the hash is decoded against once: when it does not decode as that
@@ -205,12 +220,12 @@ Raw-only transport packets are not accepted as direct build input: upgrade them 
 
 | Reference type | Example | Decodes |
 |----------------|---------|---------|
-| `wow_talent_export` | `C4QAAAAAA...` | Yes, once the class and spec are known. Both Method and Icy Veins publish only this type, and the string names no class or spec, so either pass `--actor-class`/`--spec` or let identification probe every spec SimC knows. |
+| `wow_talent_export` | `C4QAAAAAA...` | Yes, once the class and spec are known. Method and Icy Veins PvE pages publish this type, and the string names no class or spec, so either pass `--actor-class`/`--spec` or let identification probe every spec SimC knows. |
 | `wowhead_talent_calc_url` | `https://www.wowhead.com/talent-calc/monk/mistweaver/<code>` | Yes, unaided: the path names the class and spec, which the hash is decoded against once. A path the hash contradicts is ignored and the probe identifies the build. Retail PTR and Beta calculators (`/ptr/`, `/beta/`) count as this type. |
 | Wowhead `/talent-calc/blizzard/<code>` | what `modify-build` publishes as `result.wowhead_url` | Yes, as a `wow_talent_export`: the URL carries the hash but no class or spec. |
 | `wowhead_talent_calc_url` with no build code | `https://www.wowhead.com/talent-calc/monk/mistweaver` | No — `unsupported_build_reference`. |
 | Classic-era Wowhead calculator (`/classic/`, `/cata/`, `/mop-classic/`, ...) | `https://www.wowhead.com/mop-classic/talent-calc/mage/frost/<code>` | No — `unsupported_build_reference` with `reference_type: "wowhead_talent_calc_url_non_retail"`: SimulationCraft decodes retail builds only. |
-| Any other link (guide page, article, addon export site) | `https://www.icy-veins.com/wow/...` | No — `unsupported_build_reference` with `reference_type: "url"`. |
+| Any other link (guide page, article, addon export site, the Icy Veins talent calculator URLs `icy-veins guide` reports for PvP pages) | `https://www.icy-veins.com/wow/...` | No — `unsupported_build_reference` with `reference_type: "url"`. |
 
 ## Decoded builds
 
@@ -225,6 +240,14 @@ Raw-only transport packets are not accepted as direct build input: upgrade them 
   always `0`, so the CLI runs the build a second time with those entries set to rank `0` and reads the
   ranks back out of SimC's own overwrite log. Without those ranks the node cannot be re-serialized, and
   every `modify-build` tree swap dropped it.
+- A `class_talents`/`spec_talents`/`hero_talents` entry combined with a talent hash overwrites the rank the
+  hash gave that talent, as SimC does: the row carries the overwritten rank, and a talent set to `0` is
+  dropped. A rank above a talent's maximum is clamped to the maximum, which is what SimC sims.
+- With no hero tree selected at all (SimC's own default loadouts, a calculator build with no hero pick),
+  SimC disables every hero talent the hash granted, so all of them are in `inactive_hero_talents`.
+- A talent hash that decodes as no spec but whose header names one SimC knows fails `invalid_build` with
+  SimC's own reason (`Node 81483 is not a choice node but has index selection`): the export predates the
+  current talent tree, so passing `--actor-class` and `--spec` would not help. Export it again in game.
 - Talent rows still carry `rank_known`. It is `false`, with `rank: null`, only when the read-back found
   nothing — for example when the checkout's trait data predates the node. Such a row still counts as
   enabled, and re-serializing it (a tree swap) will fail with `encode_mismatch` rather than lose it.
@@ -247,7 +270,8 @@ the spec must be offered its hero tree by that tree's selection node, whatever s
 itself is tagged with (Augmentation's Chronowarden talents are tagged only for Preservation, yet
 Augmentation can take them; Arcane cannot take Frostfire's). An `--add` value that
 is not `name:rank` or `entry_id:rank` fails with `invalid_argument` (exit 2), and so does a
-`modify-build` with no `--swap-*-tree-from`, `--add` or `--remove`.
+`modify-build` with no `--swap-*-tree-from`, `--add` or `--remove`. A `--swap-*-tree-from` source must
+be a build of the base's own spec; another spec's build fails with `invalid_query` naming its spec.
 
 Healer builds encode like any other. SimC refuses to simulate some healers (Mistweaver and Holy Paladin
 always), so the encoder runs SimC in debug mode, which saves the profile without needing a simulated
@@ -335,7 +359,7 @@ decoded build differs.
 | `run` | PROFILE_PATH | Run a profile through the local SimC binary with raw SimC arguments. |
 | `search` | QUERY | Return the structured coming-soon stub for free-text search. |
 | `sim` | [PROFILE_PATH] | Run a profile through the local SimC binary and summarize the JSON report. |
-| `spec-files` | [QUERY] | List APL and class-module files in the checkout, optionally narrowed by a substring. |
+| `spec-files` | [QUERY] | List APL and class-module files in the checkout, optionally narrowed by the words of a query. |
 | `sync` | - | Pull the latest SimulationCraft sources into the local checkout. |
 | `trace-action` | APL_PATH ACTION | Trace one action through an APL file and the surrounding source. |
 | `validate-apl` | HARNESS_PATH APL_PATH | Append an APL to a harness profile and check that SimC parses the result. |
@@ -368,23 +392,30 @@ Flags, defaults, and value ranges are in [reference/simc.md](../reference/simc.m
 `simc sim` is the preferred consumer run path. It uses fixed presets instead of leaving iteration
 counts implicit, and always returns run settings, runtime timing, and core metrics:
 
-- `--preset quick` (default): 1000 iterations
-- `--preset high-accuracy`: 5000 iterations
+- `--preset quick` (default): 1000 iterations, `target_error=0`, `max_time=300`
+- `--preset high-accuracy`: 5000 iterations, `target_error=0`, `max_time=300`
 
-Individual settings (`--iterations`, `--max-time`, `--threads`, `--targets`, `--fight-style`,
-`--vary-combat-length`) override the preset. `metrics.dps_error` is SimC's DPS error, the half-width of
+The preset fills only what the profile leaves unset: a profile with its own `iterations` or
+`target_error` (a Raidbots input sets both) runs with them, and one with its own `max_time` keeps it,
+and `disclosures` says which profile settings were kept. Settings are read per whitespace-separated
+option as SimC reads them, so `iterations=50 max_time=60` on one line sets both. A flag always wins: `--iterations` sets the
+count with `target_error=0`, `--max-time` the fight length, and `disclosures` names each profile
+setting a flag replaced (`iterations=500 -> 50`). The other settings (`--threads`, `--targets`,
+`--fight-style`, `--vary-combat-length`) apply only when given. `metrics.dps_error` is SimC's DPS error, the half-width of
 the confidence interval around mean DPS (`dps.mean_std_dev * confidence_estimator` in the json2 report),
 and `run_settings.target_error_percent` is that error as a percentage of mean DPS. Default to `quick`
 for consumer work and only reach for `high-accuracy` when the user asks for it. Do not hard-code thread
 counts in guidance; inspect the machine first.
 
-`run_settings.iterations_requested` is the count the CLI asked SimC for. `iterations_completed` is the
+`run_settings.iterations_requested` is the count the CLI asked SimC for, or the profile's own `iterations`
+when it was kept. `iterations_completed` is the
 number of sampled iterations, which for a fixed iteration count is one less than requested: SimC
 discards each run's first iteration, whatever the thread count. A profile with several actors reports the first
 in `player`/`metrics`, the rest in `other_actors` (each with `player` and `metrics`), and the total in
 `actor_count`. A profile that defines profilesets (a Top Gear or Droptimizer input) reports their
-ranked rows in `profilesets` (`metric`, `result_count`, `results` best mean first); otherwise
-`profilesets` is null. A profile that sets `calculate_scale_factors=1` (optionally with
+ranked rows in `profilesets` (`metric`, `result_count`, `results` best mean first); each row carries
+SimC's `mean_error` (the confidence-interval half-width around its `mean`, so two rows closer than that
+are a tie), `mean_stddev` and `iterations`. Otherwise `profilesets` is null. A profile that sets `calculate_scale_factors=1` (optionally with
 `scale_only=intellect,crit_rating,haste_rating,mastery_rating,versatility_rating`) reports SimC's stat
 weights for the first actor in `scale_factors`: `factors` is DPS per point of each stat and `deltas` the
 stat amount each was measured with. A stat left out of `scale_only` reads 0 there, which means not
@@ -403,6 +434,11 @@ item level default gear, so its absolute DPS is far below a geared character's; 
 same profile are meaningful. To sim a guide build on current-tier gear, copy the checkout's
 `profiles/<tier>/<Tier>_<Class>_<Spec>.simc` (for example `profiles/MID2/MID2_Mage_Frost.simc`), replace
 its `talents=` line with the build, and `simc sim` that file.
+
+`validate-apl` and each `compare-apls` validation list SimC's `Warning:` lines in `warnings`. SimC
+exits 0 after ignoring an unknown option such as a mistyped condition (`frostbolt,iff=1` runs Frostbolt
+unconditionally), so a warning makes `valid` false, and `compare-apls` stops on it as on a failed
+validation. No stock APL produces one.
 
 `simc run` passes raw SimC arguments through. Its `result_lines` holds the `Player:`, `Target:` and
 `Add:` headers of SimC's text report, each followed by that actor's `DPS=`/`HPS=`/`DTPS=`/`TMI=` lines,
@@ -425,10 +461,11 @@ simc verify-clean --hash-binary
 `dps` and `fight_length` are means over every iteration, and `dps_error` is SimC's confidence-interval
 half-width around that mean. Each label (`--base-label` and every `--variant` label) names the
 `<label>.simc` and `<label>.json` files written for it, so labels must be unique plain file names;
-anything else fails with `invalid_query`. `action_counts`, `action_cpm`,
-and `top_action_deltas` are not: SimulationCraft records an action sequence for a single iteration, so
-those describe one fight however many were simulated. The payload says so in `sampling` and repeats
-`action_sequence_iterations: 1` on each summary and comparison. Treat a small CPM delta as noise.
+anything else fails with `invalid_query`. `action_counts` are SimC's mean executes per iteration of each
+of the player's actions over every iteration (`players[0].stats[].num_executes.mean`, the numbers in
+SimC's own ability table, so procs and triggered spells are included and pets are not), and
+`action_cpm` divides them by the mean `fight_length`; `top_action_deltas` compares those CPMs.
+`sampling.note` says the same.
 
 ## Tests that need the binary
 

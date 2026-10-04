@@ -441,6 +441,24 @@ def test_guide_and_guide_full_share_linked_entity_count(monkeypatch) -> None:
 
 
 
+def test_guide_export_without_out_writes_under_wowhead_exports_named_by_id_and_title(monkeypatch) -> None:
+    """The default directory is named from the guide payload, which guide-export built twice to name it."""
+    fetches: list[int] = []
+
+    def fake_guide_page_html(self, guide_id: int):
+        fetches.append(guide_id)
+        return SAMPLE_GUIDE_HTML
+
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_page_html", fake_guide_page_html)
+    result = runner.invoke(app, ["guide-export", "3143"])
+
+    assert result.exit_code == 0, result.output
+    output_dir = Path(json.loads(result.stdout)["data"]["output_dir"])
+    assert output_dir.parent == Path.cwd() / "wowhead_exports"
+    assert output_dir.name == "guide-3143-frost-death-knight-dps-guide-midnight"
+    assert (output_dir / "manifest.json").is_file()
+    assert fetches == [3143]
+
 def test_guide_export_writes_local_assets(monkeypatch, tmp_path) -> None:
     def fake_guide_page_html(self, guide_id: int):
         assert guide_id == 3143

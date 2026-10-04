@@ -140,6 +140,17 @@ def test_search_puts_the_article_a_qualified_query_names_first(require, query: s
     assert result.data["results"][0]["id"] == expected_title, result.describe()
 
 
+def test_a_profession_question_lifts_no_class_page_over_the_rest(require) -> None:
+    # "profession" used to boost every system family, so Druid led this query on a snippet word.
+    require(PROVIDER)
+    result = run(BINARY, "search", "best profession for gold", "--limit", "10")
+
+    boosted = [row["id"] for row in result.data["results"] if "intent_systems" in row["ranking"]["match_reasons"]]
+    families = {row["id"]: row["metadata"]["content_family"] for row in result.data["results"]}
+    assert all(families[title] == "profession_reference" for title in boosted), result.describe()
+    assert families[result.data["results"][0]["id"]] != "class_reference", result.describe()
+
+
 @pytest.mark.parametrize(("hint", "name", "expected_title", "search_family", "article_family"), RESOLVE_FAMILY_CASES)
 def test_resolve_strips_the_family_hint_and_its_article_command_returns_that_page(
     require, hint: str, name: str, expected_title: str, search_family: str, article_family: str

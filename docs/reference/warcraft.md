@@ -66,7 +66,7 @@ Fan out a query to every resolve-ready provider and return the single best match
 
 ## warcraft guild
 
-Return one guild identity's Raider.IO snapshot: identity, every raid's progression and ranks, roster preview, citations. Raider.IO orders its progression and rankings rows by raid slug and reports no raid start/end window, so the snapshot names no "active" raid; cross-reference `warcraft raiderio raids` for the tier that is currently running.
+Return one guild identity's Raider.IO snapshot: identity, every raid's progression and ranks, roster preview, citations. The raiderio CLI sorts progression and rankings rows by raid slug; Raider.IO's payload carries no raid start/end window, so the snapshot names no "active" raid; cross-reference `warcraft raiderio raids` for the tier that is currently running.
 
 **Arguments**
 

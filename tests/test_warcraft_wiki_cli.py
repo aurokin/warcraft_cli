@@ -457,6 +457,20 @@ def test_warcraft_wiki_score_wiki_match_handles_expansion_alias() -> None:
     assert "intent_systems" in reasons
 
 
+def test_a_profession_query_boosts_profession_pages_not_class_pages() -> None:
+    # "profession" used to lift every system family, so Druid led "best profession for gold" on a snippet hit.
+    _score, class_reasons, class_family = score_wiki_match(
+        "best profession for gold", "best profession for gold", "Druid", "Druids can gather herbs for gold.", ordinal=20
+    )
+    _score, profession_reasons, profession_family = score_wiki_match(
+        "best profession for gold", "best profession for gold", "Alchemy", "A profession that sells for gold.", ordinal=20
+    )
+
+    assert (class_family, profession_family) == ("class_reference", "profession_reference")
+    assert "intent_systems" not in class_reasons
+    assert "intent_systems" in profession_reasons
+
+
 def test_typed_search_queries_add_surface_prefixes() -> None:
     assert _typed_search_queries("CreateFrame", surface="api") == ["CreateFrame", "API CreateFrame"]
     assert _typed_search_queries("OnKeyDown", surface="event") == ["OnKeyDown", "UIHANDLER OnKeyDown"]

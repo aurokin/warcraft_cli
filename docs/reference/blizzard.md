@@ -2,7 +2,7 @@
 
 # blizzard
 
-Official Blizzard Battle.net World of Warcraft API CLI. Experimental tier: the read surface is small (realm, item, character) and search/resolve are stubs. Host, OAuth token URL, and namespace strings are confirmed against live Blizzard endpoints for us/eu/kr/tw (retail and classic Game Data, retail Profile), whose payloads report provenance.verified=true. CN routing (gateway.battlenet.com.cn + oauth.battlenet.com.cn) follows documented Blizzard API conventions and is unconfirmed; those hosts are unreachable from outside China, so CN payloads report provenance.verified=false.
+Official Blizzard Battle.net World of Warcraft API CLI. Experimental tier: the read surface is small (realm, item, character) and search/resolve are stubs. Host, OAuth token URL, and namespace strings are confirmed against live Blizzard endpoints for us/eu/kr/tw (Game Data and Profile, every game version), whose payloads report provenance.verified=true. CN routing (gateway.battlenet.com.cn + oauth.battlenet.com.cn) follows documented Blizzard API conventions and is unconfirmed; those hosts are unreachable from outside China, so CN payloads report provenance.verified=false.
 
 ## Global options
 
@@ -36,8 +36,8 @@ Fetch a connected-realm-class realm record from the dynamic Game Data namespace.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--region / -r` | str |  | Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us. |
-| `--classic` | boolean | false | Shorthand for --game-version classic. Classic Game Data routing is live-confirmed; the Profile API has no classic namespace. |
-| `--game-version` | str |  | Game version to route: retail (default) or classic. |
+| `--classic` | boolean | false | Shorthand for --game-version classic: progression Classic (Mists of Pandaria Classic today), not Era or Anniversary. |
+| `--game-version` | str |  | Game version to route: retail (default), classic (progression Classic), classic-era, or classic-anniversary. |
 | `--locale` | str |  | Locale passed through to Blizzard (default en_US). Not validated. |
 
 ## blizzard item
@@ -55,13 +55,13 @@ Fetch an item record from the static Game Data namespace.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--region / -r` | str |  | Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us. |
-| `--classic` | boolean | false | Shorthand for --game-version classic. Classic Game Data routing is live-confirmed; the Profile API has no classic namespace. |
-| `--game-version` | str |  | Game version to route: retail (default) or classic. |
+| `--classic` | boolean | false | Shorthand for --game-version classic: progression Classic (Mists of Pandaria Classic today), not Era or Anniversary. |
+| `--game-version` | str |  | Game version to route: retail (default), classic (progression Classic), classic-era, or classic-anniversary. |
 | `--locale` | str |  | Locale passed through to Blizzard (default en_US). Not validated. |
 
 ## blizzard character
 
-Fetch a character profile from the profile namespace (retail only): REALM NAME --region R, or REGION REALM NAME.
+Fetch a character profile from the profile namespace: REALM NAME --region R, or REGION REALM NAME. ``--section`` reads one linked sub-resource instead (PvP ratings, professions, collections), which the summary only names as hrefs that need the OAuth token to follow.
 
 **Arguments**
 
@@ -76,9 +76,10 @@ Fetch a character profile from the profile namespace (retail only): REALM NAME -
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--region / -r` | str |  | Blizzard region (us, eu, kr, tw, cn). Defaults to BLIZZARD_REGION or us. |
-| `--classic` | boolean | false | Shorthand for --game-version classic. Classic Game Data routing is live-confirmed; the Profile API has no classic namespace. |
-| `--game-version` | str |  | Game version to route: retail (default) or classic. |
+| `--classic` | boolean | false | Shorthand for --game-version classic: progression Classic (Mists of Pandaria Classic today), not Era or Anniversary. |
+| `--game-version` | str |  | Game version to route: retail (default), classic (progression Classic), classic-era, or classic-anniversary. |
 | `--locale` | str |  | Locale passed through to Blizzard (default en_US). Not validated. |
+| `--section` | str |  | Read one sub-resource instead of the profile summary: pvp-summary, pvp-bracket/<bracket>, professions, collections/mounts, collections/pets, collections/toys. |
 
 ## blizzard search
 

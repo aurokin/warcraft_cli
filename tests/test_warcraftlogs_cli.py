@@ -383,7 +383,7 @@ class _FakeWarcraftLogsClient:
                         "canonicalID": 88,
                         "name": "Roguecane",
                         "level": 80,
-                        "classID": 4,
+                        "classID": 8,
                         "hidden": False,
                         "guildRank": 3,
                         "faction": {"id": 1, "name": "Horde"},
@@ -469,7 +469,7 @@ class _FakeWarcraftLogsClient:
             "canonicalID": 88,
             "name": "Roguecane",
             "level": 80,
-            "classID": 4,
+            "classID": 8,
             "hidden": False,
             "faction": {"id": 1, "name": "Horde"},
             "guildRank": 3,
@@ -526,7 +526,7 @@ class _FakeWarcraftLogsClient:
             "canonicalID": 88,
             "name": "Roguecane",
             "level": 80,
-            "classID": 4,
+            "classID": 8,
             "faction": {"id": 1, "name": "Horde"},
             "server": {
                 "id": 10,
@@ -1388,6 +1388,38 @@ def test_warcraftlogs_doctor_can_skip_live_probes(monkeypatch) -> None:
     assert payload["data"]["capabilities"]["user_auth"] == "ready_manual_exchange"
 
 
+def test_warcraftlogs_doctor_is_degraded_when_the_cache_config_is_invalid(monkeypatch) -> None:
+    # Every cached read fails with invalid_cache_config under this setting, so doctor must not say ready.
+    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr(
+        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
+    )
+    monkeypatch.setattr(
+        "warcraftlogs_cli.main.provider_auth_status",
+        lambda provider: {
+            "path": "/tmp/state/warcraftlogs.json",
+            "exists": False,
+            "readable": False,
+            "valid_json": False,
+            "auth_mode": None,
+            "has_access_token": False,
+            "expires_at": None,
+            "expired": None,
+        },
+    )
+    monkeypatch.setenv("WARCRAFTLOGS_CACHE_BACKEND", "bogus")
+
+    result = runner.invoke(warcraftlogs_app, ["doctor", "--no-live"])
+    assert result.exit_code == 0
+
+    data = json.loads(result.stdout)["data"]
+    assert data["auth"]["public_api_access"]["ready"] is True
+    assert data["cache"]["error"]["code"] == "invalid_cache_config"
+    assert data["cache"]["available"] is False
+    assert data["status"] == "degraded"
+
+
 def test_warcraftlogs_doctor_live_probe_uses_uncached_public_helper(monkeypatch) -> None:
     monkeypatch.setattr(
         "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
@@ -1639,8 +1671,19 @@ def test_warcraftlogs_report_commands_take_a_report_url(monkeypatch, command: st
     assert result.exit_code == 0, result.output
 
 
-@pytest.mark.parametrize(("extra", "expected"), [([], [2]), (["--fight-id", "3"], [3])])
-def test_warcraftlogs_report_events_scopes_to_the_fight_a_report_url_names(monkeypatch, extra: list[str], expected: list[int]) -> None:
+@pytest.mark.parametrize(
+    ("reference", "extra", "expected"),
+    [
+        ("https://www.warcraftlogs.com/reports/abcd1234#fight=2", [], [2]),
+        ("https://www.warcraftlogs.com/reports/abcd1234#fight=2", ["--fight-id", "3"], [3]),
+        # A bare code takes the same fragment the help text promises.
+        ("abcd1234#fight=2", [], [2]),
+        ("abcd1234?fight=2", [], [2]),
+    ],
+)
+def test_warcraftlogs_report_events_scopes_to_the_fight_a_report_url_names(
+    monkeypatch, reference: str, extra: list[str], expected: list[int]
+) -> None:
     # `report-events '<url>#fight=2'` used to drop the fight and fail missing_scope; an explicit --fight-id still wins.
     sent: list[list[int] | None] = []
 
@@ -1652,7 +1695,7 @@ def test_warcraftlogs_report_events_scopes_to_the_fight_a_report_url_names(monke
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _EventsClient())
     runner.invoke(
         warcraftlogs_app,
-        ["report-events", "https://www.warcraftlogs.com/reports/abcd1234#fight=2", "--data-type", "casts", *extra],
+        ["report-events", reference, "--data-type", "casts", *extra],
     )
 
     assert sent == [expected]
@@ -2356,6 +2399,8 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     guild_members_payload = json.loads(guild_members_result.stdout)
     assert guild_members_payload["data"]["guild_members"]["pagination"]["total"] == 1
     assert guild_members_payload["data"]["guild_members"]["members"][0]["name"] == "Roguecane"
+    # Warcraft Logs class 8 is Rogue (Blizzard's 8 is Mage).
+    assert guild_members_payload["data"]["guild_members"]["members"][0]["class_name"] == "Rogue"
     assert guild_members_payload["data"]["notes"] == ["Guild roster queries only work for games where Warcraft Logs can verify guild membership."]
 
     guild_attendance_result = runner.invoke(
@@ -2426,9 +2471,9 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     assert isinstance(trust["freshness"]["sampled_at"], str)
     source_identity = trust["source_character_identity"]
     assert source_identity["kind"] == "class_spec_identity"
-    # Single all-stars spec ("Assassination") -> normalized; class name is unavailable from WCL here.
+    # Single all-stars spec ("Assassination") plus the class Warcraft Logs' classID names.
     assert source_identity["status"] == "normalized"
-    assert source_identity["identity"]["actor_class"] is None
+    assert source_identity["identity"]["actor_class"] == "rogue"
     assert source_identity["identity"]["spec"] == "assassination"
 
     report_result = runner.invoke(warcraftlogs_app, ["report", "abcd1234", "--allow-unlisted"])
@@ -2498,6 +2543,8 @@ def test_warcraftlogs_guild_character_and_report_commands(monkeypatch) -> None:
     events_payload = json.loads(events_result.stdout)
     assert events_payload["data"]["next_page_timestamp"] == 999.0
     assert events_payload["data"]["events"][0]["type"] == "cast"
+    # A cut-off page says how to fetch the rest, ending at the selected fights' end.
+    assert "--start-time 999 --end-time 700000" in events_payload["data"]["notes"][0]
 
     table_result = runner.invoke(
         warcraftlogs_app,
@@ -3002,6 +3049,24 @@ def test_warcraftlogs_sampled_report_walk_follows_has_more_pages_and_stops_at_th
     assert pages_requested == [1, 2]
 
 
+def test_warcraftlogs_sampled_report_walk_counts_a_report_listed_on_two_pages_once() -> None:
+    """Live reports move up the listing between page fetches, so page 2 can repeat a page-1 code."""
+    from warcraftlogs_cli.boss_kills import _fetch_zone_report_rows
+
+    class _ShiftingClient:
+        def reports(self, *, page: int, **kwargs: Any) -> dict[str, Any]:
+            codes = {1: ["aaaa", "bbbb"], 2: ["bbbb", "cccc"]}[page]
+            return {"data": [{"code": code, "page": page} for code in codes], "has_more_pages": page < 2}
+
+    rows = _fetch_zone_report_rows(
+        _ShiftingClient(),
+        zone_id=38, guild_region=None, guild_realm=None, guild_name=None,
+        report_pages=2, reports_per_page=2, start_time=None, end_time=None,
+    )
+
+    assert [(row["code"], row["page"]) for row in rows] == [("aaaa", 1), ("bbbb", 1), ("cccc", 2)]
+
+
 @pytest.mark.parametrize(
     ("kill_time_min", "kill_time_max", "expected"),
     [(None, None, 100.0), (100.0, 100.0, 100.0), (101.0, None, None), (None, 99.0, None)],
@@ -3158,6 +3223,142 @@ def test_deduplicate_pulls_never_merges_guildless_logs_on_timing_alone() -> None
     pulls = deduplicate_pulls([(report, fight) for report in personal])
 
     assert [pull.duplicates for pull in pulls] == [[], []]
+    # Kept, but flagged so a caller can see the two kills may be one pull.
+    assert [pull.possible_duplicate_of for pull in pulls] == [None, {"report_code": "solo0001", "fight_id": 9}]
+
+
+@pytest.mark.parametrize(
+    ("rosters", "duplicates", "flagged"),
+    [
+        ({"solo0001": {"A-X", "B-X"}, "solo0002": {"A-X", "B-X"}}, [[{"report_code": "solo0002", "fight_id": 9}]], [None]),
+        ({"solo0001": {"A-X", "B-X"}, "solo0002": {"A-X", "C-X"}}, [[], []], [None, {"report_code": "solo0001", "fight_id": 9}]),
+    ],
+)
+def test_deduplicate_pulls_collapses_guildless_logs_only_when_their_rosters_match(
+    rosters: dict[str, set[str]], duplicates: list[list[dict[str, object]]], flagged: list[dict[str, object] | None]
+) -> None:
+    from warcraftlogs_cli.boss_kills import deduplicate_pulls
+
+    fight = _kill_fight(fight_id=9, start=10_000, end=644_437)
+    personal = [
+        {**_double_logged_report(code=code, report_start=1_000_000, fights=[fight]), "guild": None}
+        for code in ("solo0001", "solo0002")
+    ]
+
+    pulls = deduplicate_pulls(
+        [(report, fight) for report in personal], roster=lambda report, _fight: frozenset(rosters[str(report["code"])])
+    )
+
+    assert [pull.duplicates for pull in pulls] == duplicates
+    assert [pull.possible_duplicate_of for pull in pulls] == flagged
+
+
+def test_deduplicate_pulls_flags_a_guild_kill_timed_like_an_earlier_guildless_one() -> None:
+    from warcraftlogs_cli.boss_kills import deduplicate_pulls
+
+    fight = _kill_fight(fight_id=9, start=10_000, end=644_437)
+    personal = {**_double_logged_report(code="solo0001", report_start=1_000_000, fights=[fight]), "guild": None}
+    guild = _double_logged_report(code="guild001", report_start=1_002_000, fights=[fight])
+
+    pulls = deduplicate_pulls([(guild, fight), (personal, fight)], roster=lambda _report, _fight: frozenset())
+
+    assert [pull.report["code"] for pull in pulls] == ["solo0001", "guild001"]
+    assert [pull.possible_duplicate_of for pull in pulls] == [None, {"report_code": "solo0001", "fight_id": 9}]
+
+
+def test_deduplicate_pulls_collapses_the_same_players_past_the_timing_tolerance() -> None:
+    """Live MaRVBAHnCmWZc6GL#5 and TcQVLtB6kyZdD3jC#5: one 22-player pull whose two logs start 5.2 s apart."""
+    from warcraftlogs_cli.boss_kills import deduplicate_pulls
+
+    first = {**_double_logged_report(code="marv0001", report_start=0, fights=[]), "guild": None}
+    second = {**_double_logged_report(code="tcqv0002", report_start=0, fights=[]), "guild": None}
+    candidates = [
+        (first, _kill_fight(fight_id=5, start=1_005_181, end=1_305_397)),
+        (second, _kill_fight(fight_id=5, start=1_000_000, end=1_300_244)),
+    ]
+
+    assert [pull.duplicates for pull in deduplicate_pulls(candidates)] == [[], []]
+    pulls = deduplicate_pulls(candidates, roster=lambda _report, _fight: frozenset({"A-X", "B-X"}))
+    assert [(pull.report["code"], pull.duplicates) for pull in pulls] == [("tcqv0002", [{"report_code": "marv0001", "fight_id": 5}])]
+
+
+class _GuildlessDoubleLoggedCohortClient(_DoubleLoggedCohortClient):
+    """The same double-logged pull, uploaded as two personal logs; both fights list the same players."""
+
+    COHORT = [{**report, "guild": None} for report in _DoubleLoggedCohortClient.COHORT]
+
+
+def test_warcraftlogs_boss_kills_collapses_guildless_logs_of_one_pull_with_the_same_roster(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _GuildlessDoubleLoggedCohortClient())
+
+    result = runner.invoke(warcraftlogs_app, ["boss-kills", "--zone-id", "38", "--boss-id", "3012", "--difficulty", "5"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert (data["sample"]["duplicates_removed"], data["sample"]["possible_duplicates"]) == (1, 0)
+    shared_pull = next(kill for kill in data["kills"] if kill["report"]["code"] == "dupea001")
+    assert shared_pull["duplicate_reports"] == [{"report_code": "dupeb002", "fight_id": 11}]
+    assert data["sample"]["difficulty_counts"] == [{"difficulty": 5, "kill_count": 2}]
+    assert data["sample"]["keystone_level_counts"] == []
+
+
+class _KeystoneCohortClient(_DoubleLoggedCohortClient):
+    """Two Mythic+ runs of one dungeon at different key levels; the +12 took longer on the clock."""
+
+    COHORT = [
+        _double_logged_report(
+            code="keys0001",
+            report_start=1_000_000,
+            fights=[
+                {**_kill_fight(fight_id=1, start=0, end=1_000_000), "difficulty": 10, "size": 5,
+                 "keystoneLevel": 10, "keystoneTime": 995_735},
+                {**_kill_fight(fight_id=2, start=2_000_000, end=3_200_000), "difficulty": 10, "size": 5,
+                 "keystoneLevel": 12, "keystoneTime": 1_210_912},
+            ],
+        ),
+    ]
+
+
+def test_warcraftlogs_boss_kills_carries_keystone_levels_and_says_when_they_are_mixed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _KeystoneCohortClient())
+
+    result = runner.invoke(warcraftlogs_app, ["boss-kills", "--zone-id", "38", "--boss-id", "3012"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert [(kill["fight"]["keystone_level"], kill["fight"]["keystone_time_ms"]) for kill in data["kills"]] == [
+        (10, 995_735),
+        (12, 1_210_912),
+    ]
+    assert data["sample"]["keystone_level_counts"] == [
+        {"keystone_level": 10, "kill_count": 1},
+        {"keystone_level": 12, "kill_count": 1},
+    ]
+    assert any("2 keystone levels" in note for note in data["notes"])
+
+
+def test_sampled_cohort_notes_flag_possible_duplicates_and_mixed_difficulties_and_key_levels() -> None:
+    from warcraftlogs_cli.boss_kills import sampled_cohort_notes
+
+    notes = sampled_cohort_notes(
+        {
+            "matched_boss_kill_count": 12,
+            "possible_duplicates": 2,
+            "difficulty_counts": [{"difficulty": 4, "kill_count": 11}, {"difficulty": 3, "kill_count": 1}],
+            "keystone_level_counts": [{"keystone_level": 10, "kill_count": 7}, {"keystone_level": 12, "kill_count": 4}],
+        }
+    )
+
+    assert [note.split(" ", 3)[:3] for note in notes] == [
+        ["2", "sampled", "kill(s)"],
+        ["The", "cohort", "mixes"],
+        ["The", "cohort", "mixes"],
+    ]
+    assert "2 difficulties" in notes[1] and "2 keystone levels" in notes[2]
+    single = sampled_cohort_notes(
+        {"matched_boss_kill_count": 3, "difficulty_counts": [{"difficulty": 5, "kill_count": 3}], "keystone_level_counts": []}
+    )
+    assert single == []
 
 
 def test_spec_filtered_kill_samples_payload_surfaces_truncation_bias() -> None:
@@ -3289,7 +3490,7 @@ def test_warcraftlogs_boss_spec_usage_returns_sorted_spec_rows(monkeypatch) -> N
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["kind"] == "boss_spec_usage"
-    assert payload["data"]["ranking_basis"] == "sampled_finished_kill_cohort_spec_presence"
+    assert payload["data"]["ranking_basis"] == "sampled_kill_cohort_spec_presence"
     assert payload["data"]["sample"]["filtered_kill_count"] == 1
     assert payload["data"]["sample"]["sampled_player_row_count"] == 2
     assert payload["data"]["spec_usage"][0]["spec_name"] == "Protection"
@@ -4432,10 +4633,10 @@ def test_warcraftlogs_report_encounter_buffs_summarizes_buff_rows(monkeypatch) -
     assert payload["data"]["buffs"]["view_by"] == "Source"
     assert len(payload["data"]["buffs"]["preview"]) == 2
     top_row = payload["data"]["buffs"]["preview"][0]
-    # aura-aggregate rows are not actor-scoped: source is a uniform placeholder, aura comes from the row
-    assert top_row["source"]["id"] is None
-    assert top_row["source"]["name"] is None
-    assert "identity_contract" in top_row["source"]
+    # aura-aggregate rows are not actor-scoped: the actor is a uniform placeholder, aura comes from the row
+    assert top_row["aura_holder"]["id"] is None
+    assert top_row["aura_holder"]["name"] is None
+    assert "identity_contract" in top_row["aura_holder"]
     assert top_row["aura"]["name"] == "Holy Shock"
     assert top_row["aura"]["game_id"] == 20473
     assert top_row["aura"]["type"] == "Holy"
@@ -4444,15 +4645,16 @@ def test_warcraftlogs_report_encounter_buffs_summarizes_buff_rows(monkeypatch) -
     assert top_row["reported_bands"][0]["startTime"] == 110000
 
 
-def test_warcraftlogs_report_encounter_buffs_view_by_target_labels_rows_target(monkeypatch) -> None:
+def test_warcraftlogs_report_encounter_buffs_view_by_target_labels_rows_applied_by(monkeypatch) -> None:
+    """A Buffs table viewed by Target groups rows by the caster, so rows name the actor that applied the aura."""
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
 
     result = runner.invoke(warcraftlogs_app, ["report-encounter-buffs", "abcd1234", "--fight-id", "1", "--view-by", "target"])
 
     assert result.exit_code == 0, result.output
     buffs = json.loads(result.stdout)["data"]["buffs"]
-    assert buffs["view_by"] == "Target"
-    assert all("target" in row and "source" not in row for row in buffs["preview"])
+    assert (buffs["view_by"], buffs["row_actor"]) == ("Target", "applied_by")
+    assert all("applied_by" in row and "aura_holder" not in row for row in buffs["preview"])
 
 
 def test_warcraftlogs_report_encounter_buffs_honors_preview_limit(monkeypatch) -> None:
@@ -4506,7 +4708,7 @@ def test_warcraftlogs_report_encounter_buffs_populates_identity_contracts(monkey
     assert aura_contract["status"] == "canonical"
     assert aura_contract["identity"]["game_id"] == 20473
     assert aura_contract["source"] == {"provider": "warcraftlogs", "source": "report_encounter_buffs"}
-    source_contract = top_row["source"]["identity_contract"]
+    source_contract = top_row["aura_holder"]["identity_contract"]
     assert source_contract["kind"] == "report_actor_identity"
     assert source_contract["source"] == {"provider": "warcraftlogs", "source": "report_encounter_buffs"}
     assert any("--ability-id" in note for note in source_contract["notes"])
@@ -4525,9 +4727,10 @@ def test_warcraftlogs_report_encounter_buffs_derives_aura_from_ability_filter(mo
     assert payload["query"]["ability_id"] == 20473.0
     assert payload["data"]["buffs"]["total"] == 2
     top_row = payload["data"]["buffs"]["preview"][0]
-    # actor-scoped row -> real source identity
-    assert top_row["source"]["name"] == "Auropower"
-    assert top_row["source"]["identity_contract"]["status"] == "canonical"
+    # actor-scoped row -> real actor identity; viewBy Source rows are the actors that had the aura
+    assert payload["data"]["buffs"]["row_actor"] == "aura_holder"
+    assert top_row["aura_holder"]["name"] == "Auropower"
+    assert top_row["aura_holder"]["identity_contract"]["status"] == "canonical"
     # row carries no `guid`; aura identity is derived from the --ability-id filter, not the actor name
     assert top_row["aura"]["game_id"] == 20473
     assert top_row["aura"]["name"] == "Holy Shock"
@@ -4572,8 +4775,8 @@ def test_warcraftlogs_report_encounter_buffs_handles_live_auras_shape(monkeypatc
     payload = json.loads(result.stdout)
     assert payload["data"]["buffs"]["total"] == 1
     row = payload["data"]["buffs"]["preview"][0]
-    assert row["source"]["id"] is None
-    assert "identity_contract" in row["source"]
+    assert row["aura_holder"]["id"] is None
+    assert "identity_contract" in row["aura_holder"]
     assert row["aura"]["name"] == "Berserker Stance"
     assert row["aura"]["game_id"] == 386196
     assert row["reported_total_uptime"] == 372
@@ -4608,10 +4811,11 @@ def test_warcraftlogs_report_encounter_aura_summary_returns_typed_rows(monkeypat
     assert payload["query"]["end_time"] == 150000.0
     assert payload["data"]["aura"]["name"] == "Holy Shock"
     assert payload["data"]["aura_summary"]["entry_count"] == 2
-    assert payload["data"]["aura_summary"]["rows"][0]["source"]["name"] == "Auropower"
+    assert payload["data"]["aura_summary"]["row_actor"] == "aura_holder"
+    assert payload["data"]["aura_summary"]["rows"][0]["aura_holder"]["name"] == "Auropower"
     assert payload["data"]["aura_summary"]["rows"][0]["reported_total_uptime"] == 38000
     assert payload["data"]["aura_summary"]["rows"][0]["reported_total_uses"] == 3
-    assert payload["data"]["aura_summary"]["rows"][0]["source"]["identity_contract"]["status"] == "canonical"
+    assert payload["data"]["aura_summary"]["rows"][0]["aura_holder"]["identity_contract"]["status"] == "canonical"
 
 
 def test_warcraftlogs_report_encounter_aura_compare_returns_window_deltas(monkeypatch) -> None:
@@ -4644,9 +4848,82 @@ def test_warcraftlogs_report_encounter_aura_compare_returns_window_deltas(monkey
     assert payload["data"]["comparison"]["matching_rule"] == "same_report_same_fight_same_ability_explicit_windows"
     rows = payload["data"]["comparison"]["rows"]
     # Right minus left, largest uptime change first.
-    assert [(row["source"]["name"], row["reported_total_uptime_delta"], row["reported_total_uses_delta"]) for row in rows] == [
+    assert payload["data"]["comparison"]["row_actor"] == "aura_holder"
+    assert [(row["aura_holder"]["name"], row["reported_total_uptime_delta"], row["reported_total_uses_delta"]) for row in rows] == [
         ("Auropower", -12000, -1),
         ("Sherway", 10000, 2),
+    ]
+
+
+def test_warcraftlogs_aura_compare_clamps_a_window_past_the_fight_end(monkeypatch) -> None:
+    """Fight 1 lasts 100 s, so a 50..130 s window really covers 50 s; the delta must be read against that."""
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "report-encounter-aura-compare", "abcd1234", "--fight-id", "1", "--ability-id", "20473",
+            "--left-window-start-ms", "0", "--left-window-end-ms", "50000",
+            "--right-window-start-ms", "50000", "--right-window-end-ms", "130000",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    left, right = (window["query"] for window in data["windows"])
+    assert (left["end_time"], left["effective_window_duration_ms"], left["window_clamped"]) == (150000.0, 50000.0, False)
+    assert right["end_time"] == 200000.0
+    assert (right["effective_window_start_ms"], right["effective_window_end_ms"]) == (50000.0, 100000.0)
+    assert (right["effective_window_duration_ms"], right["window_clamped"]) == (50000.0, True)
+    assert len(data["notes"]) == 1 and "effective_window_duration_ms (50000 ms)" in data["notes"][0]
+
+
+def test_warcraftlogs_aura_compare_does_not_call_a_fractional_window_clamped(monkeypatch) -> None:
+    """1000.1 ms round-trips through the 100000 ms fight start as 1000.1000000000058; that is not a clamp."""
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
+
+    result = runner.invoke(
+        warcraftlogs_app,
+        [
+            "report-encounter-aura-compare", "abcd1234", "--fight-id", "1", "--ability-id", "20473",
+            "--left-window-start-ms", "1000.1", "--left-window-end-ms", "50000.3",
+            "--right-window-start-ms", "50000.3", "--right-window-end-ms", "90000.7",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    left = data["windows"][0]["query"]
+    assert (left["effective_window_start_ms"], left["effective_window_end_ms"]) == (1000.1, 50000.3)
+    assert [window["query"]["window_clamped"] for window in data["windows"]] == [False, False]
+    assert not any("clamped" in note for note in data.get("notes") or [])
+
+
+def test_warcraftlogs_buffs_ability_rows_keep_the_requested_aura_and_follow_use_targets(monkeypatch) -> None:
+    """Live ability-scoped rows carry the actor's GUID in `guid`; useTargets says WCL grouped by the caster."""
+
+    class _PinnedHolderClient(_FakeWarcraftLogsClient):
+        def report_table(self, *, code: str, allow_unlisted: bool = False, options: ReportFilterOptions) -> dict[str, object]:
+            assert (options.view_by, options.source_id) == ("Source", 18)
+            # Synthetic, shaped like live 2cAYQr6GV79mhLJP#11 Power Infusion with sourceID=18 (the holder).
+            auras = [
+                {"name": "Faintpriest", "id": 14, "guid": 172341341, "type": "Priest", "totalUptime": 30000, "totalUses": 2},
+                {"name": "Sakuria", "id": 17, "guid": 177806538, "type": "Priest", "totalUptime": 15000, "totalUses": 1},
+            ]
+            return {"code": code, "table": {"data": {"auras": auras, "useTargets": True}}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _PinnedHolderClient())
+    result = runner.invoke(
+        warcraftlogs_app,
+        ["report-encounter-buffs", "abcd1234", "--fight-id", "1", "--ability-id", "20473", "--source-id", "18"],
+    )
+
+    assert result.exit_code == 0, result.output
+    buffs = json.loads(result.stdout)["data"]["buffs"]
+    assert buffs["row_actor"] == "applied_by"
+    assert [(row["applied_by"]["id"], row["aura"]["game_id"], row["aura"]["name"]) for row in buffs["preview"]] == [
+        (14, 20473, "Holy Shock"),
+        (17, 20473, "Holy Shock"),
     ]
 
 
@@ -4745,7 +5022,7 @@ def test_warcraftlogs_report_encounter_aura_summary_handles_live_auras_shape(mon
     payload = json.loads(result.stdout)
     assert payload["data"]["aura_summary"]["entry_count"] == 1
     row = payload["data"]["aura_summary"]["rows"][0]
-    assert row["source"]["name"] == "Auropower"
+    assert row["aura_holder"]["name"] == "Auropower"
     assert row["reported_total_uptime"] == 372
     assert row["reported_total_uses"] == 3
     assert row["reported_bands"][0]["startTime"] == 1769575
@@ -4782,6 +5059,28 @@ def test_warcraftlogs_report_events_hints_when_data_type_missing_returns_null_ev
     assert payload["data"]["events"] is None
     assert "notes" in payload["data"]
     assert any("--data-type" in note for note in payload["data"]["notes"])
+
+
+def test_warcraftlogs_report_events_next_page_runs_to_the_fight_end(monkeypatch) -> None:
+    """Warcraft Logs returns no events for a start time without an end, so the next page gets the fight's end."""
+    sent: list[tuple[float | None, float | None]] = []
+
+    class _PagingClient(_FakeWarcraftLogsClient):
+        def report_events(self, *, code: str, allow_unlisted: bool = False, options: ReportFilterOptions) -> dict[str, object]:
+            sent.append((options.start_time, options.end_time))
+            return {"code": code, "events": {"data": [{"timestamp": 150000}], "nextPageTimestamp": 160000.0}}
+
+    monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _PagingClient())
+
+    first = runner.invoke(warcraftlogs_app, ["report-events", "abcd1234", "--fight-id", "1", "--data-type", "casts"])
+    second = runner.invoke(
+        warcraftlogs_app, ["report-events", "abcd1234", "--fight-id", "1", "--data-type", "casts", "--start-time", "160000"]
+    )
+
+    assert first.exit_code == 0 and second.exit_code == 0, second.output
+    assert sent == [(None, None), (160000.0, 200000.0)]
+    assert "--start-time 160000 --end-time 200000" in json.loads(first.stdout)["data"]["notes"][0]
+    assert json.loads(second.stdout)["query"]["end_time"] == 200000.0
 
 
 def test_warcraftlogs_report_events_omits_hint_when_data_type_supplied(monkeypatch) -> None:
@@ -8378,7 +8677,8 @@ def test_warcraftlogs_encounter_summaries_name_npc_sources(monkeypatch, command:
     assert result.exit_code == 0, result.output
     data = json.loads(result.stdout)["data"]
     summary = data.get("damage_summary") or data.get("aura_summary")
-    assert summary["rows"][0]["source"]["name"] == "Dimensius, the All-Devouring"
+    actor_field = "source" if data_type == "DamageDone" else "aura_holder"
+    assert summary["rows"][0][actor_field]["name"] == "Dimensius, the All-Devouring"
 
 
 def test_warcraftlogs_aura_compare_names_npc_sources(monkeypatch) -> None:
@@ -8401,7 +8701,7 @@ def test_warcraftlogs_aura_compare_names_npc_sources(monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     rows = json.loads(result.stdout)["data"]["comparison"]["rows"]
-    assert [row["source"]["name"] for row in rows] == ["Dimensius, the All-Devouring"]
+    assert [row["aura_holder"]["name"] for row in rows] == ["Dimensius, the All-Devouring"]
 
 
 def test_warcraftlogs_report_encounter_casts_names_npc_targets(monkeypatch) -> None:

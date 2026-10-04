@@ -20,6 +20,7 @@ from simc_cli.build_input import (
     detect_talents_option_source_kind,
     diff_talent_trees,
     encode_build,
+    export_spec,
     extract_build_spec_from_text,
     identify_build,
     infer_actor_and_spec_from_apl,
@@ -1388,3 +1389,113 @@ def test_bounded_output_preview_clips_a_single_enormous_debug_line() -> None:
     assert preview[-1].startswith("x" * 200)
     assert preview[-1].endswith("... (5000 chars, truncated)")
     assert max(len(line) for line in preview) < 250
+
+
+# Lines SimC printed for the MID2 Frost hash plus `class_talents=shimmer:0/master_of_time:1`: an option for
+# a talent the hash already took prints no `adding` line, only the overwrite.
+CAPTURED_SPLIT_OVERWRITE_DEBUG = "\n".join(
+    [
+        "0.000 Player 'simc_decode' adding class talent Master of Time (node=62102 entry=80159 rank=2/2)",
+        "0.000 Player 'simc_decode' adding class talent Shimmer (node=62105 entry=80163 rank=1/1)",
+        "0.000 Overwriting talent Shimmer (80163), rank 1 -> 0",
+        "0.000 Overwriting talent Master of Time (80159), rank 2 -> 1",
+    ]
+)
+
+
+def test_decode_build_applies_the_ranks_split_talent_options_overwrote_on_the_hash(tmp_path: Path) -> None:
+    """SimC sims Master of Time at rank 1 and without Shimmer; the decode used to report the hash's ranks."""
+    result = _decode(
+        _repo(tmp_path), CAPTURED_SPLIT_OVERWRITE_DEBUG, 0,
+        actor_class="mage", spec="frost", talents="CAEAAA", class_talents="shimmer:0/master_of_time:1",
+    )
+
+    assert [(talent.name, talent.rank) for talent in result.talents_by_tree["class"]] == [("Master of Time", 1)]
+    assert result.enabled_talents == {"master_of_time"}
+
+
+def test_parse_debug_talents_clamps_a_rank_above_the_maximum_as_simc_does() -> None:
+    """SimC printed this for `class_talents=master_of_time:5` and stores min(5, 2)."""
+    talents = parse_debug_talents(
+        "0.000 Player 'simc_decode' adding class talent Master of Time (node=62102 entry=80159 rank=5/2)"
+    )
+
+    assert [(talent.rank, talent.max_rank) for talent in talents["class"]] == [(2, 2)]
+
+
+def test_decode_build_disables_every_hero_talent_when_no_hero_tree_was_selected(tmp_path: Path) -> None:
+    """SimC's default Devourer loadout grants both keystones but activates no sub tree, so neither is active."""
+    output = "\n".join(
+        [
+            "0.000 Player 'simc_decode' adding hero talent Demonsurge (node=94917 entry=117514 rank=1/1)",
+            "0.000 Player 'simc_decode' adding hero talent Voidsurge (node=110112 entry=136613 rank=1/1)",
+            "0.000 Player 'simc_decode' adding spec talent Void Ray (node=107336 entry=132278 rank=1/1)",
+        ]
+    )
+
+    result = _decode(_repo(tmp_path), output, 0, actor_class="demonhunter", spec="devourer", talents="CgcBAA")
+
+    assert result.hero_tree is None
+    assert [talent.name for talent in result.inactive_hero_talents] == ["Demonsurge", "Voidsurge"]
+    assert result.talents_by_tree["hero"] == []
+    assert result.enabled_talents == {"void_ray"}
+
+
+def test_decode_build_drops_a_tiered_entry_the_builds_own_option_set_to_zero(tmp_path: Path) -> None:
+    """With the entry already at 0 the probe's zeroing prints nothing, so the build option's own line is all there is."""
+    user_line = "0.000 Overwriting talent Prismatic Bolt (137027), rank 2 -> 0"
+    decode_output = f"{CAPTURED_TWO_HERO_TREES.read_text()}\n{user_line}\n"
+    probe_output = "\n".join(
+        [user_line, *(line for line in CAPTURED_TIERED_OVERWRITE_LOG.splitlines() if "(137027)" not in line)]
+    )
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        answer = probe_output if "137028:0" in Path(str(cmd[1])).read_text() else decode_output
+        return subprocess.CompletedProcess(cmd, 0, stdout=answer, stderr="")
+
+    with patch("simc_cli.build_input.subprocess.run", side_effect=fake_run):
+        result = decode_build(
+            _repo(tmp_path, with_trait_data=True),
+            BuildSpec(actor_class="mage", spec="arcane", talents="C4DAAA", spec_talents="137027:0"),
+        )
+
+    tiered = [talent for talent in result.talents_by_tree["spec"] if talent.name == "Prismatic Bolt"]
+    assert [(talent.entry, talent.rank) for talent in tiered] == [(137028, 1), (137026, 1)]
+
+
+def test_extract_build_spec_reads_the_first_actor_of_a_multi_actor_profile() -> None:
+    """simc sim reports players[0]; reading on paired the mage's class with the warrior's spec."""
+    spec = extract_build_spec_from_text(
+        'mage="Frosty"\nspec=frost\ntalents=CAEAAA\n\nwarrior="Tank"\nspec=protection\ntalents=CkEAAA\n'
+        'copy="Tank2,Tank"\ntalents=CkEBBB\n'
+    )
+
+    assert (spec.actor_class, spec.spec, spec.talents) == ("mage", "frost", "CAEAAA")
+    assert any("first of 3 actors (mage=Frosty)" in note for note in spec.source_notes)
+
+
+def test_export_spec_reads_the_spec_id_from_the_hash_header(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+
+    assert export_spec(repo, "CAEAAAAAAA") == ("mage", "frost")
+    assert export_spec(repo, "C8DAAAAAAA") == ("mage", "fire")
+    assert export_spec(repo, "C!") is None
+
+
+def test_identify_build_reports_simc_rejecting_the_spec_an_export_names(tmp_path: Path) -> None:
+    """A stale export decodes as no spec; asking for --actor-class and --spec hid SimC's reason."""
+    output = CAPTURED_HASH_REJECTED.read_text()
+
+    with (
+        patch(
+            "simc_cli.build_input.subprocess.run",
+            side_effect=lambda cmd, **_kwargs: subprocess.CompletedProcess(cmd, 81, stdout=output, stderr=""),
+        ),
+        pytest.raises(SimcBuildError) as caught,
+    ):
+        identify_build(_repo(tmp_path), BuildSpec(talents="CYEAAAAAAAAA", source_notes=["inline build text"]))
+
+    message = str(caught.value)
+    assert message.startswith("The talent export names paladin retribution but likely predates the current talent tree")
+    # SimC's own reason stays last, where callers read it.
+    assert message.endswith("Node 81527 is not a choice node but has index selection.")

@@ -46,8 +46,10 @@ authoritative, and use Lorrgs for its prebuilt aggregation.
   `--actor-name`) and spec come from the fight's Warcraft Logs roster, and the boss for the top-parse
   comparison from the fight's encounter id. Phase windows then come from
   the Warcraft Logs fight's phase transitions (`data.phase.source: "warcraftlogs"`): windows are
-  numbered P1, P2, ... in order as on the Lorrgs path, each with the encounter
-  phase's `phase_id` and `name`. A fight without phase transitions leaves
+  numbered P1, P2, ... in order, one per transition, each with the encounter
+  phase's `phase_id` and `name`. Lorrgs numbers phases its own way, so the top parses are then
+  segmented by their own Warcraft Logs transitions too; a sample whose window of that number is
+  another encounter phase is left out (`phase_not_in_top_parse`). A fight without phase transitions leaves
   `data.phase.status: "unavailable"` and a null `data.phase.selected`. `data.lorrgs.message` names
   the reason and only says "no cached copy" for a `not_found`; a timeout or transport failure says
   so instead. Without an actor flag the command fails `missing_actor` and lists the roster in

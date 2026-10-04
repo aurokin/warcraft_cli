@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 
 from simc_cli.repo import (
@@ -147,11 +149,43 @@ def test_build_repo_reconfigures_before_building_so_the_binary_revision_follows_
         return run_module.CommandResult(command=command, cwd=cwd, returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(run_module, "_run", fake_run)
+    monkeypatch.setattr(run_module.os, "cpu_count", lambda: 6)
+    (paths.build_dir / "CMakeCache.txt").write_text("CMAKE_BUILD_TYPE:STRING=Debug\n")
     run_module.build_repo(paths, target="simc")
     assert calls == [
         ["cmake", "-S", str(paths.root), "-B", str(paths.build_dir)],
-        ["cmake", "--build", str(paths.build_dir), "--target", "simc"],
+        ["cmake", "--build", str(paths.build_dir), "--parallel", "6", "--target", "simc"],
     ]
+
+
+def test_build_repo_configures_a_fresh_build_optimized_and_without_the_gui(monkeypatch, tmp_path: Path) -> None:
+    """SimC's CMake leaves CMAKE_BUILD_TYPE empty and defaults BUILD_GUI ON (which needs Qt); a cache keeps the user's choice.
+
+    Runs a fake ``cmake`` on PATH that records its arguments and writes a cache on configure, as cmake does.
+    """
+    from simc_cli import run as run_module
+
+    _make_repo(tmp_path, with_binary=True)
+    paths = discover_repo(tmp_path)
+    shutil.rmtree(paths.build_dir)
+    bin_dir = tmp_path / "fakebin"
+    bin_dir.mkdir()
+    record = tmp_path / "cmake_calls.txt"
+    fake_cmake = bin_dir / "cmake"
+    fake_cmake.write_text(
+        "#!/bin/sh\n"
+        f'echo "$*" >> "{record}"\n'
+        'if [ "$1" = "-S" ]; then mkdir -p "$4" && echo "CMAKE_BUILD_TYPE:STRING=Release" > "$4/CMakeCache.txt"; fi\n'
+    )
+    fake_cmake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    assert run_module.build_repo(paths, target="simc").returncode == 0
+    assert run_module.build_repo(paths, target="simc").returncode == 0
+
+    configures = [line.split() for line in record.read_text().splitlines() if line.startswith("-S")]
+    assert configures[0][4:] == ["-DCMAKE_BUILD_TYPE=Release", "-DBUILD_GUI=OFF"]
+    assert configures[1][4:] == []
 
 
 def test_build_repo_stops_when_configure_fails(monkeypatch, tmp_path: Path) -> None:
@@ -166,6 +200,6 @@ def test_build_repo_stops_when_configure_fails(monkeypatch, tmp_path: Path) -> N
         return run_module.CommandResult(command=command, cwd=cwd, returncode=1, stdout="", stderr="no CMakeLists")
 
     monkeypatch.setattr(run_module, "_run", fake_run)
-    result = run_module.build_repo(paths, target=None)
+    result = run_module.build_repo(paths, target="simc")
     assert result.returncode == 1
     assert len(calls) == 1

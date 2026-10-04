@@ -6,9 +6,8 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
-from warcraft_content.guide_page import WOWHEAD_LINK_RE, extract_talent_export_builds
+from warcraft_content.guide_page import extract_build_references, extract_linked_entities
 from warcraft_content.html_sections import clean_text, extract_headings, extract_sections
-from warcraft_core.identity import ability_identity_payload, build_reference_payload
 from warcraft_core.wow_specs import WOW_SPECS, raiderio_class_slug
 
 METHOD_BASE_URL = "https://www.method.gg"
@@ -161,89 +160,10 @@ def _clone_article(article: Tag) -> Tag:
     return cloned
 
 
-def _extract_linked_entities(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
-    items: dict[tuple[str, int], dict[str, Any]] = {}
-    for anchor in article.find_all("a", href=True):
-        href = anchor.get("href")
-        if not isinstance(href, str):
-            continue
-        url = urljoin(source_url, href)
-        parsed = urlparse(url)
-        if "wowhead.com" not in parsed.netloc:
-            continue
-        path = parsed.path.lstrip("/")
-        match = WOWHEAD_LINK_RE.match(path)
-        if not match:
-            continue
-        entity_type = match.group("entity_type")
-        entity_id = int(match.group("id"))
-        key = (entity_type, entity_id)
-        name = clean_text(anchor.get_text(" ", strip=True))
-        record = items.get(key)
-        if record is None:
-            row: dict[str, Any] = {
-                "type": entity_type,
-                "id": entity_id,
-                "name": name,
-                "url": url,
-                "source_url": source_url,
-            }
-            # Spell links carry a Wowhead spell id, so they get a canonical ability identity.
-            # Other entity types (item/npc/quest/...) are left unchanged.
-            if entity_type == "spell":
-                row["ability_identity"] = ability_identity_payload(
-                    spell_id=entity_id,
-                    name=name or None,
-                    provider="method",
-                    source="guide_linked_entity",
-                )
-            items[key] = row
-            continue
-        if not record.get("name") and name:
-            record["name"] = name
-            if entity_type == "spell" and isinstance(record.get("ability_identity"), dict):
-                record["ability_identity"] = ability_identity_payload(
-                    spell_id=entity_id,
-                    name=name or None,
-                    provider="method",
-                    source="guide_linked_entity",
-                )
-    return sorted(items.values(), key=lambda row: (row["type"], row["id"]))
-
-
 def _talent_export_code(block: Tag) -> str | None:
     embed = block.select_one(TALENT_BUILD_EMBED_SELECTOR)
     code = embed.get("data-talent") if isinstance(embed, Tag) else None
     return code.strip() if isinstance(code, str) else None
-
-
-def _extract_build_references(article: Tag, *, source_url: str) -> list[dict[str, Any]]:
-    items: dict[str, dict[str, Any]] = {}
-    for anchor in article.find_all("a", href=True):
-        href = anchor.get("href")
-        if not isinstance(href, str):
-            continue
-        payload = build_reference_payload(
-            ref=urljoin(source_url, href),
-            provider="method",
-            source="guide_embedded_link",
-            source_url=source_url,
-            label=clean_text(anchor.get_text(" ", strip=True)),
-            notes=["embedded Method guide link"],
-        )
-        if payload is None:
-            continue
-        items[str(payload["url"])] = payload
-    for row in extract_talent_export_builds(
-        article,
-        source_url=source_url,
-        provider="method",
-        block_selector=TALENT_BUILD_SELECTOR,
-        title_selector=TALENT_BUILD_TITLE_SELECTOR,
-        read_code=_talent_export_code,
-    ):
-        items.setdefault(str(row["url"]), row)
-    return sorted(items.values(), key=lambda row: str(row["url"]))
 
 
 def _normalize_author_and_last_updated(author: str | None, last_updated: str | None) -> tuple[str | None, str | None]:
@@ -303,8 +223,19 @@ def parse_guide_page(html: str, *, source_url: str) -> dict[str, Any]:
         article_text = clean_text(article.get_text("\n", strip=True)) or ""
         headings = extract_headings(article)
         sections = extract_sections(article, fallback_title=display_section_title)
-        linked_entities = _extract_linked_entities(article, source_url=canonical_url)
-        build_references = _extract_build_references(article, source_url=canonical_url)
+        linked_entities = sorted(
+            extract_linked_entities(article, source_url=canonical_url, provider="method"),
+            key=lambda row: (row["type"], row["id"]),
+        )
+        build_references = extract_build_references(
+            article,
+            source_url=canonical_url,
+            provider="method",
+            site_label="Method",
+            block_selector=TALENT_BUILD_SELECTOR,
+            title_selector=TALENT_BUILD_TITLE_SELECTOR,
+            read_code=_talent_export_code,
+        )
     return {
         "page": {
             "title": page_title,

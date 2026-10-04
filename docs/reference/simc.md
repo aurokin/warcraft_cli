@@ -85,13 +85,13 @@ Describe the repo, or one file or directory, including any build lines a file ca
 
 ## simc spec-files
 
-List APL and class-module files in the checkout, optionally narrowed by a substring.
+List APL and class-module files in the checkout, optionally narrowed by the words of a query.
 
 **Arguments**
 
 | Argument | Type | Default | Description |
 | --- | --- | --- | --- |
-| `query` | str |  | Optional substring to narrow APL and class-module files. |
+| `query` | str |  | Optional words every matching file name holds, e.g. 'frost mage'. |
 
 **Options**
 
@@ -644,6 +644,12 @@ Report when actions were first scheduled and performed in a SimC combat log.
 | `log_path` | str | required | Path to a SimulationCraft combat log. |
 | `actions` | str | required | One or more action names to inspect. |
 
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--actor` | str |  | Only count this actor's casts, e.g. the player and not its pets. |
+
 ## simc sync
 
 Pull the latest SimulationCraft sources into the local checkout.
@@ -662,7 +668,7 @@ Build the local SimulationCraft binary with cmake.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--target` | str |  | Optional build target passed to cmake. |
+| `--target` | str | simc | Build target passed to cmake; the default builds only the simc binary. |
 
 ## simc sim
 

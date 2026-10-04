@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from typing import Any
 
-import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, CachedHttpClient, json_cache_key, request_with_retries
 from warcraft_core.paths import provider_cache_root
 
 BASE_URL = "https://www.raidbots.com"
@@ -89,14 +86,13 @@ def load_raidbots_cache_settings_from_env() -> tuple[CacheSettings, int]:
     return settings, settings.ttls.entity_response
 
 
-class RaidbotsClient:
+class RaidbotsClient(CachedHttpClient):
     def __init__(
         self,
         *,
         timeout_seconds: float = 30.0,
         retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     ) -> None:
-        self._http_client: httpx.Client | None = None
         settings, report_ttl = load_raidbots_cache_settings_from_env()
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
@@ -113,35 +109,8 @@ class RaidbotsClient:
         """Whether the most recent fetch was served from the local cache (may be stale)."""
         return self._last_from_cache
 
-    def close(self) -> None:
-        if self._http_client is not None:
-            self._http_client.close()
-            self._http_client = None
-
-    def __enter__(self) -> RaidbotsClient:
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        self.close()
-
-    def _client(self) -> httpx.Client:
-        if self._http_client is None:
-            self._http_client = build_client(timeout=self._timeout_seconds)
-        return self._http_client
-
     def _cache_key(self, namespace: str, params: dict[str, Any]) -> str:
-        raw = json.dumps({"namespace": namespace, "params": params}, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        return f"{namespace}:{hashlib.sha256(raw).hexdigest()}"
-
-    def _read_cache(self, key: str) -> Any | None:
-        if self._cache_store is None:
-            return None
-        return self._cache_store.get(key)
-
-    def _write_cache(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
-        if self._cache_store is None:
-            return
-        self._cache_store.set(key, payload, ttl_seconds=ttl_seconds)
+        return json_cache_key(namespace, {"namespace": namespace, "params": params})
 
     def report_data(self, report_id: str) -> dict[str, Any]:
         url = data_url(report_id)

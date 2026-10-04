@@ -681,6 +681,41 @@ MERGE_CASES = [
         expected_top_family="reference",
         required_row_id="SimulationCraft",
     ),
+    MergeCase(
+        name="wiki_snippet_only_row_below_a_title_match",
+        query="pvp tier list",
+        provider_rows={
+            "warcraft-wiki": [
+                {"id": "Events", "name": "Events", "kind": "article",
+                 "ranking": {"score": 18, "match_reasons": ["upstream_rank_1", "snippet_match", "family_framework_page"]}},
+            ],
+            "icy-veins": [
+                {"id": "pvp-dps-tier-list", "name": "PvP DPS Tier List", "kind": "guide",
+                 "ranking": {"score": 16, "match_reasons": ["all_terms_match"]}},
+            ],
+        },
+        expected_top_family="article",
+        required_row_id="pvp-dps-tier-list",
+        notes="live scores: the wiki's Events matched only its snippet and upstream position",
+    ),
+    MergeCase(
+        name="lorrgs_row_that_ignored_most_query_words_below_a_title_match",
+        query="Mimiron's Head mount",
+        provider_rows={
+            "lorrgs": [
+                {"id": "comp-ranking:sun-kings-salvation", "name": "Composition ranking for Sun King's Salvation",
+                 "kind": "comp_ranking",
+                 "ranking": {"score": 42, "match_level": "partial", "unmatched_terms": ["head", "mimiron", "mount"]}},
+            ],
+            "warcraft-wiki": [
+                {"id": "Mimiron's Head", "name": "Mimiron's Head", "kind": "article",
+                 "ranking": {"score": 44, "match_reasons": ["upstream_rank_3", "all_terms_match", "query_contains_title"]}},
+            ],
+        },
+        expected_top_family="reference",
+        required_row_id="Mimiron's Head",
+        notes="live scores: Lorrgs matched only the possessive `s`",
+    ),
 ]
 
 

@@ -15,6 +15,7 @@ that quietly stopped being wired cannot stay green by returning everything.
 
 from __future__ import annotations
 
+import re
 import shlex
 import time
 from collections import Counter
@@ -351,6 +352,8 @@ def test_character_profile_carries_identity_score_and_normalized_class_spec() ->
     identity = character["class_spec_identity"]
     assert identity["confidence"] == "high"
     assert identity["identity"]["actor_class"] == character["class_name"].lower()
+    # The crawl time dates the profile itself; it can only precede this fetch.
+    assert character["last_crawled_at"][:19] <= result.data["freshness"]["fetched_at"][:19], result.describe()
 
     # Raider.IO's guild block has no region; the guild is in its member's region.
     if result.data["guild"] is not None:
@@ -401,6 +404,8 @@ def test_character_recent_runs_restate_the_runs_raider_io_lists() -> None:
     for row in matched:
         source = upstream[row["run_id"]]
         assert {key: row[key] for key in RECENT_RUN_FIELDS} == {key: source[field] for key, field in RECENT_RUN_FIELDS.items()}, row
+        # The spec played in that run, which need not be the active spec.
+        assert (row["spec"], row["role"]) == (source["spec"]["name"], source["role"]), row
         assert row["url"].startswith("https://raider.io/mythic-plus-runs/") and str(row["run_id"]) in row["url"], row
 
 
@@ -463,6 +468,16 @@ def test_guild_profile_echoes_the_guild_and_numeric_raid_rankings(cache_root: Pa
     assert guild["region"] == REGION
     assert guild["realm"].lower().replace("'", "") == REALM
     assert isinstance(guild["member_count"], int) and guild["member_count"] > 0
+    assert guild["last_crawled_at"], result.describe()
+    # The roster is guild-rank ordered, guild master first, with realm slugs like the guild's own.
+    roster = run("raiderio", "guild", REGION, REALM, GUILD, "--roster-limit", "1000").data
+    ranks = [row["rank"] for row in roster["roster_preview"]]
+    assert len(ranks) == guild["member_count"] and roster["roster_truncated"] is False, result.describe()
+    assert ranks == sorted(ranks) and ranks[0] == 0, ranks[:20]
+    assert all(row["realm"] == row["realm"].lower() and " " not in row["realm"] for row in roster["roster_preview"])
+    roles = {row["active_spec_role"] for row in roster["roster_preview"]}
+    assert roles <= {"tank", "healer", "dps", None} and "healer" in roles, roles
+    assert len(result.data["roster_preview"]) == min(10, guild["member_count"])
 
     raiding = result.data["raiding"]
     assert raiding["raid_count"] >= 1
@@ -863,6 +878,8 @@ def test_cutoffs_give_the_rating_at_each_top_percentile(current_season: str) -> 
     top = rows[0]["all"]
     assert top["population_count"] < top["total_population"] / 100, result.describe()
     assert current_season in result.payload["provenance"]["citations"]["cutoffs_url"], result.describe()
+    # Raider.IO's JavaScript Date string comes out as ISO-8601 UTC.
+    assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", result.data["updated_at"]), result.describe()
 
 
 def test_leaderboard_mythic_plus_reports_returned_versus_requested(current_season: str) -> None:
@@ -922,6 +939,7 @@ def test_raid_leaderboard_returns_ranked_guilds_with_profile_urls(current_raid: 
         assert guild["profile_url"] == f"https://raider.io/guilds/us/{guild['realm']}/{quote(guild['name'])}"
         assert row["encounters_defeated_count"] == len(row["encounters_defeated"]) >= 1
         assert row["encounters_pulled_count"] == len(row["encounters_pulled"])
+        assert set(row["privacy"]) == {"raid_pulls_hidden", "raid_percents_hidden"}, row
     _assert_sampled_provenance(result)
 
 

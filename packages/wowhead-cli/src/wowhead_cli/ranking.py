@@ -124,14 +124,32 @@ def listing_match_score(query: str, *values: Any) -> int:
     return score
 
 
+# Mounts, battle pets and recipes have no suggestion type of their own: Wowhead returns a mount as
+# the item that teaches it or its spell, a battle pet as its NPC or cage item, and a recipe as its
+# item or spell. A query naming one of those types is answered by rows of these stand-in types.
+SUGGESTION_STAND_INS: dict[str, tuple[str, ...]] = {
+    "mount": ("item", "spell"),
+    "battle-pet": ("npc", "item"),
+    "recipe": ("item", "spell"),
+}
+
+
+def _type_phrase_re(phrase: str) -> str:
+    return rf"(?<!\w){re.escape(phrase)}(?!\w)"
+
+
 def search_type_hints(query: str) -> set[str]:
-    """Entity types a query names as whole words ("conquest" does not hint quest)."""
+    """Entity types a query names as whole words ("conquest" does not hint quest), plus their stand-ins.
+
+    "mimiron's head mount" hints mount, and so the item and spell types Wowhead returns mounts as.
+    """
     normalized = " ".join(query.lower().split())
-    return {
+    named = {
         entity_type
         for entity_type, phrases in SEARCH_TYPE_HINTS.items()
-        if any(re.search(rf"(?<!\w){re.escape(phrase)}(?!\w)", normalized) for phrase in phrases)
+        if any(re.search(_type_phrase_re(phrase), normalized) for phrase in phrases)
     }
+    return named.union(*(SUGGESTION_STAND_INS.get(entity_type, ()) for entity_type in named))
 
 
 def search_ranking_query(query: str) -> str:
@@ -145,12 +163,18 @@ def search_ranking_query(query: str) -> str:
     return " ".join(query.lower().split())
 
 
-TYPE_HINT_WORDS = frozenset(phrase for phrases in SEARCH_TYPE_HINTS.values() for phrase in phrases if " " not in phrase)
+# Longest first, so "battle pet" goes as a whole before "pet" could leave "battle" behind.
+_TYPE_PHRASES_RE = re.compile(
+    "|".join(
+        _type_phrase_re(phrase)
+        for phrase in sorted({p for phrases in SEARCH_TYPE_HINTS.values() for p in phrases}, key=len, reverse=True)
+    )
+)
 
 
 def untyped_search_query(query: str) -> str:
-    """`query` without the words that name an entity type: "hogger npc" is "hogger"."""
-    return " ".join(term for term in query_terms(query) if term not in TYPE_HINT_WORDS)
+    """`query` without the words that name an entity type: "hogger npc" is "hogger", "x battle pet" is "x"."""
+    return " ".join(_TYPE_PHRASES_RE.sub(" ", " ".join(query_terms(query))).split())
 
 
 def search_follow_up_kind(query: str) -> str:
@@ -403,10 +427,18 @@ def search_result_score_and_reasons(
     reasons: list[str] = []
     score = 0
 
-    exact = exact_match_score(normalized_query, name_normalized=name_normalized, display_normalized=display_normalized)
-    prefix = prefix_and_contains_score(
-        normalized_query, name_normalized=name_normalized, display_normalized=display_normalized
-    )
+    # A row of the type the query names matches that type word by its type, so its name is also
+    # matched against the query without type words: "heritage of the lightforged quest" names the
+    # quest "Heritage of the Lightforged" exactly. The better of the two matches counts. Guide titles
+    # hold their type word ("Fury Warrior DPS Guide"), so a guide is matched on its title alone.
+    texts = [normalized_query]
+    untyped = untyped_search_query(normalized_query)
+    if entity_type != "guide" and entity_type in search_type_hints(query) and untyped not in ("", normalized_query):
+        texts.append(untyped)
+    names = {"name_normalized": name_normalized, "display_normalized": display_normalized}
+    exact = max((exact_match_score(text, **names) for text in texts), key=lambda part: part[0])
+    prefix = max((prefix_and_contains_score(text, **names) for text in texts), key=lambda part: part[0])
+    terms_part = max((term_match_score(match_terms(text), haystacks=haystacks) for text in texts), key=lambda part: part[0])
     # Wowhead ranks database rows on text the suggestion never shows (descriptions, criteria), so its
     # rank only counts for a row whose own name shares a word with the query or contains the query
     # ("valorstone" names "Valorstones").
@@ -414,21 +446,14 @@ def search_result_score_and_reasons(
     for part_score, part_reasons in (
         exact,
         prefix,
-        term_match_score(terms, haystacks=haystacks),
+        terms_part,
         type_hint_score(query, entity_type=entity_type),
         upstream_rank_score(rank_bonus if named else None, entity_type=entity_type),
     ):
         score += part_score
         reasons.extend(part_reasons)
-
-    unique_reasons: list[str] = []
-    seen: set[str] = set()
-    for reason in reasons:
-        if reason in seen:
-            continue
-        seen.add(reason)
-        unique_reasons.append(reason)
-    return score, unique_reasons
+    # Each part names its own reasons, so the list holds no repeats.
+    return score, reasons
 
 
 def split_choices(values: list[str] | None, *, allowed: Collection[str], label: str) -> tuple[str, ...]:

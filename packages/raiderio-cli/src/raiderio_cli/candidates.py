@@ -349,6 +349,15 @@ def probe_structured_candidates(
     return []
 
 
+def _candidate_url(kind: str, path: Any, *, region: str | None, realm: str | None, name: str) -> str | None:
+    if isinstance(path, str) and path.startswith("/"):
+        return f"https://raider.io{path}"
+    # Site search sends ``path`` for guild rows only; a character's page lives at a fixed layout.
+    if kind == "character" and region and realm and name:
+        return f"https://raider.io/characters/{region}/{realm}/{quote(name)}"
+    return None
+
+
 def search_result_candidate(row: dict[str, Any], *, query: str, type_hint: str | None) -> dict[str, Any] | None:
     kind = str(row.get("type") or "").strip().lower()
     if kind not in {"character", "guild"}:
@@ -369,10 +378,7 @@ def search_result_candidate(row: dict[str, Any], *, query: str, type_hint: str |
         realm=realm,
     )
     path = data.get("path")
-    url = f"https://raider.io{path}" if isinstance(path, str) and path.startswith("/") else None
-    # Site search sends ``path`` for guild rows only; a character's page lives at a fixed layout.
-    if url is None and kind == "character" and region and realm and name:
-        url = f"https://raider.io/characters/{region}/{realm}/{quote(name)}"
+    url = _candidate_url(kind, path, region=region, realm=realm, name=name)
     command = _follow_up_command(kind, region, realm, name)
     candidate = discovery_row(
         provider="raiderio",

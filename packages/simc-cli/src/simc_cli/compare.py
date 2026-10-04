@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,13 +14,11 @@ from simc_cli.build_input import BuildSpec, build_profile_text, has_talent_data
 from simc_cli.repo import RepoPaths
 from simc_cli.run import CommandResult, repo_git_status, run_profile
 
-# SimC fills collected_data.action_sequence for a single iteration (engine/action/action.cpp), so
-# action counts and the CPM derived from them describe one fight even when many were simulated.
-ACTION_SAMPLE_ITERATIONS = 1
 ACTION_SAMPLE_NOTE = (
-    "action_counts, action_cpm and top_action_deltas come from SimC's one recorded action sequence, "
-    "not from an iteration mean; dps and fight_length are means over all iterations, and dps_error is "
-    "SimC's confidence-interval half-width around the mean dps."
+    "action_counts are SimC's mean executes per iteration for each of the player's actions (players[0].stats, "
+    "procs and triggered spells included, pets excluded), and action_cpm divides them by the mean fight_length; "
+    "dps and fight_length are means over all iterations, and dps_error is SimC's confidence-interval "
+    "half-width around the mean dps."
 )
 
 DEFAULT_GEAR_DISCLOSURE = (
@@ -61,7 +58,7 @@ class VariantSummary:
     dps: float
     dps_error: float | None
     fight_length: float | None
-    action_counts: dict[str, int]
+    action_counts: dict[str, float]
     action_cpm: dict[str, float]
 
 
@@ -97,6 +94,12 @@ def validate_profile_file(paths: RepoPaths, profile_path: str | Path, *, simc_ar
     args = ["iterations=1", "threads=1", "target_error=0"] + list(simc_args or [])
     result = run_profile(paths, profile_path, simc_args=args)
     return ValidationResult(profile_path=Path(profile_path).expanduser().resolve(), result=result)
+
+
+def simc_warnings(stderr: str) -> list[str]:
+    """SimC's ``Warning:`` lines. Each names a profile or APL option SimC ignored, such as a mistyped
+    condition, while still exiting 0; no stock APL produces one."""
+    return [line.strip() for line in stderr.splitlines() if "Warning:" in line]
 
 
 def build_variant_profile(harness_path: str | Path, apl_path: str | Path, *, label: str, out_dir: str | Path | None = None) -> Path:
@@ -139,17 +142,21 @@ def compare_apl_variants(
     if validate_first:
         for label, _apl_path, profile_path in profiles:
             validation = validate_profile_file(paths, profile_path)
+            warnings = simc_warnings(validation.result.stderr)
             validations.append(
                 {
                     "label": label,
                     "profile_path": str(profile_path),
                     "returncode": validation.result.returncode,
                     **output_previews(validation.result.stdout, validation.result.stderr),
-                    "valid": validation.result.returncode == 0,
+                    "warnings": warnings,
+                    "valid": validation.result.returncode == 0 and not warnings,
                 }
             )
             if validation.result.returncode != 0:
                 raise RuntimeError(f"Validation failed for {label}: {validation.result.stderr.strip() or validation.result.stdout.strip()}")
+            if warnings:
+                raise RuntimeError(f"Validation failed for {label}: SimC ignored part of the profile: {' '.join(warnings)}")
 
     summaries = [
         _simulate_variant(paths, label=label, apl_path=apl_path, profile_path=profile_path,
@@ -188,7 +195,6 @@ def comparison_report(
         "threads": threads,
         "sampling": {
             "iterations_simulated": iterations,
-            "action_sequence_iterations": ACTION_SAMPLE_ITERATIONS,
             "note": ACTION_SAMPLE_NOTE,
         },
         "validations": validations,
@@ -326,7 +332,7 @@ def _extract_summary(*, label: str, apl_path: Path, profile_path: Path, json_pat
     options = sim.get("options") if isinstance(sim, dict) else None
     dps = metric_mean(collected.get("dps"))
     fight_length = metric_mean(collected.get("fight_length"))
-    action_counts = _action_counts(collected.get("action_sequence"))
+    action_counts = _action_counts(player.get("stats"))
     action_cpm = _action_cpm(action_counts, fight_length)
     return VariantSummary(
         label=label,
@@ -341,20 +347,24 @@ def _extract_summary(*, label: str, apl_path: Path, profile_path: Path, json_pat
     )
 
 
-def _action_counts(sequence: Any) -> dict[str, int]:
-    counts: Counter[str] = Counter()
-    if not isinstance(sequence, list):
+def _action_counts(stats: Any) -> dict[str, float]:
+    """Mean executes per iteration for each action, over every iteration SimC ran.
+
+    Not ``collected_data.action_sequence``: SimC records that for one iteration only, so counts read from
+    it describe a single fight of a length that differs from the mean ``fight_length``.
+    """
+    if not isinstance(stats, list):
         return {}
-    for row in sequence:
-        if not isinstance(row, dict):
-            continue
-        name = str(row.get("name") or row.get("spell_name") or "").strip().lower()
-        if name:
-            counts[name] += 1
-    return dict(counts)
+    counts: dict[str, float] = {}
+    for row in stats:
+        name = str(row.get("name") or "").strip().lower() if isinstance(row, dict) else ""
+        executes = metric_mean(row.get("num_executes")) if name else None
+        if executes:
+            counts[name] = round(executes, 3)
+    return counts
 
 
-def _action_cpm(action_counts: dict[str, int], fight_length: float | None) -> dict[str, float]:
+def _action_cpm(action_counts: dict[str, float], fight_length: float | None) -> dict[str, float]:
     if not fight_length or fight_length <= 0:
         return {}
     return {name: round(count * 60.0 / fight_length, 2) for name, count in action_counts.items()}
@@ -371,7 +381,6 @@ def _summary_payload(summary: VariantSummary) -> dict[str, Any]:
         "fight_length": round(summary.fight_length, 3) if summary.fight_length is not None else None,
         "action_counts": summary.action_counts,
         "action_cpm": summary.action_cpm,
-        "action_sequence_iterations": ACTION_SAMPLE_ITERATIONS,
     }
 
 
@@ -384,7 +393,6 @@ def _comparison_payload(base: VariantSummary, current: VariantSummary) -> dict[s
         "dps_delta": round(delta, 2),
         "percent_delta": round(percent, 2),
         "top_action_deltas": _top_action_deltas(base, current),
-        "action_sequence_iterations": ACTION_SAMPLE_ITERATIONS,
     }
 
 

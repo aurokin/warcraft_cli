@@ -68,6 +68,8 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     # Routing is live-confirmed everywhere except CN, whose hosts are unreachable from outside China.
     assert region["verification"]["retail"] == "live_confirmed"
     assert region["verification"]["classic"] == "live_confirmed"
+    assert region["verification"]["classic-era"] == "live_confirmed"
+    assert region["verification"]["classic-anniversary"] == "live_confirmed"
     assert region["verification"]["verified_regions"] == ["eu", "kr", "tw", "us"]
     assert region["verification"]["unverified_regions"] == ["cn"]
     assert "CN routing" in region["verification"]["note"]
@@ -80,6 +82,16 @@ def test_doctor_is_ready_once_client_credentials_are_configured(monkeypatch: pyt
     data = json.loads(runner.invoke(app, ["doctor"]).stdout)["data"]
     assert data["status"] == "ready"
     assert (data["capabilities"]["game_data"], data["capabilities"]["profile"]) == ("ready", "ready")
+
+
+def test_doctor_is_degraded_when_the_cache_config_is_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Every read fails with invalid_cache_config under this setting, so doctor must not say ready.
+    monkeypatch.setenv("BLIZZARD_CLIENT_ID", "test-id")
+    monkeypatch.setenv("BLIZZARD_CLIENT_SECRET", "test-secret")
+    monkeypatch.setenv("BLIZZARD_CACHE_BACKEND", "bogus")
+    data = json.loads(runner.invoke(app, ["doctor"]).stdout)["data"]
+    assert data["status"] == "degraded"
+    assert data["cache"]["error"]["code"] == "invalid_cache_config"
 
 
 def test_doctor_surfaces_configured_region(monkeypatch: pytest.MonkeyPatch) -> None:

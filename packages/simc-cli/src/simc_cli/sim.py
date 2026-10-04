@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import re
 import shutil
 import statistics
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from simc_cli.build_input import ACTOR_LINE_RE, DEFAULT_RACE_BY_CLASS
 from simc_cli.repo import RepoPaths
 from simc_cli.run import _run
+
+# `<time> Player '<actor>' performs Action '<action>' (<id>) ...` (`Enemy '<actor>'` for an enemy). Pets are
+# players too, named `<owner>_<pet>`.
+_ACTION_LOG_RE = re.compile(
+    r"^\S+ (?:Player|Enemy) '(?P<actor>[^']*)' (?P<verb>performs|schedules execute for) Action '(?P<action>[^']*)'"
+)
 
 
 @dataclass(slots=True)
@@ -22,6 +30,18 @@ class ActionHit:
     action: str
     scheduled_at: float | None
     performed_at: float | None
+    # The actor whose cast ``performed_at`` times: the player or one of its pets.
+    actor: str | None = None
+
+
+def primary_actor_name(profile_text: str) -> str | None:
+    """The name of the profile's first actor, the player ``simc sim`` reports as players[0]."""
+    for raw_line in profile_text.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        match = ACTOR_LINE_RE.match(line)
+        if match and match.group(1) in DEFAULT_RACE_BY_CLASS:
+            return match.group(2)
+    return None
 
 
 def run_first_casts(
@@ -39,6 +59,8 @@ def run_first_casts(
         raise FileNotFoundError(f"SimC binary not found: {simc}")
     if not profile_path.exists():
         raise FileNotFoundError(f"Profile not found: {profile_path}")
+    # A pet casting an action of the same name is not the player's first cast.
+    actor = primary_actor_name(profile_path.read_text())
 
     # The per-seed logs stay behind for the caller (each result carries its log_path); a failed run
     # leaves nothing worth keeping, so its directory is removed.
@@ -66,23 +88,30 @@ def run_first_casts(
             raise RuntimeError(message)
         log_path = temp_dir / f"seed_{seed}.log"
         log_path.write_text(result.stdout)
-        results.append(FirstCastResult(seed=seed, time=first_action_time(result.stdout, action), log_path=log_path))
+        results.append(FirstCastResult(seed=seed, time=first_action_time(result.stdout, action, actor), log_path=log_path))
     return results
 
 
-def first_action_time(log_text: str, action: str) -> float | None:
-    needle = f"Action '{action}'"
-    for line in log_text.splitlines():
-        if needle not in line:
+def first_action_time(log_text: str, action: str, actor: str | None) -> float | None:
+    """When ``actor`` first performed ``action``; any actor's cast counts only when ``actor`` is None."""
+    return _first_hits(log_text.splitlines(), action, actor).performed_at
+
+
+def _first_hits(lines: list[str], action: str, actor: str | None) -> ActionHit:
+    hit = ActionHit(action=action, scheduled_at=None, performed_at=None)
+    for line in lines:
+        match = _ACTION_LOG_RE.match(line)
+        if match is None or match.group("action") != action or actor not in (None, match.group("actor")):
             continue
-        if "performs Action" not in line:
-            continue
-        timestamp, _, _ = line.partition(" ")
-        try:
-            return float(timestamp)
-        except ValueError:
-            return None
-    return None
+        timestamp = _parse_timestamp(line)
+        if match.group("verb") == "performs":
+            if hit.performed_at is None:
+                hit.performed_at, hit.actor = timestamp, match.group("actor")
+        elif hit.scheduled_at is None:
+            hit.scheduled_at = timestamp
+        if hit.scheduled_at is not None and hit.performed_at is not None:
+            break
+    return hit
 
 
 def summarize_first_casts(results: list[FirstCastResult]) -> dict[str, float | int]:
@@ -98,25 +127,9 @@ def summarize_first_casts(results: list[FirstCastResult]) -> dict[str, float | i
     }
 
 
-def first_action_hits(log_path: str | Path, actions: list[str]) -> list[ActionHit]:
+def first_action_hits(log_path: str | Path, actions: list[str], actor: str | None = None) -> list[ActionHit]:
     lines = Path(log_path).read_text().splitlines()
-    hits: list[ActionHit] = []
-    for action in actions:
-        needle = f"Action '{action}'"
-        scheduled_at = None
-        performed_at = None
-        for line in lines:
-            if needle not in line:
-                continue
-            timestamp = _parse_timestamp(line)
-            if "schedules execute for Action" in line and scheduled_at is None:
-                scheduled_at = timestamp
-            if "performs Action" in line and performed_at is None:
-                performed_at = timestamp
-            if scheduled_at is not None and performed_at is not None:
-                break
-        hits.append(ActionHit(action=action, scheduled_at=scheduled_at, performed_at=performed_at))
-    return hits
+    return [_first_hits(lines, action, actor) for action in actions]
 
 
 def _parse_timestamp(line: str) -> float | None:

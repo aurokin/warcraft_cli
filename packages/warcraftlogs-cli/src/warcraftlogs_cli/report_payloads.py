@@ -104,4 +104,7 @@ def fight_payload(fight: dict[str, Any]) -> dict[str, Any]:
         "boss_percentage": fight.get("bossPercentage"),
         "average_item_level": fight.get("averageItemLevel"),
         "size": fight.get("size"),
+        # Mythic+ runs only: the key level and the in-game key timer, which differs from end_time - start_time.
+        "keystone_level": fight.get("keystoneLevel"),
+        "keystone_time_ms": fight.get("keystoneTime"),
     }

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from simc_cli.run import BinaryVersion, binary_matches_checkout
-from simc_cli.sim import first_action_hits, first_action_time, summarize_first_casts
+from simc_cli.sim import first_action_hits, first_action_time, primary_actor_name, summarize_first_casts
 
 
 def _version(revision: str | None) -> BinaryVersion:
@@ -28,35 +28,45 @@ def test_binary_matches_checkout_is_unknown_when_either_side_is_missing() -> Non
     assert binary_matches_checkout(_version("3377576e3b"), {"head": None}) is None
 
 
-def test_first_action_time_extracts_first_performed_timestamp() -> None:
-    log_text = "\n".join(
-        [
-            "0.100 schedules execute for Action 'rising_sun_kick'",
-            "0.250 performs Action 'rising_sun_kick'",
-            "0.400 performs Action 'blackout_kick'",
-        ]
-    )
-    assert first_action_time(log_text, "rising_sun_kick") == 0.25
-    assert first_action_time(log_text, "vivify") is None
+# Lines in SimC's `log=1` shape, from a real MID2 Beast Mastery run: the pets are actors named `<owner>_<pet>`.
+_BM_LOG = "\n".join(
+    [
+        "0.000 Player 'MID2_Hunter_Beast_Mastery' schedules execute for Action 'kill_command' (0)",
+        "1.871 Player 'MID2_Hunter_Beast_Mastery_duck' performs Action 'bloodshed' (321538) (82.98794782599431)",
+        "1.871 Player 'MID2_Hunter_Beast_Mastery_duck' Action 'bloodshed' (321538) hits Enemy 'Fluffy_Pillow' for 0.0",
+        "2.807 Player 'MID2_Hunter_Beast_Mastery' performs Action 'kill_command' (34026) (100)",
+        "5.610 Player 'MID2_Hunter_Beast_Mastery' performs Action 'kill_command' (34026) (100)",
+    ]
+)
 
 
-def test_first_action_hits_extracts_scheduled_and_performed_times(tmp_path: Path) -> None:
+def test_first_action_time_extracts_the_actors_first_performed_timestamp() -> None:
+    assert first_action_time(_BM_LOG, "kill_command", "MID2_Hunter_Beast_Mastery") == 2.807
+    assert first_action_time(_BM_LOG, "multi_shot", "MID2_Hunter_Beast_Mastery") is None
+
+
+def test_first_action_time_does_not_count_a_pet_cast_as_the_players() -> None:
+    """Only the duck casts bloodshed; the BM APL has no bloodshed line."""
+    assert first_action_time(_BM_LOG, "bloodshed", "MID2_Hunter_Beast_Mastery") is None
+    assert first_action_time(_BM_LOG, "bloodshed", None) == 1.871
+
+
+def test_primary_actor_name_is_the_first_actor_line() -> None:
+    profile = '# comment\nhunter="MID2_Hunter_Beast_Mastery"\nspec=beast_mastery\nwarrior="Second"\n'
+    assert primary_actor_name(profile) == "MID2_Hunter_Beast_Mastery"
+    assert primary_actor_name("iterations=10\n") is None
+
+
+def test_first_action_hits_extracts_scheduled_and_performed_times_and_the_actor(tmp_path: Path) -> None:
     log_path = tmp_path / "combat.log"
-    log_path.write_text(
-        "\n".join(
-            [
-                "0.100 schedules execute for Action 'rising_sun_kick'",
-                "0.250 performs Action 'rising_sun_kick'",
-                "0.500 performs Action 'blackout_kick'",
-            ]
-        )
-        + "\n"
-    )
-    hits = first_action_hits(log_path, ["rising_sun_kick", "blackout_kick"])
-    assert hits[0].scheduled_at == 0.1
-    assert hits[0].performed_at == 0.25
-    assert hits[1].scheduled_at is None
-    assert hits[1].performed_at == 0.5
+    log_path.write_text(_BM_LOG + "\n")
+
+    hits = first_action_hits(log_path, ["kill_command", "bloodshed"])
+    assert (hits[0].scheduled_at, hits[0].performed_at, hits[0].actor) == (0.0, 2.807, "MID2_Hunter_Beast_Mastery")
+    assert (hits[1].scheduled_at, hits[1].performed_at, hits[1].actor) == (None, 1.871, "MID2_Hunter_Beast_Mastery_duck")
+
+    filtered = first_action_hits(log_path, ["bloodshed"], "MID2_Hunter_Beast_Mastery")
+    assert (filtered[0].performed_at, filtered[0].actor) == (None, None)
 
 
 def test_summarize_first_casts_handles_missing_times(tmp_path: Path) -> None:

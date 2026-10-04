@@ -63,6 +63,13 @@ def game_version(options: dict[str, Any]) -> str | None:
     return wow_version if isinstance(wow_version, str) else None
 
 
+_PROFILESET_NUMBERS = ("mean", "min", "max", "median", "stddev", "mean_stddev", "mean_error")
+
+
+def _number(value: Any) -> float | None:
+    return float(value) if isinstance(value, (int, float)) else None
+
+
 def profileset_result_rows(profilesets: Any) -> list[dict[str, Any]]:
     """The ``sim.profilesets`` result rows, best mean first."""
     if isinstance(profilesets, dict):
@@ -86,15 +93,13 @@ def profileset_result_rows(profilesets: Any) -> list[dict[str, Any]]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        mean = row.get("mean")
         parsed.append(
             {
                 "name": str(row.get("name")) if row.get("name") is not None else None,
-                "mean": float(mean) if isinstance(mean, (int, float)) else None,
-                "min": float(row["min"]) if isinstance(row.get("min"), (int, float)) else None,
-                "max": float(row["max"]) if isinstance(row.get("max"), (int, float)) else None,
-                "median": float(row["median"]) if isinstance(row.get("median"), (int, float)) else None,
-                "stddev": float(row["stddev"]) if isinstance(row.get("stddev"), (int, float)) else None,
+                # mean_error is SimC's confidence-interval half-width around the mean (mean_stddev times
+                # the confidence estimator), the noise a ranking between two rows has to beat.
+                **{key: _number(row.get(key)) for key in _PROFILESET_NUMBERS},
+                "iterations": row["iterations"] if isinstance(row.get("iterations"), int) else None,
             }
         )
     parsed.sort(key=lambda item: (item.get("mean") is None, -(item.get("mean") or 0.0), item.get("name") or ""))

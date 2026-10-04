@@ -38,7 +38,9 @@
 - spec APLs live in the checkout's `ActionPriorityLists/default/` (`monk_brewmaster.simc`, `mage_frost.simc`); a bare file name like `monk_brewmaster.simc` reads the file there
 - a build read against another spec's APL (`--apl-path monk_brewmaster.simc` for a mistweaver build, or a Frost talent-calc URL with `mage_fire.simc`) fails with `invalid_query` instead of describing the wrong rotation. The build's spec is the one its hash decodes as, not a talent-calc URL path the hash contradicts
 - a talent string SimC rejects fails with `invalid_build` and SimC's own error line; it is never reported as a partial build. The envelope names the binary that rejected it under `error.details.simc_binary`, and when that binary is older than the checkout the message says so and asks for a rebuild; `simc doctor` reports the same mismatch under `repo.build_issues`
-- decoded builds name the active hero tree under `hero_tree`; talents from the other hero tree are listed under `inactive_hero_talents` and are not part of the build
+- decoded builds name the active hero tree under `hero_tree`; talents from the other hero tree are listed under `inactive_hero_talents` and are not part of the build. A hash with no hero tree selected at all has every hero talent there
+- a split option combined with a hash (`--talents <hash> --class-talents shimmer:0`) overwrites that talent's rank as SimC does, and a rank above the maximum is clamped; a profile with several actors is read for its first actor only, named in `source_notes`
+- a hash that decodes as no spec although its header names one fails `invalid_build` with SimC's reason: the export predates the current talent tree, so ask for a fresh export instead of a class and spec
 - a tiered node comes back as one row per entry, each with its own rank; a row with `rank_known: false` is taken at a rank the decode could not recover, so do not quote a rank for it
 - an empty value for a build-input option is a usage error, not the same as omitting the option
 - `--enable` / `--disable` take a talent's display name or its SimC token; a value that names no talent of the actor's class fails with `unknown_talent` (exit 2) rather than being ignored
@@ -56,7 +58,7 @@
 - `apl-branch-compare` reports a rotation switch through `call_action_list` as well as `run_action_list`: read `dispatch_changed` and `decision_changes`
 - use `opener` for a static early-action preview, then escalate to `first-cast` if runtime confirmation matters
 - use `analysis-packet` when you want an agent-facing summary instead of assembling outputs manually
-- use `first-cast` and `log-actions` when static analysis is not enough and you need runtime confirmation
+- use `first-cast` and `log-actions` when static analysis is not enough and you need runtime confirmation. `first-cast` times only the profile's first actor, never a pet's cast of the same name; `log-actions` names the `actor` of each hit (a pet reads `<player>_<pet>`), and `--actor NAME` keeps only that actor's lines
 - use `sim` as the default consumer run path:
   - `simc sim ./profile.simc`
   - `cat ./profile.simc | simc sim -`
@@ -64,17 +66,21 @@
   - a profile with several actors reports the rest under `other_actors` (`actor_count` is the total), and a profile with profilesets (Top Gear / Droptimizer input) reports their ranked rows under `profilesets`
   - for stat weights, add `calculate_scale_factors=1` (and optionally `scale_only=intellect,crit_rating,haste_rating,mastery_rating,versatility_rating`) to the profile; `scale_factors.factors` holds DPS per point of each stat and `scale_factors.deltas` the amount each was measured with. A stat outside `scale_only` reads 0, meaning not measured. Without the line `scale_factors` is null
   - `run_settings.iterations_completed` is the sampled count, one less than requested because SimC discards the first iteration
+  - the preset (1000 or 5000 iterations, `max_time=300`) fills only settings the profile leaves unset: a Raidbots input with its own `iterations`/`target_error`/`max_time` runs as written. `--iterations` and `--max-time` always win; `disclosures` says which profile settings were kept or replaced
+  - each `profilesets` row carries SimC's `mean_error`; two rows closer than that are a tie, so do not rank them
 - `simc run` returns SimC's headline lines under `result_lines`: each `Player:` / `Target:` header followed by its `DPS=` / `DTPS=` lines, so a `DTPS=` under `Target:` is the target's; its output previews are the last 20 lines
 - `sim` and `run` fail with `missing_binary` when the checkout has no built binary; run `simc build`
 - `sim` and `run` fail `invalid_query` (exit 2) on a profile SimC finds nothing to sim in (an empty file or no actor line) and `not_found` (exit 4) on a path that is not a file
 - `compare-apls` labels must be unique plain file names (they name the files each variant writes), otherwise it fails with `invalid_query`
-- `compare-apls` ranks variants on mean DPS, but `action_counts`, `action_cpm`, and `top_action_deltas` come from the one iteration SimC records an action sequence for; the payload states this under `sampling`, so present cast-rate differences as a single sampled fight, not as an average
+- `compare-apls` ranks variants on mean DPS; `action_counts` are SimC's mean executes per iteration of each player action (procs and triggered spells included, pets not) and `action_cpm` divides them by the mean fight length, so `top_action_deltas` are averages over every iteration
+- `validate-apl` and the `compare-apls` validations list SimC's `Warning:` lines under `warnings`; a warning means SimC ignored part of the APL (a mistyped condition makes the action unconditional), so `valid` is false and `compare-apls` stops. A missing harness or APL fails `not_found` (exit 4)
+- `spec-files` matches every word of the query against file names, so `simc spec-files "frost mage"` finds `mage_frost.simc`
 - `spec-files`, `find-action`, and `trace-action` need ripgrep; without it they fail with `missing_dependency` and `simc doctor` marks them `unavailable`. Pointed at a directory that is not a SimulationCraft checkout they fail with `not_found` (exit 4) rather than reporting zero hits
 - `find-action` finds a spell in the spell dumps by token (`rising_sun_kick`) or display name (`"Rising Sun Kick"`); `--class` (any spelling, including `dk` / `dh`) narrows the class-module and spell-dump hits to that class (the APL buckets still search every class) and fails with `invalid_query` for an unknown class
 - use `compare-builds` to diff talent selections between two or more builds by tree; this is the right tool when the user asks "what changed between these two builds?"
   - `summary.failed` counts the `--other` builds SimC rejected; each keeps its `error` in `comparisons`, so say which comparisons are missing. When none decode the command fails instead
 - use `modify-build` to produce a new talent export string from an existing build:
-  - `--swap-class-tree-from` / `--swap-spec-tree-from` / `--swap-hero-tree-from` replace an entire tree from another build
+  - `--swap-class-tree-from` / `--swap-spec-tree-from` / `--swap-hero-tree-from` replace an entire tree from another build of the same spec; another spec's build fails with `invalid_query`
   - `--add name:rank` and `--remove name` adjust individual talents in any tree (names follow SimC's tokens, so "Anti-Magic Zone" works as written); a name or entry id must be a talent the build's spec can take, otherwise it fails with `unknown_talent` (exit 2). A hero talent counts when the spec can select its hero tree. Healer builds can be modified too
   - at least one `--swap-*-tree-from`, `--add` or `--remove` is required; without one the command fails with `invalid_argument` (exit 2)
   - the output includes the new WoW export string, a Wowhead URL, a diff from the base build, and `verified: true`, which means every requested edit is in the export and nothing else changed in the active trees; it does not mean the game will import it

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from dataclasses import dataclass
@@ -133,16 +134,25 @@ def sync_repo(paths: RepoPaths, *, allow_dirty: bool) -> CommandResult | None:
     return _run(["git", "-C", str(paths.root), "pull", "--ff-only"], cwd=paths.root)
 
 
-def build_repo(paths: RepoPaths, *, target: str | None) -> CommandResult:
+# SimC's CMake sets no build type (an unoptimized binary) and defaults BUILD_GUI ON, which needs Qt.
+FRESH_CONFIGURE_ARGS = ("-DCMAKE_BUILD_TYPE=Release", "-DBUILD_GUI=OFF")
+
+
+def build_repo(paths: RepoPaths, *, target: str) -> CommandResult:
     """Configure, then build. SimC bakes its git revision in at configure time, so building alone
-    after a ``sync`` leaves a binary that ``doctor`` reports as built from the old commit."""
-    configure = _run(["cmake", "-S", str(paths.root), "-B", str(paths.build_dir)], cwd=paths.root)
-    if configure.returncode != 0:
-        return configure
-    command = ["cmake", "--build", str(paths.build_dir)]
-    if target:
-        command.extend(["--target", target])
-    return _run(command, cwd=paths.root)
+    after a ``sync`` leaves a binary that ``doctor`` reports as built from the old commit.
+
+    A first configure asks for an optimized, GUI-less build; once a CMake cache exists it is left
+    alone, so a build type or GUI choice made by hand survives.
+    """
+    configure = ["cmake", "-S", str(paths.root), "-B", str(paths.build_dir)]
+    if not (paths.build_dir / "CMakeCache.txt").exists():
+        configure.extend(FRESH_CONFIGURE_ARGS)
+    configured = _run(configure, cwd=paths.root)
+    if configured.returncode != 0:
+        return configured
+    jobs = str(os.cpu_count() or 1)
+    return _run(["cmake", "--build", str(paths.build_dir), "--parallel", jobs, "--target", target], cwd=paths.root)
 
 
 def run_profile(paths: RepoPaths, profile_path: str | Path, *, simc_args: list[str]) -> CommandResult:

@@ -162,6 +162,16 @@ def test_parse_report_multi_profile_ranks_results_and_omits_metrics() -> None:
     assert [row["name"] for row in profilesets["results"]] == ["Trinket B", "Trinket A", "Trinket C"]
 
 
+def test_parse_report_multi_profile_rows_carry_simcs_mean_error_and_iterations() -> None:
+    """Without the error a Top Gear ranking between two close rows could not be judged against noise."""
+    report = json.loads(json.dumps(MULTI_PROFILE_REPORT))
+    report["sim"]["profilesets"]["results"][0].update({"mean_stddev": 900.0, "mean_error": 1764.0, "iterations": 9999})
+
+    row = next(row for row in parse_report(report, report_id="def")["profilesets"]["results"] if row["name"] == "Trinket A")
+
+    assert (row["mean_error"], row["mean_stddev"], row["iterations"]) == (1764.0, 900.0, 9999)
+
+
 def test_parse_report_empty_profilesets_stays_multi_profile() -> None:
     # A multi-profile run that produced no rows must NOT be misread as a quick sim off players[0].
     report = {

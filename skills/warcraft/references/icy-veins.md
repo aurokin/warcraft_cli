@@ -33,6 +33,7 @@
 - transmog set and model pages only rank for a query that says `transmog`
 - `build_references` holds explicit build evidence from the page: embedded Wowhead talent-calc links (`reference_type: wowhead_talent_calc_url`) and published WoW loadout import strings (`reference_type: wow_talent_export`, where `url` is the import string). Guide slugs and titles are never treated as build evidence
 - current spec builds/talents pages publish import strings, so `guide-full` on a spec guide is what feeds `guide-builds-simc`
+- PvP talents-and-builds pages publish no import strings. Each distinct build there is an `icy_veins_talent_calc_url` row: `label` is the build tab (tabs that share one build are joined with " / "), `build_code` is Icy Veins' own calculator hash (PvP talents included), and `build_identity` names the class and spec. simc cannot decode that hash, so `guide-builds-simc` excludes these rows. Open the `url` in the Icy Veins calculator to copy the import string
 - `wowhead_talent_calc_url` rows always decode unaided, because the URL path names the class and spec
 - an import string names neither, so SimC identifies it by probing every spec it knows: builds of every role, healers included, decode without `--actor-class` or `--spec`
 - additive `analysis_surfaces` highlight comparison-relevant guide topics without replacing raw guide content

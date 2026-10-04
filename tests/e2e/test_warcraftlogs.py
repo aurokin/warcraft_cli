@@ -87,6 +87,8 @@ WIDE_COHORT_ZONES = 3
 # The widest wall-clock drift two logs of one pull may show before they are different pulls. Stated
 # here rather than imported so the journey asserts the contract instead of the implementation.
 DUPLICATE_PULL_TOLERANCE_MS = 5_000
+# Two logs listing the same players may drift this far and still be one pull.
+ROSTER_MATCH_TOLERANCE_MS = 30_000
 
 
 @dataclass(frozen=True)
@@ -1052,7 +1054,7 @@ def test_report_encounter_casts_and_buffs_summarize_real_events(require):
     row = buff_summary["preview"][0]
     assert row["aura"]["name"] and isinstance(row["aura"]["game_id"], int), buffs.describe()
     assert row["aura"]["identity_contract"]["source"]["provider"] == "warcraftlogs", buffs.describe()
-    assert row["source"]["identity_contract"]["source"]["provider"] == "warcraftlogs", buffs.describe()
+    assert row["aura_holder"]["identity_contract"]["source"]["provider"] == "warcraftlogs", buffs.describe()
     assert {"reported_total_uptime", "reported_total_uses", "reported_bands"} <= set(row), buffs.describe()
 
 
@@ -1080,7 +1082,8 @@ def test_report_encounter_aura_summary_and_compare_use_explicit_windows(require)
     rows = summary.data["aura_summary"]["rows"]
     assert summary.data["aura_summary"]["entry_count"] == len(rows), summary.describe()
     assert rows, "the discovered aura must have at least one holder in its own fight"
-    assert rows[0]["source"]["name"], summary.describe()
+    assert summary.data["aura_summary"]["row_actor"] == "aura_holder", summary.describe()
+    assert rows[0]["aura_holder"]["name"], summary.describe()
     # An ignored window would give both halves the whole fight's table, and then every comparison
     # below would agree with itself.
     assert summary.data["aura_summary"] != second_half.data["aura_summary"], second_half.describe()
@@ -1111,17 +1114,17 @@ def test_report_encounter_aura_summary_and_compare_use_explicit_windows(require)
 
     # The deltas are right minus left of the two single-window summaries, per holder (a holder missing
     # from one window has no delta). Every delta once came back null on real data.
-    def uptime_by_source(result: Result) -> dict[Any, Any]:
-        return {row["source"]["id"]: row["reported_total_uptime"] for row in result.data["aura_summary"]["rows"]}
+    def uptime_by_holder(result: Result) -> dict[Any, Any]:
+        return {row["aura_holder"]["id"]: row["reported_total_uptime"] for row in result.data["aura_summary"]["rows"]}
 
-    left_uptime, right_uptime = uptime_by_source(summary), uptime_by_source(second_half)
+    left_uptime, right_uptime = uptime_by_holder(summary), uptime_by_holder(second_half)
     assert set(left_uptime) & set(right_uptime), f"no holder in both windows: {left_uptime} vs {right_uptime}"
     compared = compare.data["comparison"]["rows"]
-    assert {row["source"]["id"] for row in compared} == set(left_uptime) | set(right_uptime), compare.describe()
+    assert {row["aura_holder"]["id"] for row in compared} == set(left_uptime) | set(right_uptime), compare.describe()
     for row in compared:
-        source = row["source"]["id"]
-        both = source in left_uptime and source in right_uptime
-        expected = right_uptime[source] - left_uptime[source] if both else None
+        holder = row["aura_holder"]["id"]
+        both = holder in left_uptime and holder in right_uptime
+        expected = right_uptime[holder] - left_uptime[holder] if both else None
         assert row["reported_total_uptime_delta"] == expected, compare.describe()
     deltas = [abs(row["reported_total_uptime_delta"]) for row in compared if row["reported_total_uptime_delta"] is not None]
     assert deltas == sorted(deltas, reverse=True), compare.describe()
@@ -1132,6 +1135,62 @@ def test_report_encounter_aura_summary_and_compare_use_explicit_windows(require)
         "--window-start-ms", str(duration + 1000), expect=EXIT_USAGE, error_code="invalid_query",
     )
     assert "--window-start-ms" in past_end.payload["error"]["message"], past_end.describe()
+
+    # A window that runs past the pull is clamped to it and says so, so uptime is read per real span.
+    overrun = run(
+        "warcraftlogs", "report-encounter-aura-summary", found.url, "--ability-id", str(ability_id),
+        "--window-start-ms", str(half), "--window-end-ms", str(duration + 60_000),
+    )
+    query = overrun.payload["query"]
+    assert query["end_time"] == found.fight["end_time"], overrun.describe()
+    assert (query["window_clamped"], query["effective_window_duration_ms"]) == (True, duration - half), overrun.describe()
+    assert any("clamped" in note for note in overrun.data["notes"]), overrun.describe()
+    assert overrun.data["aura_summary"] == second_half.data["aura_summary"], overrun.describe()
+
+
+def test_aura_rows_name_the_holder_and_the_caster_the_buff_events_show(require):
+    """An external aura's rows match its own applybuff events: holders are targets, appliers are sources.
+
+    The labels were once swapped: `report-encounter-aura-summary` called every Power Infusion
+    recipient its `source`. The aura is discovered from the anchor kill's own buff events, picking
+    one applied to someone who never applied it, so swapped labels cannot pass.
+    """
+    require("warcraftlogs")
+    found = anchor()
+    page = run("warcraftlogs", "report-events", found.code, "--fight-id", str(found.fight_id), "--data-type", "buffs", "--limit", "10000")
+    applies: dict[int, list[dict[str, Any]]] = {}
+    for event in page.data["events"] or []:
+        if event.get("type") == "applybuff" and isinstance(event.get("abilityGameID"), int):
+            applies.setdefault(int(event["abilityGameID"]), []).append(event)
+    external = next(
+        (
+            ability_id for ability_id, events in sorted(applies.items(), key=lambda item: -len(item[1]))
+            if {e.get("targetID") for e in events} - {e.get("sourceID") for e in events}
+        ),
+        None,
+    )
+    if external is None:
+        raise JourneyFailure(f"no aura in the anchor kill was applied to a player who never applied it\n{page.describe()}")
+
+    events = run(
+        "warcraftlogs", "report-events", found.code, "--fight-id", str(found.fight_id), "--data-type", "buffs",
+        "--ability-id", str(external), "--limit", "10000",
+    )
+    assert events.data["next_page_timestamp"] is None, events.describe()
+    applied = [event for event in events.data["events"] if event.get("type") == "applybuff"]
+    casters, holders = {e["sourceID"] for e in applied}, {e["targetID"] for e in applied}
+
+    by_holder = run("warcraftlogs", "report-encounter-aura-summary", found.url, "--ability-id", str(external))
+    holder_ids = {row["aura_holder"]["id"] for row in by_holder.data["aura_summary"]["rows"]}
+    assert holder_ids and holder_ids <= holders, (holder_ids, holders, by_holder.describe())
+    assert holder_ids - casters, f"aura {external}: every holder row is also a caster {holder_ids} vs {casters}"
+
+    by_caster = run("warcraftlogs", "report-encounter-buffs", found.url, "--ability-id", str(external), "--view-by", "target")
+    buffs = by_caster.data["buffs"]
+    assert buffs["row_actor"] == "applied_by", by_caster.describe()
+    caster_ids = {row["applied_by"]["id"] for row in buffs["preview"]}
+    assert caster_ids and caster_ids <= casters, (caster_ids, casters, by_caster.describe())
+    assert all(row["aura"]["game_id"] == external for row in buffs["preview"]), by_caster.describe()
 
 
 def test_report_encounter_damage_surfaces_return_typed_and_raw_views(require):
@@ -1217,6 +1276,13 @@ def test_raw_report_surfaces_return_scoped_slices(require):
     assert events.data["next_page_timestamp"] == wider.data["events"][len(capped)]["timestamp"], events.describe()
     assert {row["type"] for row in events.data["events"]} <= {"cast", "begincast"}, events.describe()
     assert {row["fight"] for row in events.data["events"]} == {found.fight_id}, events.describe()
+    # The next page, fetched as the note says (--start-time alone), continues the same stream.
+    next_page = run(
+        "warcraftlogs", "report-events", found.code, "--fight-id", fight, "--data-type", "casts", "--limit", "5",
+        "--start-time", str(int(events.data["next_page_timestamp"])),
+    )
+    assert next_page.payload["query"]["end_time"] == found.fight["end_time"], next_page.describe()
+    assert next_page.data["events"][0] == wider.data["events"][len(capped)], next_page.describe()
     # A report URL's #fight=N scopes the slice like --fight-id.
     by_url = run("warcraftlogs", "report-events", found.url, "--data-type", "casts", "--limit", "5")
     assert by_url.data["events"] == capped, by_url.describe()
@@ -1595,9 +1661,18 @@ def _assert_same_pull(kept: dict[str, Any], folded: dict[str, Any]) -> None:
     drift = max(
         abs(kept_window.start_ms - folded_window.start_ms), abs(kept_window.end_ms - folded_window.end_ms)
     )
-    assert drift <= DUPLICATE_PULL_TOLERANCE_MS, (
+    assert drift <= ROSTER_MATCH_TOLERANCE_MS, (
         f"collapsed two pulls {drift} ms apart: {kept_window} vs {folded_window}"
     )
+    # Past the guild timing bound only the same players make it one pull.
+    if drift > DUPLICATE_PULL_TOLERANCE_MS:
+        def players(code: str, fight_id: int) -> set[str]:
+            return {f"{row['name']}-{row['server']}" for row in _fight_roster(code, fight_id)}
+
+        kept_roster = players(str(kept["report"]["code"]), int(kept["fight"]["id"]))
+        assert kept_roster == players(str(folded["report_code"]), int(folded["fight_id"])), (
+            f"collapsed two pulls {drift} ms apart with different rosters: {kept_window} vs {folded_window}"
+        )
 
 
 def test_spec_kill_samples_and_boss_spec_usage_describe_the_cohort(require):

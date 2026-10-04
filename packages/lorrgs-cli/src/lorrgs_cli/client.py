@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, CachedHttpClient, request_with_retries
 from warcraft_core.paths import provider_cache_root
 
 PROVIDER_NAME = "lorrgs"
@@ -72,7 +72,7 @@ def _zone_segment(zone_id: float) -> str:
     return f"{zone_id:g}"
 
 
-class LorrgsClient:
+class LorrgsClient(CachedHttpClient):
     def __init__(
         self,
         *,
@@ -82,27 +82,10 @@ class LorrgsClient:
         settings, static_ttl, ranking_ttl, report_ttl = load_lorrgs_cache_settings_from_env()
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
-        self._http_client: httpx.Client | None = None
         self._cache_store = build_cache_store(settings) if settings.enabled else None
         self._static_ttl = static_ttl
         self._ranking_ttl = ranking_ttl
         self._report_ttl = report_ttl
-
-    def close(self) -> None:
-        if self._http_client is not None:
-            self._http_client.close()
-            self._http_client = None
-
-    def __enter__(self) -> LorrgsClient:
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        self.close()
-
-    def _client(self) -> httpx.Client:
-        if self._http_client is None:
-            self._http_client = build_client(timeout=self._timeout_seconds)
-        return self._http_client
 
     @staticmethod
     def _decode_json(response: httpx.Response) -> Any:

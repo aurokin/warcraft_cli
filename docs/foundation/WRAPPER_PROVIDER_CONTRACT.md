@@ -323,6 +323,15 @@ Search result ordering rules:
   30 before prefix, term and popularity credit, a Raider.IO exact structured match adds 45 to its
   base of 12, and the Warcraft Wiki adds 50 for an exact title. A provider whose whole answer is a
   two-term text match scoring 3 therefore normalizes to `round(100 * 3 / 40) = 8`, not to 100
+- a row whose provider says it does not cover the query is not rescaled up at all: its divisor floor
+  is `UNCOVERED_ROW_SCORE_SCALE` (`100`), and `wrapper_ranking.covers_query` is `false` with an
+  `uncovered_query:scale_floor:100` reason. Two providers say so: a Lorrgs row with non-empty
+  `ranking.unmatched_terms`, and a Warcraft Wiki row whose `match_reasons` hold none of the wiki's
+  query-coverage reasons and no `query_contains_title` (a snippet, upstream-position or family match
+  only). A live corpus (2026-10-03) moved Icy Veins' `PvP DPS Tier List` above the wiki's `Events`
+  for `pvp tier list`, and the wiki's `Mimiron's Head` and `Captain Fareeya` above Lorrgs comp
+  rankings that matched one word; exact and title matches (`un'goro crater`, `class hall`,
+  `C_Spell.GetSpellInfo`, `thunderfury`, `druid`) kept their order
 - changing the floor or the per-provider scales is a contract change: record the calibration
   evidence here, because a floor set above a provider's real ceiling would silently demote that
   provider in every merged list

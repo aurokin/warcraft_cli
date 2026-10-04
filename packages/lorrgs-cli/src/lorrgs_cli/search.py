@@ -15,6 +15,10 @@ from lorrgs_cli.client import DIFFICULTIES as RANKED_DIFFICULTIES
 from lorrgs_cli.client import SITE_HOST, LorrgsClient
 
 WORD_PATTERN = re.compile(r"[a-z0-9]+")
+# A possessive is dropped and other apostrophes join their word ("King's" -> "king", "L'ura" -> "lura"),
+# so no lone "s" is left to match every other possessive name.
+POSSESSIVE_PATTERN = re.compile(r"['\u2019]s\b")
+APOSTROPHE_PATTERN = re.compile(r"['\u2019]")
 STOP_TERMS = frozenset(
     {
         "lorrgs",
@@ -266,7 +270,8 @@ def _normalize_query(query: str) -> str:
 
 
 def _words(value: Any) -> list[str]:
-    return WORD_PATTERN.findall(str(value or "").lower())
+    text = POSSESSIVE_PATTERN.sub("", str(value or "").lower())
+    return WORD_PATTERN.findall(APOSTROPHE_PATTERN.sub("", text))
 
 
 def _query_terms(query: str) -> set[str]:
@@ -409,13 +414,15 @@ def _free_text_ranking(matches: tuple[RowMatch, ...], known_terms: frozenset[str
 
     Coverage dominates the score so that a candidate always outranks the narrower ones built from the
     same rows, and `unmatched_terms` names what it had to ignore, which is what stops `resolve` from
-    answering a question the caller did not ask.
+    answering a question the caller did not ask. The score is all coverage, with no base: one word of
+    a four-word question ("where is Captain Fareeya" -> Sikran, Captain of the Sureki) has to stay
+    below the wrapper's score floor rather than be rescaled to a full match.
     """
     covered = frozenset[str]().union(*(match.terms for match in matches))
     level = min(match.level for match in matches)
     coverage = len(covered) / len(known_terms) if known_terms else 0.0
     return {
-        "score": 24 + round(70 * coverage) + level,
+        "score": round(94 * coverage) + level,
         "match_level": MATCH_LEVEL_NAMES[level],
         "matched_terms": sorted(covered),
         "unmatched_terms": sorted(known_terms - covered),

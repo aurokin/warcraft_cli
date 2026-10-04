@@ -468,11 +468,16 @@ def extract_gatherer_entities(html_text: str, *, source_url: str) -> list[dict[s
     return records
 
 
+LISTVIEW_ROW_FIELDS = ("count", "outof", "cost", "stock")
+
+
 def extract_listview_entities(html_text: str, *, source_url: str) -> list[dict[str, Any]]:
     """Entities an entity page lists in its relation tabs (a zone's NPCs and quests, a faction's members).
 
     Only tabs whose template is an entity type the CLI reads count (guide tabs included);
     screenshots, sounds and models do not. A tab whose data is not a JSON array is skipped.
+    A row's drop sample (``count`` of ``outof`` kills or opens) and vendor ``cost`` and ``stock``
+    are kept as Wowhead sends them in ``listview_data``.
     """
     records: list[dict[str, Any]] = []
     for match in LISTVIEW_RE.finditer(html_text):
@@ -490,18 +495,20 @@ def extract_listview_entities(html_text: str, *, source_url: str) -> list[dict[s
             if not isinstance(entity_id, int) or isinstance(entity_id, bool):
                 continue
             url = _entity_url_for_source_context(source_url=source_url, entity_type=entity_type, entity_id=entity_id)
-            records.append(
-                {
-                    "entity_type": entity_type,
-                    "id": entity_id,
-                    "name": row.get("name") or row.get("displayName"),
-                    "url": url,
-                    "citation_url": url,
-                    "source_url": source_url,
-                    "source_kind": "listview",
-                    "listview": listview_id.group("value") if listview_id else None,
-                }
-            )
+            record = {
+                "entity_type": entity_type,
+                "id": entity_id,
+                "name": row.get("name") or row.get("displayName"),
+                "url": url,
+                "citation_url": url,
+                "source_url": source_url,
+                "source_kind": "listview",
+                "listview": listview_id.group("value") if listview_id else None,
+            }
+            row_data = {field: row[field] for field in LISTVIEW_ROW_FIELDS if row.get(field) is not None}
+            if row_data:
+                record["listview_data"] = row_data
+            records.append(record)
     return records
 
 
@@ -641,3 +648,138 @@ def _first_group(pattern: re.Pattern[str], text: str) -> str | None:
     if match is None:
         return None
     return match.group(1)
+
+
+QUICK_FACTS_RE = re.compile(r"""<th>Quick Facts</th>.*?WH\.markup\.printHtml\("(?P<markup>(?:[^"\\]|\\.)*)\"""", re.DOTALL)
+MARKUP_LI_RE = re.compile(r"""\[li\b[^\]]*\](?P<body>.*?)\[/li\]""", re.DOTALL)
+MARKUP_TOOLTIP_RE = re.compile(r"""\[tooltip\b[^\]]*\].*?\[/tooltip\]""", re.DOTALL)
+# `Start: [url=/npc=37120/...]Name[/url]`, or a bare token for an item-started quest: `Start: [item=12780]`.
+QUICK_FACT_LINK_RE = re.compile(
+    r"""\b(?P<role>Start|End):\s*(?:\[url=(?P<href>[^\]]+)\](?P<name>.*?)\[/url\]|\[(?P<etype>[a-z-]+)=(?P<eid>\d+)[^\]]*\])"""
+)
+# `React: [color=q10]A[/color] [color=q2]H[/color]`: the colour is how each faction's players are treated.
+REACT_SIDE_RE = re.compile(r"""\[color=(?P<color>q\d*)\](?P<side>[AH])\[/color\]""")
+REACT_COLORS = {"q10": "hostile", "q2": "friendly", "q": "neutral"}
+REACT_SIDES = {"A": "Alliance", "H": "Horde"}
+SERIES_TABLE_RE = re.compile(r"""<table class="series">(?P<body>.*?)</table>""", re.DOTALL)
+SERIES_ROW_RE = re.compile(r"""<tr><th>(?P<position>\d+)\.</th><td>(?P<body>.*?)</td></tr>""", re.DOTALL)
+SERIES_STEP_RE = re.compile(r"""<a href="(?P<href>[^"]+)">(?P<link>.*?)</a>|<b>(?P<current>.*?)</b>""", re.DOTALL)
+LOCATIONS_SPAN_RE = re.compile(r"""<span id="locations">(?P<body>.*?)</span>""", re.DOTALL)
+LOCATION_LINK_RE = re.compile(r"""zone:\s*(?P<zone>\d+),.*?>(?P<name>[^<]+)</a>""", re.DOTALL)
+
+
+def _linked_entity(href: str, name: str) -> dict[str, Any] | None:
+    parsed = _parse_entity_ref(href)
+    if parsed is None:
+        return None
+    entity_type, entity_id, url = parsed
+    return {"type": entity_type, "id": entity_id, "name": clean_markup_text(name) or None, "url": url}
+
+
+def _quick_fact_text(body: str) -> str:
+    """One Quick Facts line as text; an icon-only line ("Icon: [icondb=...]") reads as empty."""
+    if "[icondb=" in body:
+        return ""
+    sides = REACT_SIDE_RE.findall(body)
+    if sides:
+        return "React: " + ", ".join(f"{REACT_SIDES[side]} {REACT_COLORS.get(color, color)}" for color, side in sides)
+    # `[class=1]` and `[race=30]` render as names on the site; keep them as "class 1".
+    text = MARKUP_ENTITY_TOKEN_RE.sub(
+        lambda token: token["eid"] if token["etype"] == "achievementpoints" else f"{token['etype']} {token['eid']} ", body
+    )
+    return clean_markup_text(text).replace(" ,", ",")
+
+
+def _quick_facts(html_text: str) -> dict[str, Any]:
+    """The infobox's Quick Facts lines as text, plus a quest's start and end entities."""
+    match = QUICK_FACTS_RE.search(html_text)
+    if match is None:
+        return {}
+    try:
+        markup = json.loads(f'"{match.group("markup")}"')
+    except json.JSONDecodeError:
+        return {}
+    facts: dict[str, Any] = {"quick_facts": []}
+    for item in MARKUP_LI_RE.finditer(markup):
+        body = re.sub(r"""\[img\b[^\]]*\]""", "", MARKUP_TOOLTIP_RE.sub("", item.group("body"))).strip()
+        text = _quick_fact_text(body)
+        if text:
+            facts["quick_facts"].append(text)
+        link = QUICK_FACT_LINK_RE.search(body)
+        if link is None or link["role"].lower() in facts:
+            continue
+        linked = _linked_entity(link["href"], link["name"]) if link["href"] else _linked_entity(f"/{link['etype']}={link['eid']}", "")
+        if linked:
+            facts[link["role"].lower()] = linked
+    return facts
+
+
+def _series(html_text: str, *, page_url: str, page_entity_type: str, page_entity_id: int) -> list[list[dict[str, Any]]]:
+    """Each chain the page's Series boxes list (quests, achievements), in order; the page's own entity is ``current``."""
+    chains: list[list[dict[str, Any]]] = []
+    for table in SERIES_TABLE_RE.finditer(html_text):
+        chain: list[dict[str, Any]] = []
+        for row in SERIES_ROW_RE.finditer(table.group("body")):
+            for step in SERIES_STEP_RE.finditer(row.group("body")):
+                linked = _linked_entity(step["href"], step["link"]) if step["href"] else None
+                if linked is None:
+                    linked = {
+                        "type": page_entity_type,
+                        "id": page_entity_id,
+                        "name": clean_markup_text(step["current"] or "") or None,
+                        "url": _entity_url_for_source_context(
+                            source_url=page_url, entity_type=page_entity_type, entity_id=page_entity_id
+                        ),
+                    }
+                chain.append({"position": int(row.group("position")), **linked, "current": step["href"] is None})
+        if chain:
+            chains.append(chain)
+    return chains
+
+
+def _locations(html_text: str, *, coords: bool) -> list[dict[str, Any]]:
+    """Where an NPC or object is placed: each zone and map floor from ``g_mapperData``, with its coordinates
+    when `coords` is set (a common node lists thousands).
+
+    Retail keys each zone's floors by number; classic lists them, each naming its own map.
+    """
+    try:
+        mapper = extract_json_assignment(html_text, "g_mapperData")
+    except ValueError:
+        return []
+    span = LOCATIONS_SPAN_RE.search(html_text)
+    links = LOCATION_LINK_RE.finditer(span.group("body")) if span else iter(())
+    names = {int(link["zone"]): unescape(link["name"]).strip() for link in links}
+    locations: list[dict[str, Any]] = []
+    for zone_id, levels in mapper.items() if isinstance(mapper, dict) else []:
+        floors = levels.items() if isinstance(levels, dict) else enumerate(levels) if isinstance(levels, list) else ()
+        for level, spot in floors:
+            if not (zone_id.isdigit() and str(level).isdigit() and isinstance(spot, dict)):
+                continue
+            location = {
+                "zone_id": int(zone_id),
+                "zone": spot.get("uiMapName") or names.get(int(zone_id)),
+                "level": int(level),
+                "count": spot.get("count"),
+            }
+            locations.append({**location, "coords": spot.get("coords") or []} if coords else location)
+    return locations
+
+
+def extract_page_facts(
+    html_text: str, *, page_url: str, page_entity_type: str, page_entity_id: int, coords: bool = True
+) -> dict[str, Any] | None:
+    """The entity page's infobox and map data: Quick Facts lines (side, level, patch), a quest's start
+    and end entities, quest and achievement chains, and an NPC's or object's zones and coordinates.
+
+    Keys appear only when the page carries them; a page with none returns None. An item page's map
+    shows its vendors or drop spots rather than the item, so only NPC and object pages get locations.
+    """
+    facts = _quick_facts(html_text)
+    series = _series(html_text, page_url=page_url, page_entity_type=page_entity_type, page_entity_id=page_entity_id)
+    if series:
+        facts["series"] = series
+    locations = _locations(html_text, coords=coords) if page_entity_type in ("npc", "object") else []
+    if locations:
+        facts["locations"] = locations
+    return facts or None

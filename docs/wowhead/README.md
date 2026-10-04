@@ -88,9 +88,14 @@ whole first, and kept when a row carries exactly that name.
 
 Wowhead matches every word it is sent against row names, so a type word ("hogger npc", "thunderfury
 item") finds nothing unless the names hold it, as guide titles hold "guide". When no returned row has
-a type the query names, the query is sent again without its type words (`search_query` "hogger"),
-and that answer is kept when it holds a row of the named type. Type words still score
-(`type_hint`).
+a type the query names and none is named exactly the query ("Battle Pet Training" is a spell, "Mount
+Parade" an achievement), the query is sent again without its type words (`search_query` "hogger"),
+and that answer is kept when it holds a row of the named type. Mounts, battle pets and recipes have
+no suggestion type of their own, so "mount" also names items and spells, "battle pet" NPCs and
+items, and "recipe" items and spells ("Mimiron's Head mount" resolves to item 45693). Type words
+still score (`type_hint`), and a row of a named type is also matched without them, so
+"Heritage of the Lightforged quest" names that quest exactly (`exact_name`); guides, whose titles
+hold "guide", are matched on the title alone.
 
 `search` given a Wowhead entity URL (`https://www.wowhead.com/classic/item=19019/...`) answers with
 that entity alone: one row with its type, id, URL and `follow_up`, `match_reasons: ["url_entity"]`,
@@ -198,11 +203,21 @@ Entities:
 
 | Command | Purpose |
 |---------|---------|
-| `entity TYPE ID` | tooltip payload, optionally with comments and a linked-entity preview; `--include-all-comments` replaces the `comments.top` summary with the full `comments.items` list. `tooltip.text` spells out the units Wowhead marks in the tooltip markup: `87s 50c` for a silver and copper sell price, `Cost: 180 Darkmoon Prize Ticket` for a currency cost |
-| `entity-page TYPE ID` | parsed page metadata and linked entities; comments come from `comments`. Linked entities cover body links, gatherer records, and the page's relation tabs (a zone's NPCs and quests, a faction's members: `source_kind: "listview"`, tab id in `listview`) |
+| `entity TYPE ID` | tooltip payload, optionally with comments and a linked-entity preview; `--include-all-comments` replaces the `comments.top` summary with the full `comments.items` list. `tooltip.text` spells out the units Wowhead marks in the tooltip markup: `87s 50c` for a silver and copper sell price, `Cost: 180 Darkmoon Prize Ticket` for a currency cost. The preview leads each type with the links a relation tab lists (an item's `dropped-by` NPC), marked with `listview` and `listview_data` |
+| `entity-page TYPE ID` | parsed page metadata and linked entities; comments come from `comments`. Linked entities cover body links, gatherer records, and the page's relation tabs (a zone's NPCs and quests, a faction's members, an item's droppers and vendors: `source_kind: "listview"`, tab id in `listview`, every tab in `listviews`). A tab row's drop sample (`count` of `outof`) and vendor `cost` and `stock` are in `listview_data` as Wowhead sends them. A link's name is Wowhead's own when gatherer data or a tab names the entity; an all-lowercase anchor text ("this achievement") is not shown as a name in the preview |
 | `comments TYPE ID` | ranked comments with filters and optional insight rollups |
 | `compare REF REF ...` | field-by-field diff of two or more entities; `comparison.linked_entities` compares every link each page carries (the links `entity-page` reports, relation tabs included), not the `--max-links-per-entity` cut |
 | `linked-graph TYPE ID` | bounded linked-entity graph rooted at one entity, following the links `entity-page` reports (relation tabs included, `source_kind: "listview"`); a node's `name` falls back to its page title once fetched. `--relation` takes entity types and rejects any other value. `sampling.pages_skipped` counts the pages `--max-fetches` or `--limit` left unread, and `sampling.truncated` is true when any were or `--limit` cut the nodes |
+
+`entity` (when it reads the page) and `entity-page` add a `facts` block from the page's infobox
+and map, with only the keys the page has: `quick_facts` (the Quick Facts lines as text: level,
+side, type, patch; `[class=1]` reads "class 1", an NPC's React line reads "Alliance hostile, Horde
+friendly", icon-only lines are left out), a quest's `start` and `end` entities (`type`, `id`, `name`,
+`url`; an item that starts a quest comes as `[item=ID]` with `name` null), `series` (each chain the
+page lists, quests on quest pages and achievements on achievement pages, in order: `position`,
+`type`, `id`, `name`, `url`, `current` for the page's own entry), and for NPC and object pages
+`locations` (`zone_id`, `zone`, map `level`, `count`). `entity-page` adds each location's `coords`
+as `[x, y]` map percentages; `entity` leaves them out, since a common ore node lists thousands.
 
 `TYPE`, like the type in a `compare` `<type>:<id>` ref, is letters and hyphens (`item`, `item-set`,
 `battle-pet`) and `ID` is at least 1; anything else is `invalid_argument`, exit 2, before any request. `entity` and `entity-page` take `TYPE ID` or
@@ -218,7 +233,7 @@ Guides:
 | `guide REF` | one guide: analysis surfaces, linked entities, comments, and page metadata; section bodies come from `guide-full`. `REF` is a guide id, or a Wowhead URL or path whose path, after any expansion and locale prefix (`/de/guide/...`), starts `guide/` or `guide=<id>`; any other page (the home page, `/items`, `/item=19019`, a `/guides/<category>` listing, which `guides` reads) is `invalid_argument`, exit 2. An unknown guide id (Wowhead answers HTTP 400) is `not_found`, exit 4 |
 | `guide-full REF` | the same guide with every section, comment, and link hydrated |
 | `guide-export REF` | write a guide bundle (manifest, sections, entities) to `--out`, or `./wowhead_exports/guide-<id>-<slug>/`; the root `index.json` next to the bundle is written only when it is absent or already a bundle index; an export that hydrates nothing removes an earlier `entities/manifest.json`; a linked entity that cannot be hydrated is listed in `hydration.failed` (`entity_type`, `id`, `code`, `message`) instead of failing the export |
-| `guide-query BUNDLE QUERY` | query one guide bundle for matching sections, links, and comments; answers with the `icy-veins`/`method` guide-query payload (`count`, `match_counts`, `matches`, `top`, `failed_pages`) plus `bundle`, `guide`, and `page`. A blank `QUERY` is `invalid_query`, exit 2, here and in `guide-bundle-search` and `guide-bundle-query`. A bundle path that does not exist is `not_found` (exit 4) here and in `guide-bundle-inspect`/`guide-bundle-refresh`; one that exists but is not a readable bundle is `invalid_bundle` (exit 1) |
+| `guide-query BUNDLE QUERY` | query one guide bundle for matching sections, links, and comments; answers with the `icy-veins`/`method` guide-query payload (`count`, `match_counts`, `matches`, `top`, `failed_pages`) plus `bundle`, `guide`, and `page`. A blank `QUERY` is `invalid_query`, exit 2, here and in `guide-bundle-search` and `guide-bundle-query`. A bundle path that does not exist is `not_found` (exit 4) here and in `guide-bundle-inspect`/`guide-bundle-refresh`; one that exists but is not a readable bundle is `invalid_bundle` (exit 1). `BUNDLE` may instead name a bundle under `--root`: a guide id or whole directory name or title first, then part of a title or directory name. A name no bundle matches (or a root with none) is `not_found`, and one that matches several is `invalid_argument` (exit 2) listing them |
 | `guide-bundle-list` | local bundles with freshness and hydration summaries; a sibling directory whose `manifest.json` cannot be read or decoded is skipped |
 | `guide-bundle-search QUERY` | find local bundles by title, id, or directory name |
 | `guide-bundle-query QUERY` | rank matches across every local bundle, scored by the same engine as `guide-query` |

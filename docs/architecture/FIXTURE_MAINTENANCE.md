@@ -88,6 +88,8 @@ When re-capturing, save the raw page and then trim it:
   - `type="application/ld+json"`: the parsers read Article JSON-LD for title, author, and dates
   - (Icy Veins) any script whose body contains both `dataLayer` and `page_type`: the parser reads
     the GTM dataLayer for `page.page_type`
+  - (Icy Veins) any script whose body contains `TalentCalculator(`: the parser reads the talent
+    calculator args for PvP build references
 - Keep everything else byte-identical. Do not reserialize through BeautifulSoup.
 
 Aim well under 100 KB per file.

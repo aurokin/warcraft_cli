@@ -133,6 +133,7 @@ from wowhead_cli.page_parser import (
     extract_listview_data,
     extract_markup_by_target,
     extract_markup_urls,
+    extract_page_facts,
     guide_markup_text,
     normalize_comments,
     parse_page_error,
@@ -948,11 +949,13 @@ def _entity_payload_blocks(
     comments_citations: dict[str, Any] | None,
     linked_entities_payload: dict[str, Any] | None,
     comments_payload: dict[str, Any] | None,
+    facts: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Attach the optional entity blocks, omitting the ones this request did not produce."""
     optional = {
         "notes": policy_notes or None,
         "tooltip": tooltip_payload or None,
+        "facts": facts,
         "citations": comments_citations,
         "linked_entities": linked_entities_payload,
         "comments": comments_payload,
@@ -1035,6 +1038,16 @@ def _build_entity_payload(
             expansion=cfg.expansion,
         ),
         comments_payload=comments_payload,
+        # The compact summary gives each location's spawn count; entity-page lists the coordinates.
+        facts=extract_page_facts(
+            html,
+            page_url=page_url,
+            page_entity_type=plan.page_entity_type,
+            page_entity_id=plan.page_entity_id,
+            coords=False,
+        )
+        if html is not None
+        else None,
     )
 
     payload = attach_entity_normalization(payload, entity_type=entity_type, tooltip=tooltip, page=metadata)
@@ -2153,15 +2166,15 @@ def _bundle_row_with_freshness(row: dict[str, Any], *, max_age_hours: int) -> di
     return enriched
 
 
+# Bundle fields a search query is matched against, and the weight of each match.
+BUNDLE_SEARCH_FIELD_WEIGHTS = (("title", 4), ("dir_name", 3), ("canonical_url", 2), ("expansion", 2))
+
+
 def _bundle_search_score_and_reasons(row: dict[str, Any], *, query: str) -> tuple[int, list[str]]:
     reasons: list[str] = []
     score = 0
     query_normalized = " ".join(query.lower().split())
 
-    title = row.get("title")
-    dir_name = row.get("dir_name")
-    canonical_url = row.get("canonical_url")
-    expansion = row.get("expansion")
     guide_id = row.get("guide_id")
     hydration = row.get("hydration")
     freshness = row.get("freshness")
@@ -2170,25 +2183,11 @@ def _bundle_search_score_and_reasons(row: dict[str, Any], *, query: str) -> tupl
         score += 15
         reasons.append("guide_id")
 
-    title_score = score_text_match(query, title)
-    if title_score > 0:
-        score += title_score * 4
-        reasons.append("title")
-
-    dir_score = score_text_match(query, dir_name)
-    if dir_score > 0:
-        score += dir_score * 3
-        reasons.append("dir_name")
-
-    url_score = score_text_match(query, canonical_url)
-    if url_score > 0:
-        score += url_score * 2
-        reasons.append("canonical_url")
-
-    expansion_score = score_text_match(query, expansion)
-    if expansion_score > 0:
-        score += expansion_score * 2
-        reasons.append("expansion")
+    for field_name, weight in BUNDLE_SEARCH_FIELD_WEIGHTS:
+        field_score = score_text_match(query, row.get(field_name))
+        if field_score > 0:
+            score += field_score * weight
+            reasons.append(field_name)
 
     if isinstance(hydration, dict):
         if hydration.get("enabled") is True and query_normalized in {"hydrated", "hydration"}:
@@ -2211,14 +2210,7 @@ def _bundle_search_score_and_reasons(row: dict[str, Any], *, query: str) -> tupl
             score += 2
             reasons.append("hydration_freshness")
 
-    unique_reasons: list[str] = []
-    seen: set[str] = set()
-    for reason in reasons:
-        if reason in seen:
-            continue
-        seen.add(reason)
-        unique_reasons.append(reason)
-    return score, unique_reasons
+    return score, reasons
 
 
 def _guide_bundle_query_command(row: dict[str, Any], *, query: str, root: Path) -> str:
@@ -2746,9 +2738,10 @@ def _write_guide_export_bundle(
     ctx: typer.Context,
     *,
     client: WowheadClient,
-    export_dir: Path,
+    export_dir: Path | None,
     options: GuideExportOptions,
 ) -> dict[str, Any]:
+    """Export the guide to ``export_dir``, or with None to the default directory its title names."""
     payload, html = _build_guide_full_payload(
         ctx,
         guide_ref=options.guide_ref,
@@ -2756,6 +2749,7 @@ def _write_guide_export_bundle(
         include_replies=options.include_replies,
         client=client,
     )
+    export_dir = export_dir or default_guide_export_dir(payload).expanduser()
     export_dir.mkdir(parents=True, exist_ok=True)
 
     files_written, assets = write_guide_export_assets(export_dir=export_dir, payload=payload, html=html)
@@ -2789,6 +2783,20 @@ def _looks_like_path(value: str) -> bool:
     return value.startswith(("/", ".", "~")) or "/" in value
 
 
+def _bundle_selector_matches(corpora: list[dict[str, Any]], raw: str) -> list[dict[str, Any]]:
+    """The bundles a selector names: by guide id or whole directory name or title, else by part of either name."""
+    lowered = raw.lower()
+
+    def names(row: dict[str, Any]) -> list[str]:
+        return [row[key].lower() for key in ("dir_name", "title") if isinstance(row.get(key), str)]
+
+    def has_id(row: dict[str, Any]) -> bool:
+        return isinstance(row.get("guide_id"), int) and str(row["guide_id"]) == raw
+
+    exact = [row for row in corpora if has_id(row) or lowered in names(row)]
+    return exact or [row for row in corpora if any(lowered in name for name in names(row))]
+
+
 def _resolve_corpus_ref(corpus_ref: str, *, root: Path | None) -> Path:
     raw = corpus_ref.strip()
     if not raw:
@@ -2805,43 +2813,14 @@ def _resolve_corpus_ref(corpus_ref: str, *, root: Path | None) -> Path:
     search_root = (root or guide_export_root()).expanduser()
     corpora = _discover_guide_corpora(search_root, max_age_hours=24)
     if not corpora:
-        raise ValueError(f"No exported bundles found under {search_root}.")
+        raise ArticleBundleError("not_found", f"No exported bundles found under {search_root}.")
 
-    lowered = raw.lower()
-
-    def exact_matches() -> list[dict[str, Any]]:
-        matches: list[dict[str, Any]] = []
-        for row in corpora:
-            guide_id = row.get("guide_id")
-            title = row.get("title")
-            dir_name = row.get("dir_name")
-            if isinstance(guide_id, int) and str(guide_id) == raw:
-                matches.append(row)
-                continue
-            if isinstance(dir_name, str) and dir_name.lower() == lowered:
-                matches.append(row)
-                continue
-            if isinstance(title, str) and title.lower() == lowered:
-                matches.append(row)
-        return matches
-
-    matches = exact_matches()
+    matches = _bundle_selector_matches(corpora, raw)
     if not matches:
-        matches = []
-        for row in corpora:
-            title = row.get("title")
-            dir_name = row.get("dir_name")
-            if isinstance(title, str) and lowered in title.lower():
-                matches.append(row)
-                continue
-            if isinstance(dir_name, str) and lowered in dir_name.lower():
-                matches.append(row)
-
-    if not matches:
-        raise ValueError(f"No bundle matched {raw!r} under {search_root}.")
+        raise ArticleBundleError("not_found", f"No bundle matched {raw!r} under {search_root}.")
     if len(matches) > 1:
         options = ", ".join(row.get("dir_name") or row["path"] for row in matches[:5])
-        raise ValueError(f"Bundle selector {raw!r} is ambiguous under {search_root}. Matches: {options}")
+        raise ArticleBundleError("invalid_argument", f"Bundle selector {raw!r} is ambiguous under {search_root}. Matches: {options}")
     return Path(matches[0]["path"])
 
 
@@ -4150,21 +4129,10 @@ def guide_export(
             )
         except ValueError as exc:
             fail(ctx, "invalid_argument", str(exc))
-    if out is None:
-        preview_payload, _ = _build_guide_full_payload(
-            ctx,
-            guide_ref=guide_ref,
-            max_links=max_links,
-            include_replies=include_replies,
-            client=client,
-        )
-        export_dir = default_guide_export_dir(preview_payload).expanduser()
-    else:
-        export_dir = out.expanduser()
     manifest = _write_guide_export_bundle(
         ctx,
         client=client,
-        export_dir=export_dir,
+        export_dir=out.expanduser() if out is not None else None,
         options=GuideExportOptions(
             guide_ref=guide_ref,
             max_links=max_links,
@@ -4816,6 +4784,11 @@ def _entity_page_payload(
     page_meta = _page_meta_block(parse_page_meta_json(html))
     if page_meta is not None:
         payload["page_meta"] = page_meta
+    facts = extract_page_facts(
+        html, page_url=canonical_url, page_entity_type=plan.page_entity_type, page_entity_id=plan.page_entity_id
+    )
+    if facts is not None:
+        payload["facts"] = facts
     return attach_entity_page_normalization(
         payload,
         entity_type=entity_type,

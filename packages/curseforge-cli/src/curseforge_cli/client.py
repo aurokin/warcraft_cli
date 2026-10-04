@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, build_client, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, CachedHttpClient, request_with_retries
 from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.paths import provider_cache_root
 
@@ -50,7 +50,7 @@ class CurseForgeClientError(RuntimeError):
         self.details = details
 
 
-class CurseForgeClient:
+class CurseForgeClient(CachedHttpClient):
     def __init__(
         self,
         *,
@@ -65,17 +65,6 @@ class CurseForgeClient:
         self._ttl = ttl
         self._timeout_seconds = timeout_seconds
         self._retry_attempts = max(1, retry_attempts)
-        self._http_client: httpx.Client | None = None
-
-    def close(self) -> None:
-        if self._http_client is not None:
-            self._http_client.close()
-            self._http_client = None
-
-    def _client(self) -> httpx.Client:
-        if self._http_client is None:
-            self._http_client = build_client(timeout=self._timeout_seconds)
-        return self._http_client
 
     def _require_key(self) -> None:
         if not self._api_key:

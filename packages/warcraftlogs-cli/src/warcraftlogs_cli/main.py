@@ -297,6 +297,7 @@ def _emit(ctx: typer.Context, payload: dict[str, Any], *, client: Any = None) ->
     """
     if client is not None:
         payload = _with_warnings(payload, client)
+    payload = _with_window_clamp_notes(payload)
     command = command_path(ctx)
     envelope = success_envelope(
         provider="warcraftlogs",
@@ -1097,7 +1098,8 @@ def _doctor_cache_payload() -> dict[str, Any]:
     try:
         settings, guild_ttl, static_ttl, report_ttl, finished_report_ttl = load_warcraftlogs_cache_settings_from_env()
     except ValueError as exc:
-        return {"error": {"code": "invalid_cache_config", "message": str(exc)}}
+        # Every cached read fails on this config, so doctor must not report the provider ready.
+        return {"available": False, "error": {"code": "invalid_cache_config", "message": str(exc)}}
     return {
         "enabled": settings.enabled,
         "backend": settings.backend,
@@ -1129,7 +1131,7 @@ def _doctor_payload(*, live: bool, site: WarcraftLogsSiteProfile) -> dict[str, A
     cache = _doctor_cache_payload()
     return {
         # Every data command needs the public API, so without it the provider is degraded, as it is
-        # when a Redis cache does not answer.
+        # when a Redis cache does not answer or the cache config does not parse.
         "status": "ready" if public_api_access["ready"] and cache.get("available") is not False else "degraded",
         "installed": True,
         "language": "python",
@@ -1367,6 +1369,21 @@ def _pagination_payload(value: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+# Warcraft Logs numbers classes itself (gameData.classes, the same on every site), not the way Blizzard does:
+# its class 5 is Monk, Blizzard's is Priest.
+_WARCRAFTLOGS_CLASS_KEYS = (
+    "deathknight", "druid", "hunter", "mage", "monk", "paladin", "priest",
+    "rogue", "shaman", "warlock", "warrior", "demonhunter", "evoker",
+)
+
+
+def _class_name(class_id: object) -> str | None:
+    """The class a Warcraft Logs ``classID`` names, or ``None`` for an unknown id."""
+    if not isinstance(class_id, int) or not 1 <= class_id <= len(_WARCRAFTLOGS_CLASS_KEYS):
+        return None
+    return WOW_CLASS_NAMES[_WARCRAFTLOGS_CLASS_KEYS[class_id - 1]]
+
+
 def _guild_member_payload(character: dict[str, Any]) -> dict[str, Any]:
     faction = dict_at(character, "faction")
     server = dict_at(character, "server")
@@ -1376,6 +1393,7 @@ def _guild_member_payload(character: dict[str, Any]) -> dict[str, Any]:
         "name": character.get("name"),
         "level": character.get("level"),
         "class_id": character.get("classID"),
+        "class_name": _class_name(character.get("classID")),
         "hidden": character.get("hidden"),
         "guild_rank": character.get("guildRank"),
         "faction": {"id": faction.get("id"), "name": faction.get("name")} if faction else None,
@@ -1471,6 +1489,7 @@ def _character_payload(character: dict[str, Any]) -> dict[str, Any]:
         "name": character.get("name"),
         "level": character.get("level"),
         "class_id": character.get("classID"),
+        "class_name": _class_name(character.get("classID")),
         "hidden": character.get("hidden"),
         "server": _server_payload(server) if server else None,
         "guild_rank": character.get("guildRank"),
@@ -1521,8 +1540,9 @@ def _parse_report_reference(reference: str, *, explicit_fight_id: int | None) ->
     if not text:
         raise ValueError("Report reference is required.")
     source_url: str | None = None
-    code = text
     parsed = urlparse(text)
+    # A bare code may carry the fight the way a URL does: ``CODE#fight=N`` or ``CODE?fight=N``.
+    code = text if parsed.scheme or parsed.netloc else parsed.path
     parsed_fight_id: int | None = None
     if parsed.scheme and parsed.netloc:
         # Any warcraftlogs.com host (de., ko.classic., vanilla., ...); site detection is separate.
@@ -1535,13 +1555,13 @@ def _parse_report_reference(reference: str, *, explicit_fight_id: int | None) ->
             code = parts[reports_index + 1]
         except (ValueError, IndexError):
             raise ValueError("Could not extract a Warcraft Logs report code from the provided URL.") from None
-        # Warcraft Logs writes the fight as ``?fight=N`` or ``#fight=N``; the query string wins.
-        fight_values = parse_qs(parsed.query).get("fight") or parse_qs(parsed.fragment).get("fight") or []
-        if fight_values:
-            try:
-                parsed_fight_id = int(fight_values[0])
-            except ValueError:
-                parsed_fight_id = None
+    # Warcraft Logs writes the fight as ``?fight=N`` or ``#fight=N``; the query string wins.
+    fight_values = parse_qs(parsed.query).get("fight") or parse_qs(parsed.fragment).get("fight") or []
+    if fight_values:
+        try:
+            parsed_fight_id = int(fight_values[0])
+        except ValueError:
+            parsed_fight_id = None
     if not re.fullmatch(r"[A-Za-z0-9]+", code):
         raise ValueError(f"{text!r} is not a Warcraft Logs report code or report URL.")
     fight_id = explicit_fight_id if explicit_fight_id is not None else parsed_fight_id
@@ -1770,7 +1790,11 @@ def _encounter_window_bounds(
     window_end_ms: float | None,
     flag: str,
 ) -> tuple[float | None, float | None]:
-    """Absolute report timestamps for an encounter-relative window; ``flag`` names the window's options."""
+    """Absolute report timestamps for an encounter-relative window, clamped to the fight.
+
+    ``flag`` names the window's options. A window that runs past the pull keeps only the part
+    inside it; ``_effective_window`` reports what was kept.
+    """
     if window_start_ms is None and window_end_ms is None:
         return None, None
     fight_start = fight.get("startTime")
@@ -1786,9 +1810,61 @@ def _encounter_window_bounds(
             "invalid_query",
             f"{flag}-start-ms {window_start_ms:g} is at or past the end of the fight ({fight_end - fight_start:g} ms long).",
         )
-    absolute_start = float(fight_start) + float(window_start_ms) if window_start_ms is not None else None
+    absolute_start = float(fight_start) + max(float(window_start_ms), 0.0) if window_start_ms is not None else None
     absolute_end = float(fight_start) + float(window_end_ms) if window_end_ms is not None else None
+    if absolute_end is not None and isinstance(fight_end, (int, float)):
+        absolute_end = min(absolute_end, float(fight_end))
     return absolute_start, absolute_end
+
+
+def _effective_window(
+    fight: dict[str, Any],
+    *,
+    window_start_ms: float | None,
+    window_end_ms: float | None,
+) -> dict[str, Any]:
+    """The encounter-relative window a query really covers, and whether the request was clamped to the fight.
+
+    Computed from the requested offsets, not from the absolute bounds, so a fractional offset that
+    round-trips through a report timestamp inexactly is not reported as clamped.
+    """
+    fight_start = fight.get("startTime")
+    fight_end = fight.get("endTime")
+    if (window_start_ms is None and window_end_ms is None) or not isinstance(fight_start, (int, float)):
+        return {}
+    fight_length = float(fight_end - fight_start) if isinstance(fight_end, (int, float)) else None
+    start_ms = max(window_start_ms, 0.0) if window_start_ms is not None else 0.0
+    end_ms = window_end_ms if window_end_ms is not None else fight_length
+    if end_ms is not None and fight_length is not None:
+        end_ms = min(end_ms, fight_length)
+    clamped = end_ms is not None and (
+        (window_start_ms is not None and window_start_ms < 0)
+        or (window_end_ms is not None and fight_length is not None and window_end_ms > fight_length)
+    )
+    return {
+        "effective_window_start_ms": start_ms,
+        "effective_window_end_ms": end_ms,
+        "effective_window_duration_ms": end_ms - start_ms if end_ms is not None else None,
+        "window_clamped": clamped,
+    }
+
+
+def _with_window_clamp_notes(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add a note for each encounter window (the query's, or each compared window's) that ran outside the fight."""
+
+    def requested(offset: float | None, default: str) -> str:
+        return default if offset is None else f"{offset:g}"
+
+    queries = [dict_at(payload, "query"), *(dict_at(window, "query") for window in list_at(payload, "windows"))]
+    notes = [
+        f"The window requested as {requested(query['window_start_ms'], 'start')}..{requested(query['window_end_ms'], 'end')} "
+        f"ms ran outside the fight and was clamped to {query['effective_window_start_ms']:g}.."
+        f"{query['effective_window_end_ms']:g} ms; compare uptime and counts against effective_window_duration_ms "
+        f"({query['effective_window_duration_ms']:g} ms), not the requested length."
+        for query in queries
+        if query.get("window_clamped")
+    ]
+    return {**payload, "notes": [*(payload.get("notes") or []), *notes]} if notes else payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -1861,6 +1937,7 @@ def _encounter_filter_options(
         "window_end_ms": filters.window_end_ms,
         "start_time": start_time,
         "end_time": end_time,
+        **_effective_window(fight, window_start_ms=filters.window_start_ms, window_end_ms=filters.window_end_ms),
     }
     return options, query
 
@@ -1901,7 +1978,7 @@ def _require_matching_fight(
     difficulty: int | None,
     start_time: float | None = None,
     end_time: float | None = None,
-) -> None:
+) -> float | None:
     """Reject a fight-scoped request naming a fight the report does not have, or an empty window.
 
     Warcraft Logs answers an unknown ``--fight-id``, an ``--encounter-id`` the report never
@@ -1912,10 +1989,11 @@ def _require_matching_fight(
     Requests that name no fight at all are left alone: a report-wide slice is a legitimate query,
     and an empty answer to one is a real answer. An inverted window, or one starting after every
     selected fight ended, is answered with an empty slice too, so both are ``invalid_query``.
+    Returns the latest end time of the selected fights, or None when no fight was named.
     """
     _require_ordered_window(ctx, start_time=start_time, end_time=end_time)
     if not fight_ids and encounter_id is None and difficulty is None:
-        return
+        return None
     fights_report = client.report_fights(code=code, difficulty=difficulty, allow_unlisted=allow_unlisted)
     matching = [
         row
@@ -1932,24 +2010,26 @@ def _require_matching_fight(
             f"Warcraft Logs report {code} has no fight matching {_described_slice(scope)}.",
             details={"missing_fight_ids": missing} if missing else None,
         )
-    _require_window_before_fights_end(ctx, matching, fight_ids=fight_ids, start_time=start_time)
+    fights_end = _selected_fights_end(matching, fight_ids=fight_ids)
+    if start_time is not None and fights_end is not None and start_time > fights_end:
+        _fail(ctx, "invalid_query", f"--start-time {start_time:.0f} is after the selected fights end at {fights_end:.0f}.")
+    return fights_end
+
+
+def _selected_fights_end(fights: list[dict[str, Any]], *, fight_ids: list[int] | None) -> float | None:
+    return max(
+        (
+            float(row["endTime"])
+            for row in fights
+            if (not fight_ids or row.get("id") in fight_ids) and isinstance(row.get("endTime"), (int, float))
+        ),
+        default=None,
+    )
 
 
 def _require_ordered_window(ctx: typer.Context, *, start_time: float | None, end_time: float | None) -> None:
     if start_time is not None and end_time is not None and start_time > end_time:
         _fail(ctx, "invalid_query", "--start-time must not be after --end-time.")
-
-
-def _require_window_before_fights_end(
-    ctx: typer.Context, fights: list[dict[str, Any]], *, fight_ids: list[int] | None, start_time: float | None
-) -> None:
-    fight_ends = [
-        row["endTime"]
-        for row in fights
-        if (not fight_ids or row.get("id") in fight_ids) and isinstance(row.get("endTime"), (int, float))
-    ]
-    if start_time is not None and fight_ends and start_time > max(fight_ends):
-        _fail(ctx, "invalid_query", f"--start-time {start_time:.0f} is after the selected fights end at {max(fight_ends):.0f}.")
 
 
 def _described_slice(query: dict[str, Any]) -> str:
@@ -2244,10 +2324,11 @@ def _buff_aura_payload(
     ability_index: dict[int, dict[str, Any]],
     ability_id: int | None,
 ) -> dict[str, Any]:
-    # Two row shapes: aura-aggregate rows (table.data.auras) carry their own `guid`/`name`;
-    # actor-scoped rows under an --ability-id filter (table.data.entries) carry the actor name
-    # in `name` and no `guid` — the aura there is the requested filter, not the row.
-    aura_guid = entry.get("guid") if isinstance(entry.get("guid"), int) else None
+    # Two row shapes: aura-aggregate rows carry no actor `id` and their own aura `guid`/`name`;
+    # actor rows under an --ability-id filter carry the actor's `id`, `name` and GUID in `guid`,
+    # so the aura there is the requested filter, not the row.
+    is_actor_row = isinstance(entry.get("id"), int)
+    aura_guid = entry.get("guid") if isinstance(entry.get("guid"), int) and not is_actor_row else None
     if aura_guid is not None:
         aura_name = entry.get("name") if isinstance(entry.get("name"), str) else None
         ability_meta = ability_index.get(aura_guid)
@@ -2288,6 +2369,19 @@ def _buff_aura_payload(
     }
 
 
+def _buff_row_actor(table_report: dict[str, Any], *, view_by: str | None) -> Literal["aura_holder", "applied_by"]:
+    """Which actor a Buffs-table row names.
+
+    viewBy Source groups rows by the actor that has the aura, viewBy Target by the actor that
+    applied it. When a filter pins that actor (``--source-id``), Warcraft Logs groups by the other
+    one instead and says so with ``useTargets: true``.
+    """
+    holder = not (isinstance(view_by, str) and view_by.lower() == "target")
+    if dict_at(dict_at(table_report, "table"), "data").get("useTargets") is True:
+        holder = not holder
+    return "aura_holder" if holder else "applied_by"
+
+
 def _encounter_buff_rows_payload(
     *,
     report: dict[str, Any],
@@ -2301,7 +2395,7 @@ def _encounter_buff_rows_payload(
     actor_index, ability_index = _master_data_indexes(master_report)
     report_code = report.get("code") if isinstance(report.get("code"), str) else None
     selected_fight_id = fight.get("id") if isinstance(fight.get("id"), int) else None
-    actor_field = "target" if isinstance(view_by, str) and view_by.lower() == "target" else "source"
+    actor_field = _buff_row_actor(table_report, view_by=view_by)
     rows_out: list[dict[str, Any]] = []
     for entry in _report_table_entries(table_report):
         actor_id = entry.get("id") if isinstance(entry.get("id"), int) else None
@@ -2315,8 +2409,8 @@ def _encounter_buff_rows_payload(
             )
         else:
             # Live WCL returns per-aura aggregate rows (id=null, name=aura) when no --ability-id
-            # is set — there is no source/target actor to attach. Emit a placeholder that keeps
-            # the row shape uniform and makes the missing actor scope explicit.
+            # is set — there is no actor to attach. Emit a placeholder that keeps the row shape
+            # uniform and makes the missing actor scope explicit.
             actor_payload = {
                 "id": None,
                 "name": None,
@@ -2356,6 +2450,7 @@ def _encounter_buff_rows_payload(
             "preview": preview,
             "preview_truncated": total > preview_limit,
             "view_by": view_by,
+            "row_actor": actor_field,
         },
     }
 
@@ -2759,8 +2854,8 @@ def _boss_spec_usage_payload(
     returned = normalized_rows[:top]
     return {
         "kind": "boss_spec_usage",
-        "ranking_basis": "sampled_finished_kill_cohort_spec_presence",
-        "matching_rule": "spec_presence_across_sampled_finished_kills_with_player_details",
+        "ranking_basis": "sampled_kill_cohort_spec_presence",
+        "matching_rule": "spec_presence_across_sampled_kills_with_player_details",
         "query": query,
         "notes": [
             *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
@@ -2769,7 +2864,7 @@ def _boss_spec_usage_payload(
         "freshness": _sampled_cross_report_freshness(cache_ttl_seconds, transport_counts=transport_counts),
         "cache_provenance": _sampled_cache_provenance(cache_ttl_seconds, rows),
         "sample_scope": _sampled_sample_scope(
-            ranking_basis="sampled_finished_kill_cohort_spec_presence",
+            ranking_basis="sampled_kill_cohort_spec_presence",
             query=query,
             returned=len(returned),
             excluded=max(0, len(normalized_rows) - len(returned)),
@@ -2977,7 +3072,7 @@ def _comp_samples_payload(
     return {
         "kind": "comp_samples",
         "ranking_basis": "sampled_fastest_kills",
-        "matching_rule": "class_roster_composition_across_sampled_finished_kills_with_player_details",
+        "matching_rule": "class_roster_composition_across_sampled_kills_with_player_details",
         "query": query,
         "notes": [
             *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
@@ -3157,7 +3252,7 @@ def _ability_usage_summary_payload(
     return {
         "kind": "ability_usage_summary",
         "ranking_basis": "sampled_fastest_kills",
-        "matching_rule": "ability_casts_across_sampled_finished_kills_with_event_limit",
+        "matching_rule": "ability_casts_across_sampled_kills_with_event_limit",
         "query": scoped_query,
         "notes": [
             *_sampled_spec_filter_notes(query.get("spec_name") if isinstance(query, dict) else None, sample),
@@ -3398,19 +3493,20 @@ def _report_encounter_aura_summary_payload(
     include_raw: bool,
 ) -> dict[str, Any]:
     actor_index, ability_index = _master_data_indexes(master_report)
+    actor_field = _buff_row_actor(table_report, view_by="Source")
     rows_out: list[dict[str, Any]] = []
     for entry in _report_table_entries(table_report):
-        source_id = entry.get("id") if isinstance(entry.get("id"), int) else None
+        actor_id = entry.get("id") if isinstance(entry.get("id"), int) else None
         rows_out.append(
             {
-                "source": _named_actor(
+                actor_field: _named_actor(
                     actor_index,
-                    source_id,
+                    actor_id,
                     report_code=report.get("code") if isinstance(report.get("code"), str) else None,
                     fight_id=fight.get("id") if isinstance(fight.get("id"), int) else None,
                     source="report_encounter_aura_summary",
-                ) if source_id is not None else {"id": None, "name": entry.get("name")},
-                # An ability-scoped Buffs table reports per-source uptime (ms), uses and bands only.
+                ) if actor_id is not None else {"id": None, "name": entry.get("name")},
+                # An ability-scoped Buffs table reports per-actor uptime (ms), uses and bands only.
                 "reported_total_uptime": entry.get("totalUptime"),
                 "reported_total_uses": entry.get("totalUses"),
                 "reported_bands": entry.get("bands"),
@@ -3420,7 +3516,7 @@ def _report_encounter_aura_summary_payload(
     rows_out.sort(
         key=lambda row: (
             -(float(row["reported_total_uptime"]) if isinstance(row.get("reported_total_uptime"), (int, float)) else float("-inf")),
-            str((row.get("source") or {}).get("name") or ""),
+            str((row.get(actor_field) or {}).get("name") or ""),
         )
     )
     return {
@@ -3439,6 +3535,7 @@ def _report_encounter_aura_summary_payload(
         },
         "aura_summary": {
             "entry_count": len(rows_out),
+            "row_actor": actor_field,
             "rows": rows_out,
         },
     }
@@ -3500,17 +3597,18 @@ def _aura_compare_rows(
     *,
     left_rows: list[dict[str, Any]],
     right_rows: list[dict[str, Any]],
+    actor_field: str,
 ) -> list[dict[str, Any]]:
-    """One row per aura source, with right-minus-left deltas of uptime and uses, largest uptime change first."""
+    """One row per aura-summary actor, with right-minus-left deltas of uptime and uses, largest uptime change first."""
 
     def _row_key(row: dict[str, Any]) -> tuple[int | None, str]:
-        source = dict_at(row, "source")
-        source_id = source.get("id") if isinstance(source.get("id"), int) else None
-        return source_id, str(source.get("name") or "")
+        actor = dict_at(row, actor_field)
+        actor_id = actor.get("id") if isinstance(actor.get("id"), int) else None
+        return actor_id, str(actor.get("name") or "")
 
     def _compare_row(key: tuple[int | None, str], left: dict[str, Any] | None, right: dict[str, Any] | None) -> dict[str, Any]:
         compared: dict[str, Any] = {
-            "source": dict_at(left or {}, "source") or dict_at(right or {}, "source") or {"id": key[0], "name": key[1]},
+            actor_field: dict_at(left or {}, actor_field) or dict_at(right or {}, actor_field) or {"id": key[0], "name": key[1]},
         }
         for field in _AURA_COMPARE_FIELDS:
             left_value = (left or {}).get(field)
@@ -3530,7 +3628,7 @@ def _aura_compare_rows(
     compared_rows.sort(
         key=lambda row: (
             -abs(row["reported_total_uptime_delta"]) if row["reported_total_uptime_delta"] is not None else 1,
-            str(row["source"].get("name") or "").lower(),
+            str(row[actor_field].get("name") or "").lower(),
         )
     )
     return compared_rows
@@ -3549,16 +3647,13 @@ def _character_rankings_payload(character: dict[str, Any], *, top: int, transpor
         if isinstance(row, dict) and isinstance(row.get("spec"), str) and row.get("spec")
     ]
     unique_specs = list(dict.fromkeys(all_star_specs))
+    class_name = _class_name(character.get("classID"))
     source_character_identity = class_spec_identity_payload(
-        actor_class=None,
+        actor_class=class_name,
         spec=unique_specs[0] if len(unique_specs) == 1 else None,
         provider="warcraftlogs",
         source="character_rankings",
-        candidates=[(None, spec) for spec in unique_specs] if len(unique_specs) > 1 else None,
-        notes=[
-            "warcraftlogs character-rankings exposes class only as an internal classID enum; "
-            "class name is not normalized here"
-        ],
+        candidates=[(class_name, spec) for spec in unique_specs] if len(unique_specs) > 1 else None,
     )
     return {
         "id": character.get("id"),
@@ -3566,6 +3661,7 @@ def _character_rankings_payload(character: dict[str, Any], *, top: int, transpor
         "name": character.get("name"),
         "level": character.get("level"),
         "class_id": character.get("classID"),
+        "class_name": class_name,
         "server": _server_payload(server) if server else None,
         "faction": {"id": faction.get("id"), "name": faction.get("name")} if faction else None,
         "summary": {
@@ -5709,6 +5805,8 @@ def _aura_compare_payload(
     report_ttl: int | None,
 ) -> dict[str, Any]:
     ref, report, fight, encounter = scope
+    # Both windows share every filter, so Warcraft Logs groups their rows by the same actor.
+    row_actor = str(left.payload["aura_summary"]["row_actor"])
     return {
         "kind": "report_encounter_aura_compare",
         "query": {
@@ -5734,9 +5832,11 @@ def _aura_compare_payload(
         ],
         "comparison": {
             "matching_rule": "same_report_same_fight_same_ability_explicit_windows",
+            "row_actor": row_actor,
             "rows": _aura_compare_rows(
                 left_rows=_aura_summary_rows(left.payload),
                 right_rows=_aura_summary_rows(right.payload),
+                actor_field=row_actor,
             ),
         },
     }
@@ -6165,7 +6265,7 @@ def _emit_report_events_slice(
     """Fetch one raw event slice and emit it with the filter options echoed back as the query."""
     client = _client(ctx)
     try:
-        _require_matching_fight(
+        fights_end = _require_matching_fight(
             ctx,
             client,
             code=code,
@@ -6176,6 +6276,10 @@ def _emit_report_events_slice(
             start_time=options.start_time,
             end_time=options.end_time,
         )
+        # Warcraft Logs answers a start time without an end time with no events, so a next-page
+        # request (--start-time only) runs to the end of the selected fights instead.
+        if options.start_time is not None and options.end_time is None and fights_end is not None:
+            options = replace(options, end_time=fights_end)
         payload = client.report_events(code=code, allow_unlisted=allow_unlisted, options=options)
     except WarcraftLogsClientError as exc:
         _handle_client_error(ctx, exc)
@@ -6190,6 +6294,15 @@ def _emit_report_events_slice(
         emitted["notes"] = [
             "events.data is null. Warcraft Logs requires --data-type "
             "(e.g. casts, damage-done, healing) for non-null event slices."
+        ]
+    next_page = result_payload.get("next_page_timestamp")
+    if next_page is not None:
+        slice_end = options.end_time if options.end_time is not None else fights_end
+        end_flag = f" --end-time {slice_end:.0f}" if slice_end is not None else ""
+        emitted["notes"] = [
+            f"This is one page: events stop at timestamp {next_page:.0f}, before the end of the slice. Fetch the next "
+            f"page with the same filters plus --start-time {next_page:.0f}{end_flag} before counting events over "
+            "the whole slice."
         ]
     _emit(ctx, emitted, client=client)
 

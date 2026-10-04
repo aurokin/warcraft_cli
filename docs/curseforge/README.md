@@ -31,8 +31,8 @@ Every command accepts the shared output flags, which go **before** the subcomman
 Reports install state, API-key auth posture (`api_key` flow, `CURSEFORGE_API_KEY`, credential source
 and lookup order), the `experimental` tier, the cache configuration, and capability metadata:
 `doctor` is `ready`, `addon` is `ready` with a key and `requires_api_key` without one, and `search`
-and `resolve` are `coming_soon`. `status` is `ready` with a key and `degraded` without one, or when a Redis cache backend does not
-answer (`cache.available: false`).
+and `resolve` are `coming_soon`. `status` is `ready` with a key and `degraded` without one, or when the cache config does not parse or a Redis cache backend does not
+answer (`cache.available: false`; an unparsable config also carries `cache.error.code: "invalid_cache_config"`).
 
 ### `curseforge addon <slug-or-id>`
 
@@ -104,7 +104,7 @@ make test-e2e E2E_PATHS="tests/e2e/test_curseforge.py"
 ```
 
 with a real `CURSEFORGE_API_KEY`. The end-to-end journey covers both resolution paths (numeric id
-and slug search) plus `latest-files` and `changelog`.
+and slug search) plus the `data.latest_files` ordering and `data.changelog` of `addon`.
 
 ## Analytics And Provenance Posture
 
