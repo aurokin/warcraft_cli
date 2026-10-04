@@ -2866,6 +2866,99 @@ def _cooldown_packet_invoke(
     return fake_provider_invoke
 
 
+def test_cooldown_packet_does_not_merge_a_different_singleton_lorrgs_fight(monkeypatch) -> None:
+    calls: list[tuple[str, list[str]]] = []
+    invoke = _cooldown_packet_invoke(calls)
+
+    def mismatched_fight(provider, args, *, expansion=None):
+        result = invoke(provider, args, expansion=expansion)
+        if args[0] == "user-report-fights":
+            result["payload"]["data"]["fights"][0]["fight_id"] = 999
+        return result
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", mismatched_fight)
+    result = runner.invoke(
+        warcraft_app, [*_cooldown_packet_args(), "--sample-limit", "0", "--spec-slug", "warrior-protection"]
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["lorrgs"]["reason"] == "lorrgs_fight_not_found"
+    assert data["fight"]["lorrgs"]["fight_id"] is None
+    assert data["fight"]["warcraftlogs"]["id"] == 22
+    assert data["phase"]["selected"] is None
+    assert data["player"]["deaths"] is None
+    assert ("warcraftlogs", ["report-player-details", "abcd1234", "--fight-id", "22"]) in calls
+
+
+@pytest.mark.parametrize("location", ["data", "provenance"])
+def test_cooldown_packet_preserves_partial_graphql_errors(monkeypatch, location: str) -> None:
+    invoke = _cooldown_packet_invoke([])
+    warnings = [{"message": "Partial cast lookup", "path": ["reportData", "report", "events"]}]
+
+    def partial_events(provider, args, *, expansion=None):
+        result = invoke(provider, args, expansion=expansion)
+        if args[0] == "report-events":
+            payload = result["payload"]
+            payload.setdefault(location, {})["graphql_warnings"] = warnings
+            payload["data"]["events"] = []
+            payload["data"]["notes"] = ["Some upstream cast events could not be read."]
+        return result
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", partial_events)
+    result = runner.invoke(warcraft_app, _cooldown_packet_args())
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    source = data["sources"]["warcraftlogs_report_events"]
+    assert source["status"] == "partial"
+    assert source["graphql_warnings"] == warnings
+    assert source["notes"] == ["Some upstream cast events could not be read."]
+    assert data["cooldowns"]["player_casts"]["complete"] is False
+    assert data["comparison"]["status"] == "partial"
+    assert data["comparison"]["reason"] == "incomplete_player_casts"
+    assert any("partial GraphQL errors" in note for note in data["notes"])
+
+
+def test_cooldown_packet_marks_paginated_casts_incomplete(monkeypatch) -> None:
+    invoke = _cooldown_packet_invoke([])
+
+    def paginated_events(provider, args, *, expansion=None):
+        result = invoke(provider, args, expansion=expansion)
+        if args[0] == "report-events":
+            result["payload"]["data"]["next_page_timestamp"] = 103000
+        return result
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", paginated_events)
+    result = runner.invoke(warcraft_app, _cooldown_packet_args())
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["cooldowns"]["player_casts"]["complete"] is False
+    assert data["comparison"]["status"] == "partial"
+    assert data["comparison"]["player_casts_complete"] is False
+
+
+def test_cooldown_packet_marks_an_empty_ranking_as_no_samples(monkeypatch) -> None:
+    invoke = _cooldown_packet_invoke([])
+
+    def empty_ranking(provider, args, *, expansion=None):
+        result = invoke(provider, args, expansion=expansion)
+        if args[0] == "spec-ranking":
+            result["payload"]["data"]["reports"] = []
+        return result
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", empty_ranking)
+    result = runner.invoke(warcraft_app, _cooldown_packet_args())
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["comparison"]["status"] == "no_samples"
+    assert data["comparison"]["reason"] == "no_top_parse_samples"
+    assert data["comparison"]["sample_count"] == 0
+    assert data["cooldowns"]["player_casts"]["complete"] is True
+
+
 def test_cooldown_packet_combines_lorrgs_phase_data_with_warcraftlogs_casts(monkeypatch) -> None:
     calls: list[tuple[str, list[str]]] = []
     monkeypatch.setattr("warcraft_cli.main.provider_invoke", _cooldown_packet_invoke(calls))

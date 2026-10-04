@@ -155,6 +155,8 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   class than the player's fails `invalid_query` (exit 2). Casts are counted only for the actor:
   `cooldowns.player_casts.other_source_cast_count` counts rows from anyone else. When Lorrgs omits a
   fight's duration, the last phase window has `end_ms: null` (open-ended).
+  A Lorrgs reply containing only a different fight is treated as missing the requested fight;
+  its phases, player timeline and deaths are never merged into the packet.
   The top-parse comparison uses `--difficulty` when passed, otherwise the Warcraft Logs fight's own
   difficulty (heroic or mythic, echoed as `query.difficulty`). It needs a Lorrgs boss slug: a
   Lorrgs-cached report names it, otherwise the Lorrgs boss whose id is the Warcraft Logs fight's
@@ -178,7 +180,12 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   the comparison did not run. When neither the player's fight nor any top parse has phase markers,
   each top parse's whole fight stands for P1.
   `notes` only describe what the packet actually holds, and say when Warcraft Logs truncated the
-  cast events or Lorrgs' boss spell names were unavailable. A fight id the Warcraft Logs report does
+  cast events or Lorrgs' boss spell names were unavailable. Each `sources` row preserves provider
+  `provenance`, `graphql_warnings` and `notes`; a successful source with GraphQL warnings has
+  `status: "partial"`. `cooldowns.player_casts.complete` is false for partial GraphQL errors or
+  pagination, and an otherwise ready comparison becomes `partial` with
+  `reason: "incomplete_player_casts"`. Empty rankings return `comparison.status: "no_samples"`
+  with `reason: "no_top_parse_samples"`. A fight id the Warcraft Logs report does
   not have fails `fight_not_found` (exit 4) with `error.details.available_fight_ids`; an actor
   missing from the Lorrgs or Warcraft Logs roster fails `actor_id_not_found` / `actor_name_not_found`
   (exit 4).

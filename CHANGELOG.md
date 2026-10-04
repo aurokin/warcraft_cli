@@ -222,6 +222,8 @@ output flags, and many commands that used to answer wrong with `ok: true` now an
 
 ### Fixed
 
+- `warcraft cooldown-packet` never merges a different singleton Lorrgs fight into the requested Warcraft Logs fight. Provider provenance, partial GraphQL warnings and notes remain visible in `sources`; incomplete or paginated player casts carry `complete: false` and a partial comparison. Empty top-parse rankings report `no_samples` instead of `ready`.
+- A zero or negative Redis cache TTL expires that key without disabling a healthy backend for later reads and writes. An inaccessible file-cache directory falls back to the upstream provider instead of failing the command.
 - `lorrgs resolve` keeps boss composition queries with extra words (`ulatek mythic`, `ulatek top`) unresolved at `medium`, with `confidence_cap.rule: "words_beyond_boss_name"` and the extra `terms`. Bare boss names, spec rankings and explicit Lorrgs URLs can still resolve; heroic, normal and LFR boss queries stay `low`. Resolve does not fetch a ranking, and wrapper ranking policy is unchanged.
 - `icy-veins` labels calculator builds outside tabs from the filter-widget section or nearest article heading. Unreadable tree data incurs one retry cycle per command instead of one per build.
 - Wowhead calculator refs accept WoW Forever paths, classic selection-order segments and MoP Classic glyph/no-spec forms. `warcraft talent-packet` and `talent-describe` route Forever refs to Wowhead. One shared parser preserves the existing spec aliases accepted by build references and SimC while retaining Wowhead's stricter URL grammar; non-retail refs, including Forever, receive SimC's explicit non-retail refusal.

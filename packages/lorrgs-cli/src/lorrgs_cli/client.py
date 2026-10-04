@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 from collections.abc import Callable
@@ -9,7 +8,7 @@ from urllib.parse import quote
 
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, CachedHttpClient, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, CachedHttpClient, hashed_cache_key, request_with_retries
 from warcraft_core.paths import provider_cache_root
 
 PROVIDER_NAME = "lorrgs"
@@ -107,9 +106,9 @@ class LorrgsClient(CachedHttpClient):
         ``cacheable`` vetoes storing an answer that is not final yet (a fight Lorrgs has not loaded).
         """
         cleaned = _clean_params(params)
-        key = f"lorrgs:{hashlib.sha256(json.dumps([path, cleaned], sort_keys=True).encode()).hexdigest()}"
-        if ttl_seconds and self._cache_store is not None:
-            cached = self._cache_store.get(key)
+        key = hashed_cache_key("lorrgs", json.dumps([path, cleaned], sort_keys=True).encode())
+        if ttl_seconds:
+            cached = self._read_cache(key)
             if isinstance(cached, dict) and "payload" in cached:
                 return cached
         response = request_with_retries(
@@ -121,7 +120,7 @@ class LorrgsClient(CachedHttpClient):
         )
         result = {"payload": self._decode_json(response), "source_url": str(response.request.url)}
         if ttl_seconds and self._cache_store is not None and (cacheable is None or cacheable(result["payload"])):
-            self._cache_store.set(key, result, ttl_seconds=ttl_seconds)
+            self._write_cache(key, result, ttl_seconds=ttl_seconds)
         return result
 
     def roles(self) -> dict[str, Any]:

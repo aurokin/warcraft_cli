@@ -419,7 +419,8 @@ def top_parse_samples(
 ) -> dict[str, Any]:
     """Top-parse samples for the selected phase.
 
-    ``status`` is ``no_phase_data`` when samples were read but none has a window for the phase, and
+    ``status`` is ``no_samples`` when no usable samples remain, or ``no_phase_data`` when samples
+    were read but none has a window for the phase, and
     ``sample_fraction`` counts only the samples that have one (``phase_sample_count``). The encounter
     has several phases when the player's fight or any top-parse fight shows more than one window.
     ``excluded_analyzed_fight`` says when the analyzed fight was a top parse and was left out.
@@ -465,7 +466,7 @@ def top_parse_samples(
         samples.append(sample)
     phase_sample_count = sum(1 for sample in samples if sample["phase_available"])
     return {
-        "status": "no_phase_data" if samples and not phase_sample_count else "ready",
+        "status": "no_samples" if not samples else "no_phase_data" if not phase_sample_count else "ready",
         "sample_count": len(samples),
         "phase_sample_count": phase_sample_count,
         "excluded_analyzed_fight": excluded_analyzed_fight,

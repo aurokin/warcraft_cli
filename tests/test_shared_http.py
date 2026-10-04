@@ -105,6 +105,27 @@ def test_cached_http_client_builds_one_client_and_closes_it_on_exit() -> None:
     assert client._http_client is None
 
 
+def test_cached_clients_own_separate_lazy_connections_and_reopen_after_close() -> None:
+    with CachedHttpClient() as first, CachedHttpClient() as second:
+        assert first._http_client is second._http_client is None
+        connection = first._client()
+        assert second._http_client is None
+        assert second._client() is not connection
+        first.close()
+        first.close()
+        assert connection.is_closed
+        assert first._client() is not connection
+        assert not first._client().is_closed
+
+
+def test_cached_http_client_closes_after_context_exception() -> None:
+    with pytest.raises(ValueError, match="test failure"), CachedHttpClient() as client:
+        connection = client._client()
+        raise ValueError("test failure")
+    assert connection.is_closed
+    assert client._http_client is None
+
+
 def test_cached_http_client_cache_is_inert_without_a_store_and_used_with_one() -> None:
     class DictStore:
         def __init__(self) -> None:

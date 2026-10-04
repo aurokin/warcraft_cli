@@ -81,6 +81,17 @@ def _cooldown_provider_payload(
     )
 
 
+def _provider_graphql_warnings(provider_result: dict[str, Any] | None) -> list[Any]:
+    """Keep partial-error evidence whether a typed read or raw GraphQL call supplied it."""
+    payload = as_dict(as_dict(provider_result).get("payload"))
+    provenance = as_dict(payload.get("provenance"))
+    warnings = list(as_list(_data_of(provider_result).get("graphql_warnings")))
+    for warning in as_list(provenance.get("graphql_warnings")):
+        if warning not in warnings:
+            warnings.append(warning)
+    return warnings
+
+
 def _provider_source(provider_result: dict[str, Any] | None, *, command: str, args: list[str]) -> dict[str, Any]:
     raw_payload = provider_result.get("payload") if isinstance(provider_result, dict) else None
     payload: dict[str, Any] = as_dict(raw_payload)
@@ -88,12 +99,17 @@ def _provider_source(provider_result: dict[str, Any] | None, *, command: str, ar
     provenance: dict[str, Any] = as_dict(raw_provenance)
     raw_report = _data_of(provider_result).get("report")
     report: dict[str, Any] = as_dict(raw_report)
+    warnings = _provider_graphql_warnings(provider_result)
+    status = provider_result.get("status") if isinstance(provider_result, dict) else "not_requested"
     return {
         "provider": provider_result.get("provider") if isinstance(provider_result, dict) else None,
-        "status": provider_result.get("status") if isinstance(provider_result, dict) else "not_requested",
+        "status": "partial" if warnings and status == "ok" else status,
         "command": source_command(command, args),
         "source_url": provenance.get("source_url"),
         "report": report or None,
+        "provenance": provenance,
+        "graphql_warnings": warnings,
+        "notes": as_list(_data_of(provider_result).get("notes")),
         "error": provider_result.get("error") if isinstance(provider_result, dict) else None,
     }
 
@@ -104,7 +120,7 @@ def _find_lorrgs_fight(data: dict[str, Any], fight_id: int) -> dict[str, Any] | 
     for fight in fights:
         if isinstance(fight, dict) and fight.get("fight_id") == fight_id:
             return fight
-    return fights[0] if len(fights) == 1 and isinstance(fights[0], dict) else None
+    return None
 
 
 def _available_lorrgs_players(fight: dict[str, Any]) -> list[dict[str, Any]]:
@@ -742,6 +758,9 @@ def _load_warcraftlogs_casts(ctx: typer.Context, request: CooldownRequest, state
         source_id=state.actor_id,
         window=state.selected_window,
     )
+    state.player_casts["complete"] = (
+        not _provider_graphql_warnings(state.events_result) and state.player_casts.get("next_page_timestamp") is None
+    )
 
 
 # Warcraft Logs raid difficulty ids that Lorrgs ranks, as Lorrgs difficulty slugs.
@@ -822,6 +841,11 @@ def _load_ranking_comparison(ctx: typer.Context, request: CooldownRequest, state
         analyzed_fight=(state.report_code, state.fight_id),
         warcraftlogs_phases=warcraftlogs_phases,
     )
+    _comparison_disclosures(request, state)
+
+
+def _comparison_disclosures(request: CooldownRequest, state: CooldownState) -> None:
+    """Distinguish missing samples and incomplete player evidence from a ready comparison."""
     if state.comparison["status"] == "no_phase_data":
         reasons = {sample["phase_unavailable_reason"] for sample in state.comparison["samples"]}
         state.comparison_reason = reasons.pop() if len(reasons) == 1 else "no_sample_has_phase"
@@ -834,6 +858,17 @@ def _load_ranking_comparison(ctx: typer.Context, request: CooldownRequest, state
             f"No top-parse sample has a P{request.phase} window (see comparison.samples[].phase_unavailable_reason"
             f"{hint}), so no top-parse casts were compared for this phase."
         )
+    if state.comparison["status"] == "no_samples":
+        state.comparison_reason = "no_top_parse_samples"
+        state.comparison_note = "Lorrgs returned no usable top-parse samples, so no top-parse casts were compared."
+    if state.comparison["status"] == "ready" and not state.player_casts["complete"]:
+        state.comparison["status"] = "partial"
+        state.comparison_reason = "incomplete_player_casts"
+        state.comparison_note = (
+            "Player cast events are incomplete; keep the top-parse sample evidence "
+            "but do not treat player counts as complete."
+        )
+    state.comparison["player_casts_complete"] = state.player_casts["complete"]
     state.comparison["reason"] = None if state.comparison["status"] == "ready" else state.comparison_reason
 
 
@@ -884,6 +919,11 @@ def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
     notes = [
         "Player casts come from Warcraft Logs cast events so cached Lorrgs user reports do not need per-player timeline generation.",
     ]
+    notes.extend(
+        f"{source['command']} returned partial GraphQL errors; inspect sources.{name}.graphql_warnings "
+        "before treating its evidence as complete."
+        for name, source in _source_refs(state).items() if source["graphql_warnings"]
+    )
     if state.phase_source == "lorrgs":
         notes.append("Phase windows are derived from Lorrgs phase transition markers; labels are one-based P1/P2/etc.")
     elif state.phase_source == "warcraftlogs":
@@ -905,7 +945,7 @@ def _notes(state: CooldownState, lorrgs_player_casts: list[Any]) -> list[str]:
             "The analyzed fight is itself a top parse; it is left out of the samples so the player is not "
             "compared with themselves."
         )
-    if state.comparison.get("status") == "ready":
+    if state.comparison.get("status") in {"ready", "partial"}:
         notes.append("Top-parse samples are comparison evidence, not universal cooldown recommendations.")
         if state.comparison["phase_sample_count"] < state.comparison["sample_count"]:
             notes.append(

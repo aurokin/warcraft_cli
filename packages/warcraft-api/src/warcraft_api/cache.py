@@ -178,9 +178,9 @@ class FileCacheStore:
     @staticmethod
     def _read(path: Path) -> tuple[Any, float, float] | None:
         """``(payload, mtime, expires_at)`` of a live entry, or ``None`` for a missing, broken or expired one."""
-        if not path.exists():
-            return None
         try:
+            if not path.exists():
+                return None
             data = json.loads(path.read_text(encoding="utf-8"))
             stored_at = path.stat().st_mtime
         except Exception:
@@ -295,6 +295,10 @@ class RedisCacheStore:
             return None
 
     def set(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
+        # File entries written with zero TTL immediately expire, including an older value of this key.
+        if ttl_seconds <= 0:
+            self._run("delete", self._redis_key(key))
+            return
         # A payload JSON cannot hold is dropped, as in FileCacheStore: the cache never fails a command.
         with suppress(TypeError, ValueError):
             self._run("set", self._redis_key(key), json.dumps(payload, separators=(",", ":")), ex=ttl_seconds)
