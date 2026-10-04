@@ -1,0 +1,33 @@
+{
+ "_links": {
+  "self": {
+   "href": "https://us.api.blizzard.com/profile/wow/character/malganis/aurow/collections/heirlooms?namespace=profile-us"
+  }
+ },
+ "heirlooms": [
+  {
+   "heirloom": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/heirloom/706?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Polished Helm of Valor",
+    "id": 706
+   },
+   "upgrade": {
+    "level": 3
+   }
+  },
+  {
+   "heirloom": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/heirloom/711?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Tarnished Raging Berserker's Helm",
+    "id": 711
+   },
+   "upgrade": {
+    "level": 3
+   }
+  }
+ ]
+}

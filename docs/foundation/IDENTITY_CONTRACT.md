@@ -117,6 +117,19 @@ Safe shared contract:
   `/classic/talent-calc/<class>/<code>` path names no spec and is not read as one)
 - talent transport packets that preserve raw build evidence plus any exact or validated transport forms
 
+Wowhead talent calculator refs have one parser, `parse_wowhead_talent_calc` in
+`warcraft_core.identity`. It reads URLs, `/talent-calc/...` paths and `<class>/<spec>/<code>`
+shorthand for every calculator (retail, PTR and beta; `classic`, `classic-ptr`, `tbc`, `wotlk`,
+`cata`, `mop-classic`; and WoW Forever's `forever`) and returns either the calculator, class, spec
+(null on a classic `<class>/<code>` path), build code and trailing segment (a classic selection
+order or MoP Classic glyphs), or the reason the ref is not one, plus whether the ref still aims at a
+calculator so a router can hand it to Wowhead for that message. Wowhead's `talent-calc` adds only
+its build-code checks on top, and the wrapper's talent routing uses it as is. Build references and
+SimC read the narrower `parse_wowhead_talent_calc_ref`: a path that names `/talent-calc`, a class
+and one of that class's retail specs, on retail or an expansion site, with no trailing segment.
+It preserves normalized spec aliases accepted by build references, such as `Balance`,
+`BeastMastery` and `beast_mastery`; the Wowhead tool parser keeps its lowercase slug grammar.
+
 Build identity should usually be `inferred`, `ambiguous`, or `unknown`.
 Do not emit a canonical build id unless a future source contract proves one exists.
 Do not create build references from guide slugs, page titles, or other indirect hints alone.

@@ -46,7 +46,7 @@ from wowhead_cli.ranking import (
     url_entity_result,
     url_page_result,
 )
-from wowhead_cli.wowhead_client import WowheadClient, search_url
+from wowhead_cli.wowhead_client import TALENT_CALC_DATA_TTL_SECONDS, WowheadClient, search_url
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +143,7 @@ def cache_settings_payload(settings: CacheSettings) -> dict[str, Any]:
             "page_html": ttls.page_html,
             "comment_replies": ttls.comment_replies,
             "entity_response": ttls.entity_response,
+            "talent_calc_data": TALENT_CALC_DATA_TTL_SECONDS,
         },
     }
 

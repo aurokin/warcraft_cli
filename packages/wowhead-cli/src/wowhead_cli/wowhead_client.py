@@ -10,6 +10,7 @@ import httpx
 from warcraft_api.cache import build_cache_store, load_cache_settings_from_env
 from warcraft_api.http import build_client, request_with_retries
 
+from wowhead_cli.classic_talents import compact_talent_data, is_compact_talent_data
 from wowhead_cli.entity_types import suggestion_entity_type_from_type_id
 from wowhead_cli.expansion_profiles import (
     ExpansionProfile,
@@ -28,6 +29,10 @@ from wowhead_cli.expansion_profiles import (
 WOWHEAD_BASE_URL = "https://www.wowhead.com"
 # Bump when the cached entity payload changes shape, so older entries stop being served.
 ENTITY_RESPONSE_CACHE_VERSION = 4
+# A talent data file URL pins its version (dv/db), so its trimmed copy keeps for a month.
+TALENT_CALC_DATA_TTL_SECONDS = 30 * 24 * 3600
+# Bump when compact_talent_data changes shape, so older trimmed copies stop being served.
+TALENT_CALC_DATA_CACHE_VERSION = 1
 
 
 class WowheadClient:
@@ -275,6 +280,23 @@ class WowheadClient:
             cache_ttl_seconds=self._cache_ttls.page_html,
             cache_namespace="page_html",
         )
+
+    def talent_calc_data(self, data_url: str) -> dict[str, Any]:
+        """A classic calculator's talent data file, trimmed to what the build decoder reads.
+
+        The file is about 1.3 MB; only the trimmed trees, tier lists and talent names are cached.
+        """
+        key = self._cache_key("talent_calc_data", f"v{TALENT_CALC_DATA_CACHE_VERSION}|{data_url}", None)
+        cached = self._session_json_cache.get(key)
+        if cached is None:
+            cached = self._read_cache(key)
+        if isinstance(cached, dict) and is_compact_talent_data(cached):
+            self._session_json_cache[key] = cached
+            return cached
+        data = compact_talent_data(self._request_with_retries(data_url).text)
+        self._session_json_cache[key] = data
+        self._write_cache(key, data, ttl_seconds=TALENT_CALC_DATA_TTL_SECONDS)
+        return data
 
     def comment_replies(self, comment_id: int) -> list[dict[str, Any]]:
         url = build_comment_replies_url(self.expansion)

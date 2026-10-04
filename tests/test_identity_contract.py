@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from warcraft_core.identity import (
+    WowheadTalentCalcRef,
+    WowheadTalentCalcRefError,
     ability_identity_payload,
     build_identity_payload,
     build_reference_payload,
@@ -9,6 +11,7 @@ from warcraft_core.identity import (
     encounter_identity_payload,
     normalize_actor_class,
     normalize_spec_name,
+    parse_wowhead_talent_calc,
     parse_wowhead_talent_calc_ref,
     refresh_talent_transport_packet,
     report_actor_identity_payload,
@@ -189,6 +192,12 @@ def test_parse_wowhead_talent_calc_ref_rejects_non_wowhead_domains() -> None:
     assert parse_wowhead_talent_calc_ref("//evil.com/talent-calc/druid/balance/ABC123") is None
 
 
+def test_build_references_preserve_protocol_relative_wowhead_urls() -> None:
+    parsed = parse_wowhead_talent_calc_ref("//www.wowhead.com/talent-calc/druid/balance/ABC123")
+    assert parsed is not None
+    assert parsed["reference_url"] == "https://www.wowhead.com/talent-calc/druid/balance/ABC123"
+
+
 def test_parse_wowhead_talent_calc_ref_rejects_buried_talent_calc_segments() -> None:
     assert parse_wowhead_talent_calc_ref("foo/talent-calc/druid/balance/ABC123") is None
     assert parse_wowhead_talent_calc_ref("https://www.wowhead.com/items/talent-calc/druid/balance/ABC123") is None
@@ -207,6 +216,66 @@ def test_parse_wowhead_talent_calc_ref_only_reads_a_real_spec_from_the_spec_slot
 def test_parse_wowhead_talent_calc_ref_rejects_empty_or_extra_segments() -> None:
     assert parse_wowhead_talent_calc_ref("https://www.wowhead.com/talent-calc/druid//balance/ABC123") is None
     assert parse_wowhead_talent_calc_ref("https://www.wowhead.com/talent-calc/druid/balance/ABC123/extra") is None
+
+
+def test_build_references_preserve_normalized_spec_aliases() -> None:
+    for actor_class, spec_slug, expected in (
+        ("druid", "Balance", "balance"),
+        ("hunter", "beast_mastery", "beast_mastery"),
+        ("hunter", "BeastMastery", "beast_mastery"),
+    ):
+        ref = f"https://www.wowhead.com/talent-calc/{actor_class}/{spec_slug}/ABC123"
+        parsed = parse_wowhead_talent_calc_ref(ref)
+        assert parsed is not None
+        assert parsed["spec"] == expected
+        assert parsed["reference_url"] == ref
+        assert isinstance(parse_wowhead_talent_calc(ref), WowheadTalentCalcRefError)
+
+
+def test_parse_wowhead_talent_calc_reads_each_calculators_path_layout() -> None:
+    classic = parse_wowhead_talent_calc("https://www.wowhead.com/classic/talent-calc/warrior/30305001302-05050005525010051/1aab0cC")
+    assert isinstance(classic, WowheadTalentCalcRef)
+    assert (classic.expansion, classic.actor_class, classic.spec, classic.build_code, classic.extra_segment) == (
+        "classic", "warrior", None, "30305001302-05050005525010051", "1aab0cC",
+    )
+    mop = parse_wowhead_talent_calc("https://www.wowhead.com/mop-classic/talent-calc/druid/balance/323222/AA4FGtB4TpcC4ToOD4F3gE4TpX")
+    assert isinstance(mop, WowheadTalentCalcRef)
+    assert (mop.spec, mop.build_code, mop.extra_segment) == ("balance", "323222", "AA4FGtB4TpcC4ToOD4F3gE4TpX")
+    forever = parse_wowhead_talent_calc("forever/death-knight/v205_t0")
+    assert isinstance(forever, WowheadTalentCalcRef)
+    assert (forever.expansion, forever.actor_class, forever.explicit_path) == ("forever", "deathknight", False)
+    assert forever.reference_url == "https://www.wowhead.com/forever/talent-calc/death-knight/v205_t0"
+    shorthand = parse_wowhead_talent_calc("druid/balance/ABC123", default_expansion="wotlk")
+    assert isinstance(shorthand, WowheadTalentCalcRef)
+    assert shorthand.reference_url == "https://www.wowhead.com/wotlk/talent-calc/druid/balance/ABC123"
+
+
+def test_parse_wowhead_talent_calc_says_why_and_whether_the_ref_aims_at_a_calculator() -> None:
+    """A malformed calculator ref still aims at one, so the wrapper routes it to Wowhead for this message."""
+    cases = {
+        "druid//balance/ABC123": ("talent-calc reference must not include empty path segments.", True),
+        "https://www.wowhead.com/items/talent-calc/druid": ("Talent calculator URL must point to /talent-calc.", True),
+        "paladin/frost/ABC": ("Talent calculator spec 'frost' is not a paladin spec.", True),
+        "https://www.wowhead.com/talent-calc/warrior/3030-05/0ab": ("Talent calculator spec segment '3030-05' is not a spec name.", True),
+        "https://notwowhead.com/talent-calc/druid/balance": ("talent-calc URL must point to wowhead.com.", False),
+        "tmp/foo": (
+            "Talent calculator URL must use /talent-calc/<class>/<spec>[/<build-code>] or "
+            "/talent-calc/<class>/<build-code> with a WoW class.",
+            False,
+        ),
+    }
+    for ref, expected in cases.items():
+        assert parse_wowhead_talent_calc(ref) == WowheadTalentCalcRefError(*expected), ref
+
+
+def test_parse_wowhead_talent_calc_ref_keeps_to_retail_spec_paths() -> None:
+    """Build references and SimC read only ``/talent-calc/<class>/<spec>[/<code>]`` on a known site."""
+    for ref in (
+        "https://www.wowhead.com/mop-classic/talent-calc/druid/balance/323222/AA4FGtB4TpcC4ToOD4F3gE4TpX",
+        "https://www.wowhead.com/forever/talent-calc/druid/balance/ABC123",
+        "druid/balance/ABC123",
+    ):
+        assert parse_wowhead_talent_calc_ref(ref) is None, ref
 
 
 def test_build_reference_payload_only_accepts_explicit_wowhead_talent_calc_urls() -> None:

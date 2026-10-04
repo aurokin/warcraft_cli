@@ -220,12 +220,18 @@ Raw-only transport packets are not accepted as direct build input: upgrade them 
 
 | Reference type | Example | Decodes |
 |----------------|---------|---------|
-| `wow_talent_export` | `C4QAAAAAA...` | Yes, once the class and spec are known. Method and Icy Veins PvE pages publish this type, and the string names no class or spec, so either pass `--actor-class`/`--spec` or let identification probe every spec SimC knows. |
+| `wow_talent_export` | `C4QAAAAAA...` | Yes, once the class and spec are known. Method and Icy Veins publish this type, and Icy Veins also converts calculator builds on PvE and PvP pages into it. Published rows may have unknown class/spec; converted rows carry both in `build_identity`. With a raw string, pass `--actor-class`/`--spec` or let identification probe every spec SimC knows. |
 | `wowhead_talent_calc_url` | `https://www.wowhead.com/talent-calc/monk/mistweaver/<code>` | Yes, unaided: the path names the class and spec, which the hash is decoded against once. A path the hash contradicts is ignored and the probe identifies the build. Retail PTR and Beta calculators (`/ptr/`, `/beta/`) count as this type. |
 | Wowhead `/talent-calc/blizzard/<code>` | what `modify-build` publishes as `result.wowhead_url` | Yes, as a `wow_talent_export`: the URL carries the hash but no class or spec. |
 | `wowhead_talent_calc_url` with no build code | `https://www.wowhead.com/talent-calc/monk/mistweaver` | No — `unsupported_build_reference`. |
-| Classic-era Wowhead calculator (`/classic/`, `/cata/`, `/mop-classic/`, ...) | `https://www.wowhead.com/mop-classic/talent-calc/mage/frost/<code>` | No — `unsupported_build_reference` with `reference_type: "wowhead_talent_calc_url_non_retail"`: SimulationCraft decodes retail builds only. |
-| Any other link (guide page, article, addon export site, the Icy Veins talent calculator URLs `icy-veins guide` reports for PvP pages) | `https://www.icy-veins.com/wow/...` | No — `unsupported_build_reference` with `reference_type: "url"`. |
+| Classic-era Wowhead calculator (`/classic/`, `/cata/`, `/mop-classic/`, `/forever/`, ...) | `https://www.wowhead.com/mop-classic/talent-calc/mage/frost/<code>` | No — `unsupported_build_reference` with `reference_type: "wowhead_talent_calc_url_non_retail"`: SimulationCraft decodes retail builds only. |
+| Any other link (guide page, article, addon export site, or an Icy Veins talent calculator URL) | `https://www.icy-veins.com/wow/...` | No — `unsupported_build_reference` with `reference_type: "url"`. |
+
+Icy Veins converted import strings preserve the selected class, spec and hero talents, but cannot
+carry PvP talents. Keep the calculator URL alongside them for those selections. A conversion that
+fails keeps the URL with a reason; SimC does not decode that URL directly. Classic calculator
+builds can be inspected with `wowhead talent-calc`, but SimulationCraft still decodes retail builds
+only. See [../wowhead/README.md](../wowhead/README.md#classic-talent-builds).
 
 ## Decoded builds
 

@@ -4150,6 +4150,26 @@ def test_warcraft_talent_packet_accepts_hyphenated_wowhead_class_slug(monkeypatc
     assert payload["data"]["talent_transport_packet"]["transport_status"] == "exact"
 
 
+def test_warcraft_talent_packet_routes_a_wow_forever_calculator_ref_to_wowhead(monkeypatch) -> None:
+    """``forever/<class>/<code>`` used to read as a missing packet file; WoW Forever has its own calculator."""
+    calls: list[list[str]] = []
+
+    def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
+        calls.append([provider, *args])
+        return {
+            "provider": provider,
+            "exit_code": 2,
+            "payload": {"ok": False, "error": {"code": "invalid_tool_ref", "message": "talent-calc packet refs must name a spec"}},
+        }
+
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", fake_provider_invoke)
+
+    result = runner.invoke(warcraft_app, ["talent-packet", "forever/warrior/v205_t0", "--no-validate"])
+
+    assert calls == [["wowhead", "talent-calc-packet", "forever/warrior/v205_t0", "--listed-build-limit", "10"]]
+    assert json.loads(result.stderr)["error"]["details"]["route"] == {"kind": "wowhead_talent_calc", "provider": "wowhead"}
+
+
 def test_warcraft_talent_packet_rejects_invalid_packet_file(tmp_path: Path) -> None:
     packet_path = tmp_path / "broken-packet.json"
     packet_path.write_text("{not json}\n")

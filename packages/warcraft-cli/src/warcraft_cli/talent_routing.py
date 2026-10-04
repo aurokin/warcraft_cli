@@ -18,10 +18,13 @@ from urllib.parse import urlparse
 import typer
 from warcraft_core.cli import fail
 from warcraft_core.exit_codes import EXIT_USAGE
-from warcraft_core.expansions import wowhead_path_prefixes
-from warcraft_core.identity import is_warcraftlogs_report_code, validate_talent_transport_packet
+from warcraft_core.identity import (
+    WowheadTalentCalcRef,
+    is_warcraftlogs_report_code,
+    parse_wowhead_talent_calc,
+    validate_talent_transport_packet,
+)
 from warcraft_core.shapes import as_dict
-from warcraft_core.wow_specs import WOW_CLASS_NAMES, raiderio_class_slug
 
 from warcraft_cli.providers import (
     DescribeOptions,
@@ -33,42 +36,14 @@ from warcraft_cli.providers import (
     provider_payload_data,
 )
 
-# Wowhead class path segments that precede /talent-calc in a bare (non-URL) reference: deathknight or death-knight.
-_WOWHEAD_CLASS_SLUGS = frozenset(WOW_CLASS_NAMES) | {raiderio_class_slug(class_key) for class_key in WOW_CLASS_NAMES}
-# Expansion path prefixes Wowhead puts in front of a talent-calc path.
-_WOWHEAD_EXPANSION_PREFIXES = wowhead_path_prefixes()
-
-
-def _wowhead_url_targets_talent_calc(url: str) -> bool:
-    parsed = urlparse(url)
-    hostname = parsed.hostname.lower() if isinstance(parsed.hostname, str) else ""
-    path_parts = [part for part in parsed.path.split("/") if part]
-    return (hostname == "wowhead.com" or hostname.endswith(".wowhead.com")) and "talent-calc" in path_parts
-
-
-def _talent_calc_path_parts(text: str) -> list[str]:
-    """Path segments of a bare Wowhead reference with any leading expansion prefix removed."""
-    parts = [part for part in text.split("/") if part]
-    if parts and parts[0] in _WOWHEAD_EXPANSION_PREFIXES:
-        parts = parts[1:]
-    return parts
-
 
 def _looks_like_wowhead_talent_calc_reference(value: str) -> bool:
-    text = value.strip()
-    if not text:
-        return False
-    lowered = text.lower()
-    if "://" in text:
-        return _wowhead_url_targets_talent_calc(text)
-    if lowered.startswith(("www.wowhead.com/", "wowhead.com/")):
-        return _wowhead_url_targets_talent_calc(f"https://{text}")
-    parts = _talent_calc_path_parts(text)
-    if not parts:
-        return False
-    if parts[0].strip() in _WOWHEAD_CLASS_SLUGS or parts[0].strip() == "talent-calc":
-        return True
-    return len(parts) >= 2 and parts[1].strip() == "talent-calc"
+    """Whether the shared parser reads ``value`` as aimed at a Wowhead talent calculator, valid or not.
+
+    A malformed calculator ref still routes to Wowhead, whose error names what is wrong with it.
+    """
+    parsed = parse_wowhead_talent_calc(value)
+    return isinstance(parsed, WowheadTalentCalcRef) or parsed.targets_talent_calc
 
 
 def _looks_like_warcraftlogs_report_reference(value: str) -> bool:

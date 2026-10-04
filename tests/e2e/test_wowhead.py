@@ -1274,6 +1274,54 @@ def test_a_classic_talent_calculator_url_is_a_class_and_a_build_code_not_a_spec(
         )
 
 
+# One build per classic calculator, each checked against what Wowhead's own calculator renders for it:
+# points per tree in the calculator's order and the last talent taken in each tree. All but WoW
+# Forever's come from Wowhead's class guides; the Cataclysm URL carries the selection order Wowhead
+# appends after clicks, and the WoW Forever build (made in its calculator, which has no guide builds
+# yet) is a regression target that ages out if Blizzard reworks its trees before launch.
+CLASSIC_CALCULATOR_BUILDS: tuple[tuple[str, str, list[str | None]], ...] = (
+    (CLASSIC_TALENT_CALC_URL, "17/34/0", ["Impale", "Bloodthirst", None]),
+    ("https://www.wowhead.com/classic/talent-calc/hunter/A_AAzAQ40zc0AA", "20/31/0", ["Ferocity", "Trueshot Aura", None]),
+    ("https://www.wowhead.com/tbc/talent-calc/mage/2-5052120123033310531251-053002001", "2/48/11", ["Arcane Subtlety", "Dragon's Breath", "Icy Veins"]),
+    (
+        "https://www.wowhead.com/wotlk/talent-calc/death-knight/0055101-30505050350203010300233101351-005_001xv611s8q31ts841sxd51s8g",
+        "12/54/5",
+        ["Rune Tap", "Howling Blast", "Anticipation"],
+    ),
+    (
+        "https://www.wowhead.com/cata/talent-calc/death-knight/20322200112222311321-1-203003_001s8511sy821s7r31s9h41xv261ts871s9r81sxd/0ACFDeeMjkQPNtsRVwz2CAF0w1a",
+        "32/1/8",
+        ["Dancing Rune Weapon", "Runic Power Mastery", "Morbidity"],
+    ),
+    ("https://www.wowhead.com/forever/talent-calc/warrior/v2252202-5321011-2541230211002001_t0", "13/13/24", ["Improved Overpower", "Blood Craze", "Focused Rage"]),
+    ("https://www.wowhead.com/classic-ptr/talent-calc/warrior/30305001302-05050005525010051", "17/34/0", ["Impale", "Bloodthirst", None]),
+)
+MOP_CLASSIC_BUILD_URL = "https://www.wowhead.com/mop-classic/talent-calc/druid/balance/323222/AA4FGtB4TpcC4ToOD4F3gE4TpX"
+
+
+@pytest.mark.parametrize(("url", "points_by_tree", "last_talents"), CLASSIC_CALCULATOR_BUILDS, ids=lambda value: str(value)[:48])
+def test_a_classic_calculator_build_decodes_to_the_trees_wowhead_shows(require, url: str, points_by_tree: str, last_talents: list) -> None:
+    """The calculator page names its versioned talent data file; the build decodes against that file."""
+    require("wowhead")
+    result = run(BINARY, "talent-calc", url)
+    talents = result.data["talents"]
+    assert talents["decoded"] is True, result.describe()
+    assert talents["points_by_tree"] == points_by_tree, result.describe()
+    assert [tree["talents"][-1]["name"] if tree["talents"] else None for tree in talents["trees"]] == last_talents, result.describe()
+    assert re.fullmatch(r"https://nether\.wowhead\.com/[a-z-]+/data/talents-classic\?dv=\d+&db=\d+", talents["data_url"]), result.describe()
+
+
+def test_a_mop_classic_build_decodes_to_the_talent_chosen_in_each_tier(require) -> None:
+    require("wowhead")
+    result = run(BINARY, "talent-calc", MOP_CLASSIC_BUILD_URL)
+    talents = result.data["talents"]
+    assert talents["decoded"] is True, result.describe()
+    assert [tier["talent"]["name"] for tier in talents["tiers"]] == [
+        "Wild Charge", "Renewal", "Typhoon", "Incarnation", "Ursol's Vortex", "Dream of Cenarius",
+    ], result.describe()
+    assert talents["glyphs_code"] == MOP_CLASSIC_BUILD_URL.rsplit("/", 1)[1], result.describe()
+
+
 def test_profession_dressing_room_and_profiler_refs_normalize_and_cite(require) -> None:
     """The three inspectors normalize their opaque ref and read the page that ref belongs to.
 

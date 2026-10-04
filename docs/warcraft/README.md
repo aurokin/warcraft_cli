@@ -16,11 +16,11 @@ Tiers describe how much depth an agent should expect. `warcraft doctor` reports 
 | core | simc | `simc` | Local SimulationCraft repo inspection, build decoding, and runs. |
 | supported | raiderio | `raiderio` | Character/guild profiles and Mythic+ leaderboards. |
 | supported | warcraft-wiki | `warcraft-wiki` | MediaWiki-backed reference article search and export. |
-| supported | icy-veins | `icy-veins` | Guide search, resolve, and guide bundle export. |
+| supported | icy-veins | `icy-veins` | Guide search, resolve, bundle export, and calculator-to-import-string conversion. |
 | supported | method | `method` | Guide search, resolve, and guide bundle export. |
 | supported | lorrgs | `lorrgs` | Cooldown timeline rankings and cached report overviews; no auth. |
 | experimental | raidbots | `raidbots` | Public report parsing and SimC input handoff; no search index. |
-| experimental | blizzard-api | `blizzard` | Battle.net Game Data and Profile reads (verified live); no search/resolve. |
+| experimental | blizzard-api | `blizzard` | Official realms/items, PvP, collections, and auction/commodity prices (verified live); no search/resolve. |
 | experimental | curseforge | `curseforge` | Addon metadata lookup (verified live); no search/resolve. |
 
 ## Global flags
@@ -234,7 +234,13 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
 - `warcraft guide-builds-simc` — turn explicit build references in exported bundles into a simc packet.
   Each reference is handed to simc in the form its type requires: a `wow_talent_export` string goes
   as `--build-text`, a Wowhead talent-calc URL as a validated transport packet held in memory (its
-  simc payloads cite no packet file). A reference that can
+  simc payloads cite no packet file). Icy Veins publishes import strings and converts calculator
+  builds on PvE and PvP pages into `wow_talent_export` rows. Converted rows carry class/spec
+  `build_identity` and cite their calculator URL in `source.converted_from`; published rows can
+  have unknown identity until SimC identifies them. The import string omits PvP talents, so the
+  calculator URL stays when it carries those selections. Unconverted calculator URLs are excluded
+  with a reason. Classic Wowhead builds are inspectable through `wowhead talent-calc`, but SimC
+  handoffs still support retail builds only. A reference that can
   go neither way is an `excluded_builds` row naming the reason, not a silently shorter list.
   `--limit` takes one build per provider in turn (bundle order), so it never drops a whole provider;
   the builds past it are `summary.truncated_build_count`, apart from `summary.excluded_build_count`.

@@ -1,0 +1,40 @@
+{
+ "_links": {
+  "self": {
+   "href": "https://us.api.blizzard.com/profile/wow/character/malganis/aurow/collections/mounts?namespace=profile-us"
+  }
+ },
+ "mounts": [
+  {
+   "mount": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/mount/6?namespace=static-12.0.1_65617-us"
+    },
+    "name": "Brown Horse",
+    "id": 6
+   },
+   "is_useable": false
+  },
+  {
+   "mount": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/mount/185?namespace=static-12.0.1_65617-us"
+    },
+    "name": "Raven Lord",
+    "id": 185
+   },
+   "is_favorite": true,
+   "is_useable": true
+  },
+  {
+   "mount": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/mount/14?namespace=static-12.0.1_65617-us"
+    },
+    "name": "Timber Wolf",
+    "id": 14
+   },
+   "is_useable": true
+  }
+ ]
+}

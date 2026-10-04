@@ -76,6 +76,12 @@ COMP_RANKING_NAME_PREFIX = "Composition ranking for "
 KIND_ORDER = {"spec_ranking": 0, "comp_ranking": 1, "spec": 2, "boss": 3}
 # Rows built from a parsed report reference: nothing checked that Lorrgs can serve the report.
 REPORT_KINDS = frozenset({"report_overview", "user_report_fights"})
+# Free-text rows built from a boss alone. Their ranking is never fetched during resolve and Lorrgs
+# serves an empty one for a boss it has no logs for yet, so only the bare boss name hands one over.
+BOSS_KINDS = frozenset({"comp_ranking", "boss"})
+# Words that add nothing to a boss name: the site's own name and grammatical filler. Any other word
+# (a difficulty, "top", "cooldowns", "rankings") asks something the bare ranking may not answer.
+BOSS_QUERY_FILLER = frozenset({"lorrgs", "lorgs", "io", "www", "the", "of", "and", "on", "for", "in", "vs"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,12 +202,18 @@ def resolve_payload(client: LorrgsClient, query: str, *, limit: int) -> dict[str
     unrivalled answer, which is exactly the silent wrong resolution the limit must not create.
     """
     candidates = _ranked_candidates(client, query)
+    confidence = _confidence(candidates)
+    extra_words = _words_beyond_boss_name(candidates[0], query) if confidence == "high" else []
+    cap: dict[str, Any] = {}
+    if extra_words:
+        cap["confidence_cap"] = {"rule": "words_beyond_boss_name", "from": "high", "terms": extra_words}
     return resolve_data(
         search_query=_normalize_query(query),
         ranked=candidates,
         limit=limit,
-        confidence=_confidence(candidates),
+        confidence="medium" if extra_words else confidence,
         fallback_search_command=shlex.join(["lorrgs", "search", query]),
+        **cap,
         single_word_identity=_names_single_word,
         query=query,
         supported_inputs=_supported_inputs(),
@@ -629,6 +641,22 @@ def _names_single_word(word: str, row: Mapping[str, Any]) -> bool:
         return unique_spec_class(word) is not None
     boss = str(row["name"]).removeprefix(COMP_RANKING_NAME_PREFIX)
     return row["kind"] in {"boss", "comp_ranking"} and single_word_named(word, boss.split(" the ", 1)[0])
+
+
+def _words_beyond_boss_name(best: dict[str, Any], query: str) -> list[str]:
+    """Query words a free-text boss answer leaves unexplained, which cap it at medium.
+
+    "ulatek mythic" resolved to ``lorrgs comp-ranking ulatek`` at high (2026-10) while Lorrgs held no
+    Ula'tek reports: "mythic" is filler to the row match, but a query naming more than the boss asks
+    for an answer an unfetched ranking cannot vouch for. Explicit Lorrgs URLs carry no
+    ``match_level`` and are never capped.
+    """
+    if best.get("kind") not in BOSS_KINDS or "match_level" not in best["ranking"]:
+        return []
+    # matched_terms holds the short name too, which the full name can lack ("alleria" for Crown of the Cosmos).
+    boss = str(best.get("name") or "").removeprefix(COMP_RANKING_NAME_PREFIX)
+    named = {*best["ranking"]["matched_terms"], *_words(boss), *_words(best.get("boss_slug"))}
+    return sorted(set(_words(query)) - named - BOSS_QUERY_FILLER)
 
 
 def _confidence(candidates: list[dict[str, Any]]) -> ResolveConfidence:

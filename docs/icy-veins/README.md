@@ -90,8 +90,8 @@ title. Three reference types are emitted:
 | `reference_type` | Source on the page | `url` |
 | --- | --- | --- |
 | `wowhead_talent_calc_url` | an embedded Wowhead talent-calc link | the talent-calc URL |
-| `wow_talent_export` | a published WoW loadout import string (the `Copy` blocks on the talents pages) | the import string itself, because the reference has no link |
-| `icy_veins_talent_calc_url` | an embedded Icy Veins talent calculator, read on `pvp` pages only | the Icy Veins talent calculator URL with the build's hash |
+| `wow_talent_export` | a published WoW loadout import string (the `Copy` blocks on the talents pages), or a talent calculator build converted to one | the import string itself, because the reference has no link |
+| `icy_veins_talent_calc_url` | an embedded Icy Veins talent calculator: kept on `pvp` pages, and on other pages when its hash names PvP talents or its build could not be converted | the Icy Veins talent calculator URL with the build's hash |
 
 The first two types are what `warcraft guide-builds-simc` hands to simc. It counts the
 build in `summary.identify_success_count` only when simc identifies one class and spec; otherwise the
@@ -99,8 +99,8 @@ identify leg fails `build_not_identified`. Decoding needs a class and a spec, an
 them differently:
 
 - `wowhead_talent_calc_url` always decodes unaided: its URL path names the class and spec.
-- `wow_talent_export` names neither, so `build_identity` stays unknown on the row and SimC has to
-  identify the string itself. It probes every spec in SimC's specialization data, healers included.
+- A published `wow_talent_export` names neither, so `build_identity` stays unknown on the row and SimC has to
+  identify the string itself (a converted one names both; see below). It probes every spec in SimC's specialization data, healers included.
 
 So `simc decode-build --talents <build_code>` returns `ok:true` for an Icy Veins build of any role
 without `--actor-class` or `--spec` (verified against the Fury Warrior talents page: the probe returns
@@ -109,16 +109,36 @@ without `--actor-class` or `--spec` (verified against the Fury Warrior talents p
 The Icy Veins builds/talents pages publish import strings rather than talent-calc links, so in
 practice the rows you get back are `wow_talent_export`.
 
-The PvP talents-and-builds pages publish no import strings: each build is an embed of Icy Veins' own
-talent calculator, labelled by its build tab ("Best 3v3 Frost Mage Build"). Each distinct build becomes an
-`icy_veins_talent_calc_url` row. When several tabs embed the same build, the row's `label` joins their
-names with " / " ("Best 3v3 Talents / Best Battleground Blitz Talents"). Its `build_code` is the calculator's hash, which includes the PvP talents.
-The hash is Icy Veins' own encoding, not a WoW import string. Only its spec id is read, which gives
-`build_identity` its class and spec with `confidence: high`. simc cannot decode the hash, so
-`guide-builds-simc` excludes these rows with `unsupported_reference_type:icy_veins_talent_calc_url`.
-Open the `url` and use the calculator's export button to get the import string. PvE pages embed the
-calculator too (builds/talents, easy-mode and Mythic+ tips pages), but no rows are read from those
-embeds, so a PvE build that appears only in the calculator is not in `build_references`.
+Some builds appear only in an embed of Icy Veins' own talent calculator: every build on the PvP
+talents-and-builds pages, and some builds on PvE pages (builds/talents, easy-mode, leveling and Mythic+
+tips pages). The calculator's hash is Icy Veins' own encoding, not a WoW import string, so `icy-veins`
+converts it the way the calculator's export button does, using the calculator's per-class tree data
+(`https://static.icy-veins.com/json/midnight-talent-calculator/<class>.json`, cached like a guide page).
+Verified on 2026-10-04: for 21 calculator builds across eight specs the converted string was identical
+to the one the live calculator's export button gave, and `simc decode-build` read each one as the
+page's spec with the calculator's talents.
+
+- Each converted build is a `wow_talent_export` row whose `source.source` is
+  `guide_talent_calculator_conversion`, with `source.converted_from` (the calculator URL) and
+  `source.tree_data_url`. Its `build_identity` names the class and spec from the hash's spec id, with
+  `confidence: high`. A WoW import string carries no PvP talents, so builds that differ only in their
+  PvP talents share one row, whose `label` joins their names with " / ".
+- `label` is the build's tab name ("Best 3v3 Frost Mage Build"), the filter-widget section on a
+  builds page ("Frostfire Raid Talents"), or else the heading of the section the calculator sits in.
+- A build whose talents the page already publishes as an import string adds no row. The game's own
+  export and the calculator's can differ by a granted, unpurchased bit (the root of the hero tree
+  you did not pick) while loading the same talents, so the comparison is by purchased talents, not
+  by string.
+- On a `pvp` page the `icy_veins_talent_calc_url` row stays, since its hash also names the PvP
+  talents; on other pages it stays when its hash picks PvP talents (some delve builds do). Tabs that
+  embed one build share one row. The row's `conversion` names the import string
+  (`{"status": "converted", "wow_talent_export": ..., "tree_data_url": ...}`). The `guide-full` and
+  `guide-export` merged lists drop `conversion`, but each page's own `build_references` keep it.
+- A build that cannot be converted keeps its `icy_veins_talent_calc_url` row on every page, with
+  `conversion: {"status": "failed", "reason": ...}`. The reason is unreadable tree data, a hash that
+  does not match the tree data, or a hash that spells out a build the game would refuse (a node
+  over its ranks, or a node bought without its prerequisites). `guide-builds-simc` excludes these
+  rows with `unsupported_reference_type:icy_veins_talent_calc_url`. Open the `url` to see the build.
 
 ### Partial guide bundles
 

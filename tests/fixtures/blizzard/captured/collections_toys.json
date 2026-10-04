@@ -1,0 +1,28 @@
+{
+ "_links": {
+  "self": {
+   "href": "https://us.api.blizzard.com/profile/wow/character/malganis/aurow/collections/toys?namespace=profile-us"
+  }
+ },
+ "toys": [
+  {
+   "toy": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/toy/196?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Crashin' Thrashin' Robot",
+    "id": 196
+   }
+  },
+  {
+   "toy": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/toy/101?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Super Simian Sphere",
+    "id": 101
+   },
+   "is_favorite": true
+  }
+ ]
+}

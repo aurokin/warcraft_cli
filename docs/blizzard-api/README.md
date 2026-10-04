@@ -3,11 +3,13 @@
 **Tier: experimental — verified live.** The endpoint hosts, OAuth token URL, and namespace
 strings were confirmed against the live API on 2026-09-13 for the `us`, `eu`, `kr`, and `tw`
 regions (retail and classic Game Data, retail Profile), and on 2026-10-03 for the progression Classic,
-Classic Era and Anniversary Profile and Game Data namespaces, so `realm`, `item`, and `character` carry
-`provenance.verified: true` there. `cn` stays `verified: false` because its host is unreachable
-from where this repo is tested. `doctor` reports `data.tier: "experimental"`, `live_confirmed`, and
-the verified and unverified regions. The tier stays experimental because the command surface is
-thin, not because the data is suspect. Re-verify with:
+Classic Era and Anniversary Profile and Game Data namespaces, so every read carries
+`provenance.verified: true` there. The PvP, collections and auction reads were checked live on
+2026-10-03; which game versions answer them is in
+[Game versions](#game-versions-for-pvp-collections-and-auctions). `cn` stays `verified: false`
+because its host is unreachable from where this repo is tested. `doctor` reports
+`data.tier: "experimental"`, `live_confirmed`, and the verified and unverified regions. The tier
+stays experimental because search and resolve are stubs, not because the data is suspect. Re-verify with:
 
 ```bash
 make test-e2e E2E_PATHS="tests/e2e/test_blizzard.py"
@@ -24,6 +26,12 @@ client credentials and emits the shared JSON envelope.
 | `blizzard realm <slug>` | Reads `/data/wow/realm/{slug}` from the dynamic Game Data namespace. |
 | `blizzard item <item-id>` | Reads `/data/wow/item/{id}` from the static Game Data namespace. |
 | `blizzard character <realm-slug> <name>` | Reads `/profile/wow/character/{realm}/{name}` from the profile namespace, for every game version. Also takes `<region> <realm-slug> <name>`, the order `raiderio` and `warcraftlogs` use; a positional region that differs from `--region` is `invalid_query` (exit 2). |
+| `blizzard pvp-season [season-id]` | A PvP season (the current one by default): name, start, every season id, its leaderboard brackets, and its title rating cutoffs. See [PvP](#pvp). |
+| `blizzard pvp-leaderboard <bracket>` | The top ranks of one leaderboard (`--limit`, default 25; `--season`). See [PvP](#pvp). |
+| `blizzard pvp-character <realm-slug> <name>` | A character's honor, battleground record, and rating and record in every bracket it has played. See [PvP](#pvp). |
+| `blizzard collections <realm-slug> <name>` | A character's mounts, pets, toys, heirlooms and transmog appearances: counts plus a filtered, limited list. See [Collections](#collections). |
+| `blizzard auctions <realm-slug>` | The realm's connected-realm auction house, summarized per item id. See [Auctions and commodities](#auctions-and-commodities). |
+| `blizzard commodities` | The region-wide retail commodity market, summarized per item id. See [Auctions and commodities](#auctions-and-commodities). |
 | `blizzard search <query>` | Coming soon. Returns a `kind: "search_results"` envelope with `coming_soon: true`, no rows and exit 0, not an error. |
 | `blizzard resolve <query>` | Coming soon. Returns a `kind: "resolve_match"` envelope with `coming_soon: true`, `confidence: "none"`, no candidates and exit 0, not an error. |
 
@@ -47,7 +55,104 @@ rating and season record in `2v2`, `3v3`, `rbg`, or a `shuffle-<class>-<spec>` b
 Any other value is `invalid_query` (exit 2) and sends no request. A bracket the character has not
 played is `not_found` (exit 4).
 
+`pvp-character` and `collections` take the same `<realm> <name>` / `<region> <realm> <name>`
+arguments and realm spellings as `character`; `auctions` takes the same realm spellings as `realm`.
+
 `search` and `resolve` accept `--limit` (1-50, default 5); it is ignored until those surfaces ship.
+
+## PvP
+
+- `pvp-season [season-id]` reads the season index, the season, its leaderboard index and its reward
+  index. `data` carries `season_id`, `season_name` (`null` on Classic), `season_start` (ISO 8601
+  UTC), `current_season_id`, `seasons` (every id, newest first), `brackets` (the leaderboard names
+  `pvp-leaderboard` takes: `2v2`, `3v3`, `rbg`, `shuffle-overall`, `blitz-overall`,
+  `shuffle-<class>-<spec>`, `blitz-<class>-<spec>`, and `5v5` on Classic), and `rewards`: one row per
+  title cutoff (`bracket` type, `achievement`, `achievement_id`, `rating_cutoff`, and
+  `specialization`/`specialization_id` for Shuffle and Blitz or `faction` for battleground titles;
+  the absent ones are `null`). Spec names repeat across classes (Frost), so match on
+  `specialization_id`. Cutoffs move while a season runs; `freshness` dates them.
+  Blizzard answers the oldest seasons with HTTP 403, which surfaces as `auth_failed` (exit 3).
+- `pvp-leaderboard <bracket> [--season N] [--limit N]` returns `bracket`, `bracket_type`,
+  `season_id`, `total_entries` (Blizzard publishes up to about 5000), `returned`, `truncated`,
+  `freshness`, and `entries` of `rank`, `rating`, `name`, `realm` (slug), `character_id`, `faction`,
+  `played`, `won`, `lost` and `tier_id`. `--limit` is 1-5000 (default 25). On `shuffle-overall`
+  the record counts rounds, not matches (it equals the profile's `season_rounds`). A bracket that is not one lowercase path segment is
+  `invalid_query` (exit 2) and sends no request; a bracket the season has no board for is `not_found`.
+- `pvp-character <realm> <name>` reads `pvp-summary` and then every `pvp-bracket` it links. Off
+  retail, Blizzard's `pvp-summary` leaves out brackets the character has rated (the top progression
+  Classic 3v3 player's summary links only 2v2), so it also reads `2v2`, `3v3`, `5v5` and `rbg`
+  and skips the ones that answer HTTP 404; per-spec Shuffle and Blitz brackets a Classic summary
+  omits cannot be found that way. `data`
+  carries `character` (`name`, `id`, `realm`), `honor_level`, `honorable_kills`, `battlegrounds`
+  (`map`, `played`, `won`, `lost`), and `brackets`: `bracket`, `bracket_type`, `season_id` (a
+  bracket from an earlier season keeps its own id), `rating`, `tier_id`, `specialization` (Shuffle
+  and Blitz), `season` and `weekly` records, and for Solo Shuffle `season_rounds` and
+  `weekly_rounds`. A character with no rated play has `brackets: []`.
+
+`character --section pvp-summary` and `--section pvp-bracket/<bracket>` still return the raw bodies.
+
+## Collections
+
+`collections <realm> <name> [--kind K ...] [--match TEXT] [--limit N]` reads
+`/collections/<kind>` for each kind (default all of `mounts`, `pets`, `toys`, `heirlooms`,
+`transmogs`; `--kind` repeats). `data.character` echoes the name and the realm slug that answered,
+and `data.collections.<kind>` carries `count` (the whole collection), `matched` (rows whose name
+contains `--match`, case-insensitive; the whole collection without it), `returned`, `truncated`, and
+`items` sorted by name, cut to `--limit` (default 20, max 5000):
+
+| Kind | Item fields | Extra fields |
+|------|-------------|--------------|
+| `mounts` | `id`, `name`, `is_favorite`, `is_useable` (false for a mount this character cannot ride) | |
+| `pets` | `id` (the journal pet), `name` (species), `species_id`, `nickname`, `level`, `quality`, `is_favorite` | `unique_species` |
+| `toys` | `id`, `name`, `is_favorite` | |
+| `heirlooms` | `id`, `name`, `upgrade_level` | |
+| `transmogs` | appearance sets: `id`, `name` (`count` is the number of sets) | `appearance_count`, `appearances_by_slot` |
+
+Single transmog appearances are counted per slot, not listed: Blizzard names them only by id. Any
+other `--kind` is `invalid_query` (exit 2) and sends no request. `character --section
+collections/<kind>` still returns the raw body.
+
+## Auctions and commodities
+
+`auctions <realm> [--item-id N ...] [--limit N]` reads the realm record, follows its connected realm,
+and reads that auction house. `commodities [--item-id N ...] [--limit N]` reads the region-wide
+retail commodity market (ore, herbs, reagents and other stackables are listed there, not on realms).
+Neither dumps listings. `data` carries `auction_count` (listings), `item_count` (distinct items),
+`freshness`, and `items` of:
+
+- `item_id`, `auctions` (listings), `quantity` (units)
+- `min_unit_price` and `median_unit_price`, in copper (10000 copper = 1 gold). The median is
+  weighted by units: the lowest price at which half of the listed units are available. Realm
+  listings carry a buyout for the whole listing, divided by its quantity here. Bids are not prices;
+  a listing with only a bid counts toward `auctions` and `quantity` but not toward prices, so an
+  item listed only that way has `null` prices.
+
+With `--item-id` (repeatable) `items` holds exactly those ids that are listed, in the order asked,
+and `not_listed` the rest. Without it, `items` is the `--limit` most-listed items (default 20, max
+500) with `returned` and `truncated`. `auctions` also returns `realm` and `connected_realm_id`.
+
+Rows are per item id, so variants of one item id merge: every battle pet is a Pet Cage (`82800`),
+and gear at different item levels shares one row. Item names are not included; read them with
+`blizzard item <id>`.
+
+`freshness` is `{last_modified, age_seconds}`: `last_modified` is Blizzard's own `Last-Modified` for
+the snapshot (ISO 8601 UTC; Blizzard rebuilds auctions about hourly) and `age_seconds` its age when
+the command ran, so a replay from the cache still reports how old the prices are. `pvp-leaderboard`
+and `pvp-season` (for its cutoffs) carry the same block.
+
+### Game versions for PvP, collections and auctions
+
+Checked live on 2026-10-03 and 2026-10-04: retail, progression Classic (`--classic`) and
+Anniversary (`--game-version classic-anniversary`) answer `pvp-season`, `pvp-leaderboard` and
+`pvp-character`; retail and progression Classic answer `auctions`. Classic Era has no PvP season
+index (`not_found`). Classic Era and Anniversary connected-realm auction houses answered HTTP 404
+(`not_found`). `collections` is retail-only in practice: the progression Classic profile namespace
+answers `collections/mounts` with HTTP 404 (`not_found`).
+Blizzard's API publishes no Classic commodity (stackable trade goods) prices: the Classic
+region-wide commodity endpoint returns only links, and Classic realm auction houses list
+non-commodity items only (every listing has quantity 1), so ore, cloth and herbs are absent from
+`auctions <realm> --classic`. `commodities` with any game version other than retail is
+`unsupported_game_version` (exit 2) and sends no request.
 
 ## Global Flags
 
@@ -64,7 +169,8 @@ blizzard --fields data.id,data.name item 19019
 
 ## Routing Flags
 
-`realm`, `item`, and `character` accept:
+Every read accepts `--region`, `--game-version` and `--classic`; all but `pvp-leaderboard`,
+`auctions` and `commodities`, whose bodies carry no translated text, also accept `--locale`:
 
 | Flag | Behavior |
 |------|----------|
@@ -96,8 +202,11 @@ read command fails with `missing_client_credentials` and exit 3.
 ## Output
 
 Success payloads are the shared envelope: `{ok, provider, command, kind, schema_version, query,
-provenance, data}`. `data` is the raw Blizzard JSON body; `provenance` carries `region`, `namespace`,
-`namespace_class`, `game_version`, `locale`, `source_url`, `verified` (true for confirmed regions), a
+provenance, data}`. For `realm`, `item`, `character` and `character --section`, `data` is the raw
+Blizzard JSON body; the PvP, collections and auction reads return the compact shapes above.
+`provenance` carries `region`, `namespace`, `namespace_class`, `game_version`, `locale`,
+`source_url` (for reads that make several requests, the main one: the season, the leaderboard, the
+pvp-summary, the first collection, the auction house), `verified` (true for confirmed regions), a
 `verification_note`, and the shared `cache` block (see
 [USAGE.md](../USAGE.md#reading-cache-state-provenancecache)).
 
@@ -109,9 +218,13 @@ provider whose id differs from its binary name.
 ## Caching
 
 Responses are cached on disk under the XDG cache root (`blizzard-api/http`), keyed on host, path,
-namespace and locale, never on the token: the static namespace (items) for 24 hours, the dynamic and
-profile namespaces (realms, characters) for 15 minutes. A replay sends no request at all, not even
-for a token, but still needs the credentials configured. Override with `BLIZZARD_STATIC_CACHE_TTL_SECONDS`, `BLIZZARD_DYNAMIC_CACHE_TTL_SECONDS`,
+namespace and locale, never on the token: the static namespace (items) and the PvP season,
+season-detail and leaderboard indexes for 24 hours, the dynamic and profile namespaces (realms,
+characters, `pvp-character`) for 15 minutes, and snapshots (auctions, commodities, leaderboards,
+PvP cutoffs, collections) for 1 hour. The current season therefore follows a new season within a day.
+Leaderboards, auction houses, the commodity market and transmog collections are reduced to their
+compact form before they are cached, so a replay never re-reads megabytes. A replay sends no request at all, not even
+for a token, but still needs the credentials configured. Override with `BLIZZARD_STATIC_CACHE_TTL_SECONDS`, `BLIZZARD_DYNAMIC_CACHE_TTL_SECONDS`, `BLIZZARD_SNAPSHOT_CACHE_TTL_SECONDS`,
 `BLIZZARD_CACHE_DIR`, or `BLIZZARD_CACHE_BACKEND=file|redis|none` (Redis takes `BLIZZARD_REDIS_URL`
 and `BLIZZARD_REDIS_PREFIX`).
 
@@ -139,7 +252,8 @@ returns envelopes and never prints.
 
 ## Not Implemented
 
-`search`/`resolve` ranking, shared identity payloads, Season of Discovery routing, PvP
-leaderboards and season cutoffs, achievements and other character sub-resources beyond
-`--section`, auction-house and commodity prices, connected-realm and spell surfaces, and user-auth
-(authorization-code) flows.
+`search`/`resolve` ranking, shared identity payloads, Season of Discovery routing, achievements and
+other character sub-resources beyond `--section`, item names on auction rows, battle-pet species
+and item-level variants on auction rows, Classic Era and Anniversary auction houses, Classic
+commodity prices (Blizzard publishes none), a
+connected-realm record surface, spell surfaces, and user-auth (authorization-code) flows.

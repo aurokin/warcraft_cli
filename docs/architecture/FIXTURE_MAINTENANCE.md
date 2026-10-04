@@ -30,15 +30,17 @@ happens outside pytest.
 | `tests/fixtures/expansion_synthetic.json` | synthetic | `test_expansion_synthetic_fixtures.py`, `test_wowhead_schema_snapshots.py` |
 | `tests/fixtures/wowhead_output_schemas.py` | synthetic (required `data` keys per Wowhead command) | `test_wowhead_schema_snapshots.py` |
 | `tests/fixtures/wowhead_canaries.py` | pinned live entities | `test_wowhead_parser_canaries.py` (live, `make test-canary`) |
-| `tests/fixtures/wowhead/` | captured | `test_wowhead_captured_fixtures.py`, `test_wowhead_tools.py` |
+| `tests/fixtures/wowhead/` | captured | `test_wowhead_captured_fixtures.py`, `test_wowhead_tools.py`, `test_wowhead_classic_talents.py` |
 | `tests/fixtures/method/*.html` | synthetic, plus one captured page | `test_method_synthetic_fixtures.py`, `test_method_captured_fixtures.py` |
 | `tests/fixtures/icy_veins/*.html` | captured | `test_icy_veins_recorded_fixtures.py`, `test_icy_veins_cli.py`, `test_icy_veins_site_index.py` |
+| `tests/fixtures/icy_veins/talent_tree_<class>.json` | captured (2026-10-04; display fields removed) | `test_icy_veins_talent_calculator.py` |
 | `tests/fixtures/raiderio/` | captured | `test_raiderio_captured_fixtures.py` |
 | `tests/fixtures/warcraft_wiki/` | captured | `test_warcraft_wiki_parser.py`, `test_warcraft_wiki_cli.py` |
 | `tests/fixtures/lorrgs/` | captured | `test_lorrgs_cli.py` |
 | `tests/fixtures/warcraftlogs/` | captured | `test_warcraftlogs_captured_fixtures.py` |
 | `tests/fixtures/simc/` | captured, plus one synthetic decode log (`dh_decode_debug.txt`) | `test_simc_cli.py`, `test_simc_build_input.py`, `test_simc_compare.py` |
 | `tests/fixtures/blizzard/*.json` | synthetic | `test_blizzard_api_contracts.py` |
+| `tests/fixtures/blizzard/captured/*.json` | captured (2026-10-03, us retail; lists trimmed) | `test_blizzard_api_features.py` |
 | `tests/fixtures/curseforge/*.json` | synthetic | `test_curseforge_contracts.py` |
 
 ## Synthetic: Wowhead routing fixtures
@@ -89,13 +91,26 @@ When re-capturing, save the raw page and then trim it:
   - (Icy Veins) any script whose body contains both `dataLayer` and `page_type`: the parser reads
     the GTM dataLayer for `page.page_type`
   - (Icy Veins) any script whose body contains `TalentCalculator(`: the parser reads the talent
-    calculator args for PvP build references
+    calculator args for build references on every page
 - Keep everything else byte-identical. Do not reserialize through BeautifulSoup.
 
 Aim well under 100 KB per file.
 
 ```bash
 pytest -q tests/test_icy_veins_cli.py tests/test_icy_veins_recorded_fixtures.py tests/test_method_captured_fixtures.py
+```
+
+## Captured: Icy Veins talent trees
+
+`tests/fixtures/icy_veins/talent_tree_<class>.json` comes from
+`https://static.icy-veins.com/json/midnight-talent-calculator/<class>.json`. The warrior and
+`demon_hunter` trees pin the calculator conversion against real node ids, ranks and prerequisites.
+Re-download the same class files when their tree data changes. Delete `description`,
+`rankDescriptions`, `icon`, `row`, `column`, `specCheckpoints` and `classCheckpoints` wherever they
+occur, then serialize compactly. Keep every other field and value unedited.
+
+```bash
+pytest -q tests/test_icy_veins_talent_calculator.py
 ```
 
 ## Captured: Wowhead responses
@@ -119,6 +134,17 @@ on, and ten search-suggestion JSON responses (`search_suggestions_<query>.json`;
 
 ```bash
 pytest -q tests/test_wowhead_captured_fixtures.py tests/test_wowhead_tools.py
+```
+
+`tests/fixtures/wowhead/talent_data_<calculator>.js` holds the versioned data file each classic
+calculator page names. Refresh by re-downloading that URL and trimming to the same tested classes.
+Keep `hashVersion` and only those classes' `talents` and `trees` in the
+`WH.setPageData("wow.talentCalcClassic.<x>.data", ...)` object. In
+`WH.Gatherer.addData(6, <env>, ...)`, keep only those talents' first-rank spell entries, unchanged.
+Drop everything else in the file. Do not replace the remaining talent or spell values by hand.
+
+```bash
+pytest -q tests/test_wowhead_classic_talents.py
 ```
 
 ## Captured: Raider.IO API responses
@@ -167,6 +193,25 @@ server) are replaced, as `report_encounter_aura_buffs_capture.json`'s `_capture.
 
 ```bash
 pytest -q tests/test_warcraftlogs_captured_fixtures.py
+```
+
+## Captured: Blizzard API responses
+
+`tests/fixtures/blizzard/captured/*.json` holds retail us PvP season/index/reward/leaderboard
+bodies, character PvP summaries/brackets, the five collection kinds, connected-realm auctions and
+commodities. They were captured on 2026-10-03. Refresh from the routes in
+`tests/test_blizzard_api_features.py`, choosing current seasons and public characters when the
+pinned ones no longer answer. Save response bodies only; never save authorization headers or tokens.
+
+Trim lists to a few representative rows and preserve retained rows, ids, links and scalar values.
+For auctions and commodities, retain multiple prices and quantities for one item and any bid-only
+listing the assertions need. Preserve the nested transmog slots and appearances needed for counts.
+The realm record used to route auctions is still the synthetic `tests/fixtures/blizzard/realm.json`.
+Update route ids and expectations when rotating captures; do not rewrite upstream values to keep
+old assertions passing.
+
+```bash
+pytest -q tests/test_blizzard_api_features.py
 ```
 
 ## Captured: SimulationCraft output

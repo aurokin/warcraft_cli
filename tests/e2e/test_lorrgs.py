@@ -453,6 +453,23 @@ def test_a_boss_short_name_that_does_not_name_the_boss_is_not_high(require) -> N
         assert result.data["confidence"] != "high", result.describe()
 
 
+def test_a_boss_query_with_more_than_the_boss_name_is_not_high(catalog: Catalog) -> None:
+    """``ulatek mythic`` resolved to ``lorrgs comp-ranking ulatek`` at high (2026-10) while that ranking
+    held no reports. Resolve never fetches the ranking, so any word beyond the boss name caps it at medium.
+
+    The bare name is the oracle that Lorrgs still knows the boss and still hands its ranking over.
+    """
+    name = catalog.boss_slug.replace("-", " ")
+    command = f"lorrgs comp-ranking {catalog.boss_slug}"
+    bare = run("lorrgs", "resolve", name)
+    assert (bare.data["confidence"], bare.data["next_command"]) == ("high", command), bare.describe()
+
+    mythic = run("lorrgs", "resolve", f"{name} mythic")
+    assert (mythic.data["confidence"], mythic.data["resolved"], mythic.data["next_command"]) == ("medium", False, None), mythic.describe()
+    assert mythic.data["match"]["follow_up"]["command"] == command, mythic.describe()
+    assert mythic.data["confidence_cap"] == {"rule": "words_beyond_boss_name", "from": "high", "terms": ["mythic"]}, mythic.describe()
+
+
 def test_a_guide_question_does_not_resolve_to_spec_metadata(require) -> None:
     """Lorrgs has spec timelines, not guides: "guide" is a word it cannot answer, so it may not resolve.
 

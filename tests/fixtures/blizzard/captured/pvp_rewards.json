@@ -1,0 +1,107 @@
+{
+ "_links": {
+  "self": {
+   "href": "https://us.api.blizzard.com/data/wow/pvp-season/42/pvp-reward/?namespace=dynamic-us"
+  }
+ },
+ "season": {
+  "key": {
+   "href": "https://us.api.blizzard.com/data/wow/pvp-season/42?namespace=dynamic-us"
+  },
+  "id": 42
+ },
+ "rewards": [
+  {
+   "bracket": {
+    "id": 6,
+    "type": "SHUFFLE"
+   },
+   "achievement": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/achievement/62923?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Venomous Legend: Midnight Season 2",
+    "id": 62923
+   },
+   "rating_cutoff": 1016,
+   "specialization": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/playable-specialization/581?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Vengeance",
+    "id": 581
+   }
+  },
+  {
+   "bracket": {
+    "id": 6,
+    "type": "SHUFFLE"
+   },
+   "achievement": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/achievement/62923?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Venomous Legend: Midnight Season 2",
+    "id": 62923
+   },
+   "rating_cutoff": 2625,
+   "specialization": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/playable-specialization/72?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Fury",
+    "id": 72
+   }
+  },
+  {
+   "bracket": {
+    "id": 1,
+    "type": "ARENA_3v3"
+   },
+   "achievement": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/achievement/62922?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Venomous Gladiator: Midnight Season 2",
+    "id": 62922
+   },
+   "rating_cutoff": 2761
+  },
+  {
+   "bracket": {
+    "id": 3,
+    "type": "BATTLEGROUNDS"
+   },
+   "achievement": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/achievement/62953?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Hero of the Alliance: Venomous",
+    "id": 62953
+   },
+   "rating_cutoff": 2432,
+   "faction": {
+    "type": "ALLIANCE",
+    "name": "Alliance"
+   }
+  },
+  {
+   "bracket": {
+    "id": 3,
+    "type": "BATTLEGROUNDS"
+   },
+   "achievement": {
+    "key": {
+     "href": "https://us.api.blizzard.com/data/wow/achievement/62954?namespace=static-12.1.0_68914-us"
+    },
+    "name": "Hero of the Horde: Venomous",
+    "id": 62954
+   },
+   "rating_cutoff": 2432,
+   "faction": {
+    "type": "HORDE",
+    "name": "Horde"
+   }
+  }
+ ]
+}

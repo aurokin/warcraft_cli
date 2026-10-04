@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from warcraft_core.identity import (
-    WOWHEAD_EXPANSION_PREFIXES,
+    WOWHEAD_TALENT_CALC_PREFIXES,
     IdentityConfidence,
     normalize_actor_class,
     normalize_spec_name,
@@ -405,7 +405,7 @@ def wowhead_blizzard_build_code(ref: str) -> str | None:
 
 
 # Wowhead's /ptr/ and /beta/ calculators are retail builds SimC decodes; every other prefix is Classic-era.
-CLASSIC_WOWHEAD_PREFIXES = WOWHEAD_EXPANSION_PREFIXES - {"ptr", "beta"}
+CLASSIC_WOWHEAD_PREFIXES = WOWHEAD_TALENT_CALC_PREFIXES - {"ptr", "beta"}
 
 
 def _refuse_non_retail_talent_calc(url: str) -> None:

@@ -1,0 +1,53 @@
+{
+ "_links": {
+  "self": {
+   "href": "https://us.api.blizzard.com/profile/wow/character/tichondrius/takhfiend/pvp-bracket/3v3?namespace=profile-us"
+  }
+ },
+ "character": {
+  "key": {
+   "href": "https://us.api.blizzard.com/profile/wow/character/tichondrius/takhfiend?namespace=profile-us"
+  },
+  "name": "Takhfiend",
+  "id": 242315347,
+  "realm": {
+   "key": {
+    "href": "https://us.api.blizzard.com/data/wow/realm/11?namespace=dynamic-us"
+   },
+   "name": "Tichondrius",
+   "id": 11,
+   "slug": "tichondrius"
+  }
+ },
+ "faction": {
+  "type": "ALLIANCE",
+  "name": "Alliance"
+ },
+ "bracket": {
+  "id": 1,
+  "type": "ARENA_3v3"
+ },
+ "rating": 2228,
+ "season": {
+  "key": {
+   "href": "https://us.api.blizzard.com/data/wow/pvp-season/42?namespace=dynamic-us"
+  },
+  "id": 42
+ },
+ "tier": {
+  "key": {
+   "href": "https://us.api.blizzard.com/data/wow/pvp-tier/13?namespace=static-12.1.0_68914-us"
+  },
+  "id": 13
+ },
+ "season_match_statistics": {
+  "played": 87,
+  "won": 57,
+  "lost": 30
+ },
+ "weekly_match_statistics": {
+  "played": 16,
+  "won": 13,
+  "lost": 3
+ }
+}
