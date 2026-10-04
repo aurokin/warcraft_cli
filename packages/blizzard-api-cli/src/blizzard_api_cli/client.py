@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import time
@@ -14,7 +13,7 @@ from urllib.parse import quote
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
 from warcraft_api.client_credentials import TOKEN_SKEW_SECONDS, ClientTokenCache
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, CachedHttpClient, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, CachedHttpClient, hashed_cache_key, request_with_retries
 from warcraft_core.paths import provider_cache_root
 from warcraft_core.timestamps import parse_iso8601_utc
 from warcraft_core.wow_normalization import normalize_region, profile_region, realm_slug_variants, slug_parts
@@ -289,8 +288,8 @@ class BlizzardClient(CachedHttpClient):
         params = {"namespace": routing.namespace, **({"locale": routing.locale} if localized else {})}
         # A reduced view gets its own key; the unreduced key stays what it has always been.
         key_parts: list[Any] = [routing.host, path, params, *([reduce.__name__] if reduce is not None else [])]
-        key = f"blizzard:{hashlib.sha256(json.dumps(key_parts, sort_keys=True).encode()).hexdigest()}"
-        cached = self._cache_store.get(key) if self._cache_store is not None and ttl else None
+        key = hashed_cache_key("blizzard", json.dumps(key_parts, sort_keys=True).encode())
+        cached = self._read_cache(key) if ttl else None
         if isinstance(cached, dict) and "payload" in cached:
             return {**cached, "routing": routing}
         token = self._token(routing)
@@ -308,8 +307,8 @@ class BlizzardClient(CachedHttpClient):
             "source_url": str(response.request.url),
             "last_modified": _http_date_to_iso(response.headers.get("Last-Modified")),
         }
-        if self._cache_store is not None and ttl:
-            self._cache_store.set(key, result, ttl_seconds=ttl)
+        if ttl:
+            self._write_cache(key, result, ttl_seconds=ttl)
         return {**result, "routing": routing}
 
     def _slug_from_realm_index(self, routing: BlizzardRouting, realm: str) -> str | None:

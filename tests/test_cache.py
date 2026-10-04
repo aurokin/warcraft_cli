@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
 import pytest
+from blizzard_api_cli.auth import BlizzardAuthConfig
+from blizzard_api_cli.client import BlizzardClient, BlizzardClientError, resolve_routing
+from curseforge_cli.auth import CurseForgeAuthConfig
+from curseforge_cli.client import CurseForgeClient, CurseForgeClientError
+from lorrgs_cli.client import LorrgsClient
+from raidbots_cli.client import RaidbotsClient
 from raiderio_cli.client import RaiderIOClient
 from warcraft_api import cache as cache_module
 from warcraft_api.cache import (
@@ -28,6 +36,7 @@ from warcraft_api.cache import (
 )
 from warcraft_core.cache_ledger import cache_ledger
 from warcraft_wiki_cli.client import WarcraftWikiClient
+from warcraftlogs_cli.client import WarcraftLogsClient
 from wowhead_cli.wowhead_client import WowheadClient
 
 
@@ -45,6 +54,37 @@ def test_file_cache_store_roundtrips_and_expires(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr("warcraft_api.cache.time.time", lambda: now + 61)
     assert store.get("search_suggestions:abc123") is None
     assert not cache_file.exists()
+
+
+def test_provider_legacy_list_keys_replay_without_http_or_token_fetch_and_still_require_auth(tmp_path: Path) -> None:
+    store = FileCacheStore(tmp_path)
+    keys = {
+        "blizzard": b'["https://us.api.blizzard.com", "/data/wow/realm/index", {"locale": "en_US", "namespace": "dynamic-us"}]',
+        "curseforge": b'["/v1/mods", {"gameId": 1, "searchFilter": "synthetic addon"}]',
+        "lorrgs": b'["/api/roles", {"id": "synthetic"}]',
+    }
+    for namespace, raw in keys.items():
+        store.set(f"{namespace}:{hashlib.sha256(raw).hexdigest()}", {"payload": {"source": namespace}}, ttl_seconds=60)
+    with (
+        BlizzardClient(auth=BlizzardAuthConfig("synthetic-id", "synthetic-secret", None, None)) as blizzard,
+        CurseForgeClient(auth=CurseForgeAuthConfig("synthetic-key", None)) as curseforge,
+        LorrgsClient() as lorrgs,
+    ):
+        for client in (blizzard, curseforge, lorrgs):
+            client._cache_store = store
+        routing = resolve_routing(region_input="us", namespace_class="dynamic")
+        assert blizzard._get(routing, "/data/wow/realm/index")["payload"] == {"source": "blizzard"}
+        assert curseforge._get("/v1/mods", params={"searchFilter": "synthetic addon", "gameId": 1})["payload"] == {"source": "curseforge"}
+        assert lorrgs._get("/api/roles", params={"id": "synthetic", "unused": None}, ttl_seconds=60)["payload"] == {"source": "lorrgs"}
+        assert all(client._http_client is None for client in (blizzard, curseforge, lorrgs))
+        blizzard._client_id = ""
+        curseforge._api_key = ""
+        with pytest.raises(BlizzardClientError) as missing_blizzard:
+            blizzard._get(routing, "/data/wow/realm/index")
+        with pytest.raises(CurseForgeClientError) as missing_curseforge:
+            curseforge._get("/v1/mods", params={"searchFilter": "synthetic addon", "gameId": 1})
+        assert missing_blizzard.value.code == "missing_client_credentials"
+        assert missing_curseforge.value.code == "missing_api_key"
 
 
 def test_file_cache_lookups_are_recorded_with_the_hit_age_from_the_entry_mtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,6 +115,105 @@ def test_a_truncated_cache_entry_is_a_miss_and_is_deleted(tmp_path: Path) -> Non
     block = ledger.provenance()
     assert block is not None
     assert (block["lookups"], block["hits"]) == (1, 0)
+
+
+def test_inaccessible_cache_paths_allow_provider_fetches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    blocked = tmp_path / "inaccessible"
+    original_exists = Path.exists
+
+    def exists(path: Path) -> bool:
+        if path.is_relative_to(blocked):
+            raise PermissionError("synthetic inaccessible cache parent")
+        return original_exists(path)
+
+    monkeypatch.setattr(Path, "exists", exists)
+    requests: list[str] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(200, json={"version": "synthetic-report"})
+
+    with cache_ledger() as ledger, RaidbotsClient() as client:
+        client._cache_store = FileCacheStore(blocked)
+        client._http_client = httpx.Client(transport=httpx.MockTransport(upstream))
+        assert client.report_data("synthetic-id") == {"version": "synthetic-report"}
+
+    assert len(requests) == 1
+    assert client.last_from_cache is False
+    provenance = ledger.provenance()
+    assert provenance is not None
+    assert (provenance["lookups"], provenance["hits"]) == (1, 0)
+
+
+class ExpiringRedis:
+    """Synthetic Redis command semantics, including Redis's rejection of SET EX 0."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    def get(self, key: str) -> str | None:
+        return self.values.get(key)
+
+    def set(self, key: str, value: str, *, ex: int) -> None:
+        if ex <= 0:
+            raise ValueError("invalid expire time in set")
+        self.values[key] = value
+
+    def delete(self, key: str) -> None:
+        self.values.pop(key, None)
+
+
+@pytest.fixture
+def expiring_redis_store(monkeypatch: pytest.MonkeyPatch) -> RedisCacheStore:
+    monkeypatch.setattr(cache_module, "_FAILED_REDIS_URLS", set())
+    redis = ExpiringRedis()
+    return RedisCacheStore(
+        redis_url="redis://synthetic-cache:6379/0",
+        prefix="synthetic",
+        import_module_func=lambda name: SimpleNamespace(from_url=lambda *args, **kwargs: redis),
+    )
+
+
+@pytest.mark.parametrize("ttl", [0, -1])
+def test_zero_or_negative_redis_ttl_expires_the_key_without_disabling_healthy_cache(
+    expiring_redis_store: RedisCacheStore, ttl: int
+) -> None:
+    with cache_ledger() as ledger:
+        store = expiring_redis_store
+        store.set("keep", {"value": "old"}, ttl_seconds=60)
+        store.set("expire", {"value": "old"}, ttl_seconds=60)
+        store.set("expire", {"value": "new"}, ttl_seconds=ttl)
+        assert store.get("expire") is None
+        assert store.get("keep") == {"value": "old"}
+        store.set("later", {"value": "new"}, ttl_seconds=60)
+        assert store.get("later") == {"value": "new"}
+    provenance = ledger.provenance()
+    assert provenance is not None
+    assert (provenance["hits"], provenance["errors"]) == (2, 0)
+
+
+def test_zero_finished_report_ttl_preserves_other_redis_cache_families(
+    expiring_redis_store: RedisCacheStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    report = {"reportData": {"report": {"code": "synthetic", "endTime": 999999, "fights": []}}}
+    monkeypatch.setenv("WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS", "0")
+    with cache_ledger() as ledger, WarcraftLogsClient() as client:
+        client._cache_store = expiring_redis_store
+        monkeypatch.setattr(client, "_has_user_token", lambda: False)
+        monkeypatch.setattr(client, "_token", lambda: "synthetic-token")
+        monkeypatch.setattr(client, "_post_graphql", lambda *args, **kwargs: httpx.Response(200, json={"data": report}))
+        assert client._finished_report_ttl == 0
+        resolver = client._report_finish_ttl_resolver()
+        assert resolver(report) == 0
+        assert client._graphql(
+            operation_name="ReportFights", query="synthetic-query", variables={}, namespace="report_fights",
+            ttl_seconds=60, ttl_resolver=resolver,
+        ) == report
+        client._write_cache("static", {"zones": []}, ttl_seconds=60)
+        assert client._read_cache("static") == {"zones": []}
+    provenance = ledger.provenance()
+    assert provenance is not None
+    assert provenance["errors"] == 0
 
 
 def test_redis_cache_store_uses_prefix_and_roundtrips() -> None:

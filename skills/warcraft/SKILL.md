@@ -138,6 +138,9 @@ narrower, **experimental** is thin and may change.
   it fails `missing_actor` listing the roster. Externals the player did not cast (Power Infusion or
   Bloodlust from someone else) are not compared: they are in `data.cooldowns.received_auras`. One the
   player cast, such as a priest's own Power Infusion, is compared.
+  Read `data.sources.*.graphql_warnings` and `data.cooldowns.player_casts.complete` before treating zero
+  casts as absence. Partial errors or pagination make the comparison `partial`; `no_samples` means
+  Lorrgs supplied no usable top-parse comparison evidence.
 - Typical packet flow:
   - `warcraftlogs report-player-talents <report> --fight-id <id> --actor-id <id> --out ./tmp/actor-packet.json`
   - `simc validate-talent-transport --build-packet ./tmp/actor-packet.json --out ./tmp/actor-packet-validated.json`

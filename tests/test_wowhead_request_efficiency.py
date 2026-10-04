@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
 from typer.testing import CliRunner
 from warcraft_core.envelope import REQUIRED_KEYS
 from wowhead_cli import main as main_module
@@ -11,6 +13,49 @@ from wowhead_cli.main import app
 from wowhead_cli.wowhead_client import WowheadClient
 
 runner = CliRunner()
+
+
+def test_wowhead_shared_transport_keeps_legacy_request_and_entity_keys() -> None:
+    with WowheadClient(expansion="classic") as client:
+        raw_request = b"page_html|https://www.wowhead.com/classic/talent-calc|a=space+value&z=2&z=1"
+        assert client._cache_key("page_html", "https://www.wowhead.com/classic/talent-calc", {"z": [2, 1], "a": "space value"}) == (
+            f"page_html:{hashlib.sha256(raw_request).hexdigest()}"
+        )
+        raw_entity = (
+            b'{"data_env":2,"expansion":"classic","id":19019,"include_all_comments":false,'
+            b'"include_comments":true,"linked_entity_preview_limit":5,"type":"item","v":4}'
+        )
+        assert client._entity_response_cache_key(
+            requested_type="item", requested_id=19019, data_env=2, include_comments=True,
+            include_all_comments=False, linked_entity_preview_limit=5,
+        ) == f"entity_response:{hashlib.sha256(raw_entity).hexdigest()}"
+
+
+def test_wowhead_disabled_cache_does_not_access_an_attached_store() -> None:
+    class UnavailableStore:
+        def get(self, key: str) -> None:
+            raise AssertionError("disabled cache was read")
+
+        def set(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
+            raise AssertionError("disabled cache was written")
+
+    with WowheadClient() as client:
+        client._cache_store = UnavailableStore()
+        client._cache_enabled = False
+        assert client._read_cache("k") is None
+        client._write_cache("k", {"a": 1}, ttl_seconds=60)
+
+
+def test_wowhead_partial_construction_can_be_cleaned_up(monkeypatch) -> None:
+    def invalid_settings():
+        raise ValueError("invalid cache configuration")
+
+    monkeypatch.setattr("wowhead_cli.wowhead_client.load_cache_settings_from_env", invalid_settings)
+    client = WowheadClient.__new__(WowheadClient)
+    with pytest.raises(ValueError, match="invalid cache configuration"):
+        client.__init__()
+    client.__del__()
+    assert client._http_client is None
 
 
 def test_wowhead_client_get_json_returns_deepcopy_from_session_cache(monkeypatch) -> None:

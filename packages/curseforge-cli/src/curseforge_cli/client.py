@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any
 
 import httpx
 from warcraft_api.cache import CacheSettings, CacheTTLConfig, build_cache_store, load_prefixed_cache_settings_from_env
-from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, CachedHttpClient, request_with_retries
+from warcraft_api.http import DEFAULT_RETRY_ATTEMPTS, CachedHttpClient, hashed_cache_key, request_with_retries
 from warcraft_core.exit_codes import error_code_for_http_status
 from warcraft_core.paths import provider_cache_root
 
@@ -90,8 +89,8 @@ class CurseForgeClient(CachedHttpClient):
     def _get(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
         """GET one API path, replaying a cached answer first; the API key never reaches the cache key."""
         self._require_key()
-        key = f"curseforge:{hashlib.sha256(json.dumps([path, params], sort_keys=True).encode()).hexdigest()}"
-        cached = self._cache_store.get(key) if self._cache_store is not None else None
+        key = hashed_cache_key("curseforge", json.dumps([path, params], sort_keys=True).encode())
+        cached = self._read_cache(key)
         if isinstance(cached, dict) and "payload" in cached:
             return cached
         url = f"{API_HOST}{path}"
@@ -104,8 +103,7 @@ class CurseForgeClient(CachedHttpClient):
             retry_attempts=self._retry_attempts,
         )
         result = {"payload": self._decode_json(response), "source_url": str(response.request.url)}
-        if self._cache_store is not None:
-            self._cache_store.set(key, result, ttl_seconds=self._ttl)
+        self._write_cache(key, result, ttl_seconds=self._ttl)
         return result
 
     @staticmethod

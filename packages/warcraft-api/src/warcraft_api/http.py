@@ -164,13 +164,18 @@ class CachedHttpClient:
         self._cache_store.set(key, payload, ttl_seconds=ttl_seconds)
 
 
+def hashed_cache_key(namespace: str, raw: bytes) -> str:
+    """Hash a client's existing serialized bytes without changing persistent cache keys."""
+    return f"{namespace}:{hashlib.sha256(raw).hexdigest()}"
+
+
 def json_cache_key(namespace: str, payload: Mapping[str, Any]) -> str:
     """``<namespace>:<sha256>`` over the compact, key-sorted JSON of ``payload``.
 
     Each client passes the dict its keys have always hashed, so adopting this keeps stored entries.
     """
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return f"{namespace}:{hashlib.sha256(raw).hexdigest()}"
+    return hashed_cache_key(namespace, raw)
 
 
 def request_with_retries(

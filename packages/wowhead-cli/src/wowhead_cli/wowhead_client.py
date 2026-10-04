@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import copy
-import hashlib
-import json
 from typing import Any
 from urllib.parse import urlencode
 
 import httpx
 from warcraft_api.cache import build_cache_store, load_cache_settings_from_env
-from warcraft_api.http import build_client, request_with_retries
+from warcraft_api.http import CachedHttpClient, hashed_cache_key, json_cache_key, request_with_retries
 
 from wowhead_cli.classic_talents import compact_talent_data, is_compact_talent_data
 from wowhead_cli.entity_types import suggestion_entity_type_from_type_id
@@ -35,7 +33,7 @@ TALENT_CALC_DATA_TTL_SECONDS = 30 * 24 * 3600
 TALENT_CALC_DATA_CACHE_VERSION = 1
 
 
-class WowheadClient:
+class WowheadClient(CachedHttpClient):
     def __init__(self, *, expansion: str | ExpansionProfile | None = None) -> None:
         self._http_client: httpx.Client | None = None
         cache_settings = load_cache_settings_from_env()
@@ -46,25 +44,8 @@ class WowheadClient:
         self._session_text_cache: dict[str, str] = {}
         self.expansion = expansion if isinstance(expansion, ExpansionProfile) else resolve_expansion(expansion)
 
-    def __enter__(self) -> WowheadClient:
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        self.close()
-
     def __del__(self) -> None:
         self.close()
-
-    def close(self) -> None:
-        http_client = getattr(self, "_http_client", None)
-        if http_client is not None:
-            http_client.close()
-            self._http_client = None
-
-    def _client(self) -> httpx.Client:
-        if self._http_client is None:
-            self._http_client = build_client(timeout=20.0)
-        return self._http_client
 
     def _request_with_retries(self, url: str, *, params: dict[str, Any] | None = None) -> httpx.Response:
         return request_with_retries(self._client(), url, params=params)
@@ -72,7 +53,7 @@ class WowheadClient:
     def _cache_key(self, namespace: str, url: str, params: dict[str, Any] | None) -> str:
         encoded = urlencode(sorted(params.items()), doseq=True) if params else ""
         raw = f"{namespace}|{url}|{encoded}".encode()
-        return f"{namespace}:{hashlib.sha256(raw).hexdigest()}"
+        return hashed_cache_key(namespace, raw)
 
     def _entity_response_cache_key(
         self,
@@ -84,7 +65,8 @@ class WowheadClient:
         include_all_comments: bool,
         linked_entity_preview_limit: int,
     ) -> str:
-        raw = json.dumps(
+        return json_cache_key(
+            "entity_response",
             {
                 "v": ENTITY_RESPONSE_CACHE_VERSION,
                 "expansion": self.expansion.key,
@@ -95,20 +77,17 @@ class WowheadClient:
                 "include_all_comments": include_all_comments,
                 "linked_entity_preview_limit": linked_entity_preview_limit,
             },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return f"entity_response:{hashlib.sha256(raw).hexdigest()}"
+        )
 
     def _read_cache(self, key: str) -> Any | None:
-        if not self._cache_enabled or self._cache_store is None:
+        if not self._cache_enabled:
             return None
-        return self._cache_store.get(key)
+        return super()._read_cache(key)
 
     def _write_cache(self, key: str, payload: Any, *, ttl_seconds: int) -> None:
-        if not self._cache_enabled or self._cache_store is None:
+        if not self._cache_enabled:
             return
-        self._cache_store.set(key, payload, ttl_seconds=ttl_seconds)
+        super()._write_cache(key, payload, ttl_seconds=ttl_seconds)
 
     def get_cached_entity_response(
         self,
