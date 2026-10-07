@@ -22,7 +22,6 @@ from warcraft_core.wow_normalization import normalize_name, primary_realm_slug, 
 
 from warcraftlogs_cli.sampling_utils import report_is_finished
 
-DEFAULT_CACHE_DIR = provider_cache_root("warcraftlogs") / "http"
 CLIENT_CREDENTIALS_STATE_PROVIDER = "warcraftlogs-client-credentials"
 
 RATE_LIMIT_QUERY = """
@@ -1348,7 +1347,7 @@ def load_warcraftlogs_cache_settings_from_env() -> tuple[CacheSettings, int, int
     """Cache settings plus the guild, static, report-listing and finished-report TTLs, in that order."""
     settings = load_prefixed_cache_settings_from_env(
         env_prefix="WARCRAFTLOGS",
-        default_cache_dir=DEFAULT_CACHE_DIR,
+        default_cache_dir=provider_cache_root("warcraftlogs") / "http",
         default_redis_prefix="warcraftlogs_cli",
         ttl_defaults=CacheTTLConfig(
             entity_page_html=300,
@@ -1482,6 +1481,8 @@ class WarcraftLogsClient(CachedHttpClient):
             retry_attempts=self._retry_attempts,
         )
         payload = _response_json(response)
+        if not isinstance(payload, dict):
+            raise WarcraftLogsClientError("invalid_response", "Warcraft Logs token response was not an object.")
         token = payload.get("access_token")
         expires_in = payload.get("expires_in", 3600)
         if not isinstance(token, str) or not token:
@@ -2433,25 +2434,37 @@ class WarcraftLogsClient(CachedHttpClient):
         zone_id: int | None = None,
         game_zone_id: int | None = None,
     ) -> dict[str, Any]:
+        region = validated_region(guild_region) if guild_region else None
+        variables: dict[str, Any] = {
+            "guildName": normalize_name(guild_name) if guild_name else None,
+            "guildServerRegion": region,
+            "limit": limit,
+            "page": page,
+            "startTime": start_time,
+            "endTime": end_time,
+            "zoneID": zone_id,
+            "gameZoneID": game_zone_id,
+        }
+        if guild_realm and region:
+            return self._realm_lookup(
+                guild_realm,
+                region=region,
+                operation_name="Reports",
+                query=REPORTS_QUERY,
+                namespace="reports",
+                ttl_seconds=self._report_ttl,
+                variables=lambda slug: {**variables, "guildServerSlug": slug},
+                path=("reportData", "reports"),
+                missing=f"Guild report listing was not found on {region}/{guild_realm}.",
+            )
         data = self._graphql(
             operation_name="Reports",
             query=REPORTS_QUERY,
-            variables={
-                "guildName": normalize_name(guild_name) if guild_name else None,
-                "guildServerSlug": primary_realm_slug(guild_realm) if guild_realm else None,
-                "guildServerRegion": validated_region(guild_region) if guild_region else None,
-                "limit": limit,
-                "page": page,
-                "startTime": start_time,
-                "endTime": end_time,
-                "zoneID": zone_id,
-                "gameZoneID": game_zone_id,
-            },
+            variables={**variables, "guildServerSlug": primary_realm_slug(guild_realm) if guild_realm else None},
             namespace="reports",
             ttl_seconds=self._report_ttl,
         )
-        report_data = data.get("reportData")
-        reports = report_data.get("reports") if isinstance(report_data, dict) else None
+        reports = as_dict(data.get("reportData")).get("reports")
         if not isinstance(reports, dict):
             raise WarcraftLogsClientError("not_found", "Warcraft Logs report listing data was not available.")
         return reports

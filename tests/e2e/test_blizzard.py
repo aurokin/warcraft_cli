@@ -398,8 +398,8 @@ def test_bad_routing_flags_are_usage_errors_refused_before_the_network(require) 
 
 def test_missing_credentials_exit_3_with_a_recovery_hint(require, tmp_path: Path) -> None:
     require("blizzard-api")
-    # Point credential discovery at an empty config root so the real key is never consulted.
+    # The config root and cwd are empty: blank environment values do not override .env.local.
     blank = {"XDG_CONFIG_HOME": str(tmp_path / "config"), "BLIZZARD_CLIENT_ID": "", "BLIZZARD_CLIENT_SECRET": ""}
-    result = run("blizzard", "item", str(ITEM_ID), expect=EXIT_AUTH, error_code="missing_client_credentials", env=blank)
+    result = run("blizzard", "item", str(ITEM_ID), expect=EXIT_AUTH, error_code="missing_client_credentials", env=blank, cwd=tmp_path)
     assert "BLIZZARD_CLIENT_ID" in result.payload["error"]["message"]
     assert "BLIZZARD_CLIENT_SECRET" in result.payload["error"]["message"]

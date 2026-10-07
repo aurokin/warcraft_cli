@@ -17,7 +17,6 @@ from icy_veins_cli.talent_calculator import ConversionError, convert_calculator_
 
 ICY_VEINS_BASE_URL = "https://www.icy-veins.com"
 ICY_VEINS_SITEMAP_URL = f"{ICY_VEINS_BASE_URL}/sitemap.xml"
-DEFAULT_CACHE_DIR = provider_cache_root("icy-veins") / "http"
 # Any WoW guide page carries the site-wide guide menu; a class hub's URL has outlived every expansion,
 # where an expansion or season hub is retired when the next one ships.
 SITE_MENU_SEED_URL = guide_url("death-knight-guide")
@@ -58,7 +57,7 @@ def _challenged(response: httpx.Response) -> bool:
 def load_icy_veins_cache_settings_from_env() -> tuple[CacheSettings, int, int]:
     settings = load_prefixed_cache_settings_from_env(
         env_prefix="ICY_VEINS",
-        default_cache_dir=DEFAULT_CACHE_DIR,
+        default_cache_dir=provider_cache_root("icy-veins") / "http",
         default_redis_prefix="icy_veins_cli",
         ttl_defaults=CacheTTLConfig(search_suggestions=86400, page_html=3600),
         ttl_env_overrides={

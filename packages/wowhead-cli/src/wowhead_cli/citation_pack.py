@@ -118,8 +118,8 @@ def _collect_comment_citations(
                 continue
             citation_url = row.get("citation_url")
             source_key = "comments" if bucket == "top" else f"comments.items[{index}]"
-            if bucket == "top" and index == 0:
-                _add_source(sources, key="comments", url=citation_url if isinstance(citation_url, str) else page_url, kind="comments")
+            if bucket == "items" or index == 0:
+                _add_source(sources, key=source_key, url=citation_url if isinstance(citation_url, str) else page_url, kind="comments")
             fragment = None
             if isinstance(citation_url, str) and "#" in citation_url:
                 fragment = citation_url[citation_url.index("#"):]

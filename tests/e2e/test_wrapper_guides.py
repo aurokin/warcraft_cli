@@ -363,9 +363,10 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(require, o
     assert set(rows) == set(previous), refreshed.describe()
     for provider, row in rows.items():
         assert row["exported_at"] > previous[provider], f"{provider} was not re-exported"
-    assert [orchestration.out_root / row["bundle_path"] for row in refreshed.data["manifest"]["providers"]] == list(
-        orchestration.bundle_paths
-    )
+    refreshed_paths = [orchestration.out_root / row["bundle_path"] for row in refreshed.data["manifest"]["providers"]]
+    assert set(refreshed_paths).isdisjoint(orchestration.bundle_paths)
+    assert all(path.is_dir() for path in refreshed_paths)
+    assert all(path.is_dir() for path in orchestration.bundle_paths)
 
 
 def test_a_reused_bundle_reports_the_redirect_its_export_saw(require, out_dir: Path) -> None:

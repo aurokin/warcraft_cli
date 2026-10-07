@@ -1202,13 +1202,13 @@ def test_warcraftlogs_client_sends_the_accented_realm_slug_warcraft_logs_uses() 
 
 
 def test_warcraftlogs_doctor_reports_phase_one_capabilities(monkeypatch) -> None:
-    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _FakeWarcraftLogsClient)
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        "warcraftlogs_cli.services.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
     )
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.provider_auth_status",
+        "warcraftlogs_cli.services.provider_auth_status",
         lambda provider: {
             "path": "/tmp/state/warcraftlogs.json",
             "exists": False,
@@ -1259,13 +1259,13 @@ def test_warcraftlogs_doctor_reports_phase_one_capabilities(monkeypatch) -> None
 
 
 def test_warcraftlogs_doctor_uses_selected_site_profile(monkeypatch) -> None:
-    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _FakeWarcraftLogsClient)
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        "warcraftlogs_cli.services.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
     )
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.provider_auth_status",
+        "warcraftlogs_cli.services.provider_auth_status",
         lambda provider: {
             "path": "/tmp/state/warcraftlogs.json",
             "exists": False,
@@ -1288,13 +1288,13 @@ def test_warcraftlogs_doctor_uses_selected_site_profile(monkeypatch) -> None:
 
 
 def test_warcraftlogs_doctor_reports_saved_user_token_runtime_access(monkeypatch) -> None:
-    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _FakeWarcraftLogsClient)
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        "warcraftlogs_cli.services.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": False, "env_file": None})(),
     )
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.provider_auth_status",
+        "warcraftlogs_cli.services.provider_auth_status",
         lambda provider: {
             "path": "/tmp/state/warcraftlogs.json",
             "exists": True,
@@ -1328,13 +1328,13 @@ def test_warcraftlogs_doctor_reports_saved_user_token_runtime_access(monkeypatch
 
 
 def test_warcraftlogs_doctor_requires_client_credentials_for_user_auth_bootstrap(monkeypatch) -> None:
-    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _FakeWarcraftLogsClient)
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        "warcraftlogs_cli.services.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": False, "env_file": None})(),
     )
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.provider_auth_status",
+        "warcraftlogs_cli.services.provider_auth_status",
         lambda provider: {
             "path": "/tmp/state/warcraftlogs.json",
             "exists": False,
@@ -1358,13 +1358,13 @@ def test_warcraftlogs_doctor_requires_client_credentials_for_user_auth_bootstrap
 
 
 def test_warcraftlogs_doctor_can_skip_live_probes(monkeypatch) -> None:
-    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _FakeWarcraftLogsClient)
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        "warcraftlogs_cli.services.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
     )
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.provider_auth_status",
+        "warcraftlogs_cli.services.provider_auth_status",
         lambda provider: {
             "path": "/tmp/state/warcraftlogs.json",
             "exists": False,
@@ -1390,13 +1390,13 @@ def test_warcraftlogs_doctor_can_skip_live_probes(monkeypatch) -> None:
 
 def test_warcraftlogs_doctor_is_degraded_when_the_cache_config_is_invalid(monkeypatch) -> None:
     # Every cached read fails with invalid_cache_config under this setting, so doctor must not say ready.
-    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _FakeWarcraftLogsClient)
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        "warcraftlogs_cli.services.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
     )
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.provider_auth_status",
+        "warcraftlogs_cli.services.provider_auth_status",
         lambda provider: {
             "path": "/tmp/state/warcraftlogs.json",
             "exists": False,
@@ -1422,11 +1422,11 @@ def test_warcraftlogs_doctor_is_degraded_when_the_cache_config_is_invalid(monkey
 
 def test_warcraftlogs_doctor_live_probe_uses_uncached_public_helper(monkeypatch) -> None:
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        "warcraftlogs_cli.services.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
     )
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.provider_auth_status",
+        "warcraftlogs_cli.services.provider_auth_status",
         lambda provider: {
             "path": "/tmp/state/warcraftlogs.json",
             "exists": False,
@@ -1450,7 +1450,7 @@ def test_warcraftlogs_doctor_live_probe_uses_uncached_public_helper(monkeypatch)
                 "pointsResetIn": 1800,
             }
 
-    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _ProbeAwareClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _ProbeAwareClient)
 
     result = runner.invoke(warcraftlogs_app, ["doctor"])
     assert result.exit_code == 0
@@ -1462,11 +1462,11 @@ def test_warcraftlogs_doctor_live_probe_uses_uncached_public_helper(monkeypatch)
 
 def test_warcraftlogs_doctor_reports_live_public_auth_failure(monkeypatch) -> None:
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        "warcraftlogs_cli.services.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
     )
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.provider_auth_status",
+        "warcraftlogs_cli.services.provider_auth_status",
         lambda provider: {
             "path": "/tmp/state/warcraftlogs.json",
             "exists": False,
@@ -1483,7 +1483,7 @@ def test_warcraftlogs_doctor_reports_live_public_auth_failure(monkeypatch) -> No
         def rate_limit(self) -> dict[str, object]:
             raise WarcraftLogsClientError("auth_failed", "Warcraft Logs rejected the client credentials.")
 
-    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _AuthFailingPublicClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _AuthFailingPublicClient)
 
     result = runner.invoke(warcraftlogs_app, ["doctor"])
     assert result.exit_code == 0
@@ -1497,11 +1497,11 @@ def test_warcraftlogs_doctor_reports_live_public_auth_failure(monkeypatch) -> No
 
 def test_warcraftlogs_doctor_reports_invalid_runtime_config(monkeypatch) -> None:
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        "warcraftlogs_cli.services.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
     )
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.provider_auth_status",
+        "warcraftlogs_cli.services.provider_auth_status",
         lambda provider: {
             "path": "/tmp/state/warcraftlogs.json",
             "exists": False,
@@ -1520,7 +1520,7 @@ def test_warcraftlogs_doctor_reports_invalid_runtime_config(monkeypatch) -> None
         def __init__(self, **_kwargs: object) -> None:
             raise ValueError("WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.")
 
-    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _BrokenClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _BrokenClient)
 
     result = runner.invoke(warcraftlogs_app, ["doctor"])
     assert result.exit_code == 0
@@ -1538,11 +1538,11 @@ def test_warcraftlogs_doctor_reports_invalid_runtime_config(monkeypatch) -> None
 
 def test_warcraftlogs_doctor_reports_invalid_runtime_config_for_saved_user_token(monkeypatch) -> None:
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        "warcraftlogs_cli.services.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": False, "env_file": None})(),
     )
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.provider_auth_status",
+        "warcraftlogs_cli.services.provider_auth_status",
         lambda provider: {
             "path": "/tmp/state/warcraftlogs.json",
             "exists": True,
@@ -1559,7 +1559,7 @@ def test_warcraftlogs_doctor_reports_invalid_runtime_config_for_saved_user_token
         def __init__(self, **_kwargs: object) -> None:
             raise ValueError("WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.")
 
-    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _BrokenClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _BrokenClient)
 
     result = runner.invoke(warcraftlogs_app, ["doctor"])
     assert result.exit_code == 0
@@ -1572,11 +1572,11 @@ def test_warcraftlogs_doctor_reports_invalid_runtime_config_for_saved_user_token
 
 def test_warcraftlogs_doctor_prioritizes_invalid_runtime_config_without_credentials(monkeypatch) -> None:
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
+        "warcraftlogs_cli.services.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": False, "env_file": None})(),
     )
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.provider_auth_status",
+        "warcraftlogs_cli.services.provider_auth_status",
         lambda provider: {
             "path": "/tmp/state/warcraftlogs.json",
             "exists": False,
@@ -1595,7 +1595,7 @@ def test_warcraftlogs_doctor_prioritizes_invalid_runtime_config_without_credenti
         def __init__(self, **_kwargs: object) -> None:
             raise ValueError("WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.")
 
-    monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _BrokenClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _BrokenClient)
 
     result = runner.invoke(warcraftlogs_app, ["doctor"])
     assert result.exit_code == 0
@@ -1782,6 +1782,7 @@ def test_warcraftlogs_resolve_includes_selected_site_in_next_command() -> None:
 
 def test_warcraftlogs_auth_status_reports_shared_state_summary(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _FakeWarcraftLogsClient)
     monkeypatch.setattr(
         "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
@@ -1836,6 +1837,7 @@ def test_warcraftlogs_auth_status_marks_site_mismatched_user_token_unready(monke
         )
     )
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _FakeWarcraftLogsClient)
     monkeypatch.setattr(
         "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
@@ -1872,6 +1874,7 @@ def test_warcraftlogs_auth_client_reports_selected_site(monkeypatch) -> None:
 
 def test_warcraftlogs_auth_status_reports_grants_blocked_without_client_credentials(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _FakeWarcraftLogsClient)
     monkeypatch.setattr(
         "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": False, "env_file": None})(),
@@ -1903,6 +1906,7 @@ def test_warcraftlogs_auth_status_reports_grants_blocked_without_client_credenti
 
 def test_warcraftlogs_auth_status_can_skip_live_probes(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _FakeWarcraftLogsClient)
     monkeypatch.setattr(
         "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
@@ -1964,6 +1968,7 @@ def test_warcraftlogs_auth_status_live_probe_calls_the_user_endpoint(monkeypatch
             }
 
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _ProbeAwareClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _ProbeAwareClient)
 
     result = runner.invoke(warcraftlogs_app, ["auth", "status"])
     assert result.exit_code == 0
@@ -1998,6 +2003,7 @@ def test_warcraftlogs_auth_status_reports_live_user_auth_failure(monkeypatch) ->
             raise WarcraftLogsClientError("auth_failed", "Saved Warcraft Logs user token was rejected by Warcraft Logs.")
 
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _AuthFailingUserClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _AuthFailingUserClient)
 
     result = runner.invoke(warcraftlogs_app, ["auth", "status"])
     assert result.exit_code == 0
@@ -2032,6 +2038,7 @@ def test_warcraftlogs_auth_status_reports_invalid_runtime_config(monkeypatch) ->
             raise ValueError("WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.")
 
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _BrokenClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _BrokenClient)
 
     result = runner.invoke(warcraftlogs_app, ["auth", "status"])
     assert result.exit_code == 0
@@ -2073,6 +2080,7 @@ def test_warcraftlogs_auth_status_prioritizes_invalid_runtime_config_without_cre
             raise ValueError("WOWHEAD_REDIS_URL is required when WOWHEAD_CACHE_BACKEND=redis.")
 
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _BrokenClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _BrokenClient)
 
     result = runner.invoke(warcraftlogs_app, ["auth", "status"])
     assert result.exit_code == 0
@@ -7297,6 +7305,7 @@ def test_warcraftlogs_auth_status_flags_missing_view_user_profile_scope(monkeypa
     )
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _FakeWarcraftLogsClient)
     monkeypatch.setattr(
         "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
@@ -7327,6 +7336,7 @@ def test_warcraftlogs_auth_status_no_scope_warning_when_both_scopes_present(monk
     )
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _FakeWarcraftLogsClient)
     monkeypatch.setattr(
         "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),
@@ -7358,6 +7368,7 @@ def test_warcraftlogs_auth_status_warns_when_only_view_user_profile_present(monk
     )
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state-home"))
     monkeypatch.setattr("warcraftlogs_cli.main.WarcraftLogsClient", _FakeWarcraftLogsClient)
+    monkeypatch.setattr("warcraftlogs_cli.services.WarcraftLogsClient", _FakeWarcraftLogsClient)
     monkeypatch.setattr(
         "warcraftlogs_cli.main.load_warcraftlogs_auth_config",
         lambda: type("Auth", (), {"configured": True, "env_file": "/tmp/.env.local"})(),

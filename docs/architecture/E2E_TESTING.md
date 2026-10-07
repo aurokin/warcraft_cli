@@ -175,13 +175,10 @@ Open weaknesses a green run does not rule out, beyond the limits above:
   `?realm=` value, so fetching the citation would prove nothing.
 - **Wowhead suggestion type 112** (Companion) has never appeared in a live response, so its label is
   unverified.
-- **Icy Veins search cannot find past-season pages missing from the sitemap.** Discovery reads the
-  Icy Veins sitemap, whose newest entry is 2025-10-05. While it is more than 30 days old, `search`
-  and `resolve` also read the site-wide guide menu, which lists current pages only, so a page
-  published since and already rotated out of the menu stays undiscoverable. The `mythic+` journey
-  checks that search says so (`provenance.sitemap_warning`), and
-  `test_search_finds_a_current_page_the_stale_sitemap_lacks_through_the_site_menu` checks that a
-  current raid guide missing from the sitemap is found through the menu.
+- **Icy Veins discovery depends on index coverage.** Search combines the sitemap, current menu,
+  and a bundled or locally crawled site index. Pages missing from all three remain undiscoverable;
+  an incomplete crawl cannot prove that all past-season pages are indexed. Journeys verify indexed
+  pages absent from the sitemap and disclose which index supplied them.
 
 ## CI
 
@@ -194,3 +191,8 @@ own HTTP client). Icy Veins answers GitHub runner IPs with 403, so `test_icy_vei
 only, as do the keyed providers, SimulationCraft, the wrapper composites, and `test_contract.py`. It never
 gates a pull request. When a job fails, is cancelled, or is skipped, a scheduled run (or a manual
 run with `open_issue` set) opens or comments on the `live-failure` tracking issue.
+
+The pull-request and release wheel jobs run `scripts/verify_wheel.py` after building. It installs the
+root wheel into a fresh environment outside the checkout, uses empty runtime roots, checks all
+console entry points and package origins, and verifies the schema and bundled Icy Veins index.
+These checks exercise packaged offline behavior; live-provider journeys remain separate.

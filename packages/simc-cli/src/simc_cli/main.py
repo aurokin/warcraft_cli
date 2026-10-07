@@ -79,6 +79,7 @@ from simc_cli.build_input import (
     tree_entries_string,
 )
 from simc_cli.compare import (
+    OutputPathConflict,
     build_variant_profile,
     compare_apl_variants,
     output_previews,
@@ -1413,6 +1414,8 @@ def validate_apl_command(
     try:
         profile_path = build_variant_profile(harness_path, apl_path, label=label, out_dir=out_dir)
         validation = validate_profile_file(paths, profile_path)
+    except OutputPathConflict as exc:
+        fail(ctx, "invalid_query", str(exc))
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         _fail_build_error(ctx, exc, code="validate_apl_failed")
     warnings = simc_warnings(validation.result.stderr)
@@ -1477,7 +1480,10 @@ def compare_apls_command(
             threads=threads,
             out_dir=out_dir,
             validate_first=validate_first,
+            report_out=report_out,
         )
+    except OutputPathConflict as exc:
+        fail(ctx, "invalid_query", str(exc))
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
         fail(ctx, "compare_apls_failed", str(exc))
     if report_out:

@@ -12,6 +12,7 @@ import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -25,7 +26,7 @@ from wowhead_cli.doctor import build_doctor_payload
 from wowhead_cli.entity_types import ENTITY_TYPE_KEYS, RESOLVE_ENTITY_TYPES
 from wowhead_cli.expansion_profiles import (
     ExpansionProfile,
-    detect_expansion_from_url,
+    detect_expansion_from_ref,
     is_wowhead_url,
     resolve_expansion,
 )
@@ -58,14 +59,14 @@ class ExpansionSelection:
 
 
 def select_expansion(expansion: str | None = None, *, url_hint: str | None = None) -> ExpansionSelection:
-    """Pick the expansion profile: an explicit key wins, otherwise auto-detect from a Wowhead URL."""
+    """Pick the expansion profile: an explicit key wins, otherwise auto-detect from a Wowhead URL or path."""
     if expansion:
         try:
             return ExpansionSelection(resolve_expansion(expansion), "flag")
         except ValueError as exc:
             raise ProviderError("invalid_argument", str(exc)) from exc
     if url_hint:
-        detected = detect_expansion_from_url(url_hint)
+        detected = detect_expansion_from_ref(url_hint)
         if detected is not None:
             return ExpansionSelection(detected, "url")
     return ExpansionSelection(resolve_expansion(None), "default")
@@ -380,9 +381,33 @@ __all__ = [
     "cache_settings_payload",
     "doctor",
     "envelope",
+    "guide_full",
+    "guide_export",
     "open_client",
     "resolve",
     "search",
     "select_expansion",
     "transport_errors",
 ]
+
+
+def guide_full(guide_ref: str, *, expansion: str | None = None, max_links: int = 250,
+               include_replies: bool = False) -> Envelope:
+    """Read the full guide with no command context or console output."""
+    from wowhead_cli.guide_services import build_guide_full_payload
+
+    selection = select_expansion(expansion, url_hint=guide_ref)
+    with open_client(selection.profile) as client:
+        data, _ = build_guide_full_payload(client, guide_ref=guide_ref, max_links=max_links, include_replies=include_replies)
+    return envelope("guide-full", "guide_full", data)
+
+
+def guide_export(guide_ref: str, *, out: Path | None = None, expansion: str | None = None,
+                 max_links: int = 250, include_replies: bool = False) -> Envelope:
+    """Export a guide through the same service as the CLI, without capturing global output."""
+    from wowhead_cli.guide_services import export_guide_bundle
+
+    selection = select_expansion(expansion, url_hint=guide_ref)
+    with open_client(selection.profile) as client:
+        data = export_guide_bundle(client, guide_ref=guide_ref, out=out, max_links=max_links, include_replies=include_replies)
+    return envelope("guide-export", "guide_export", data)

@@ -282,8 +282,10 @@ def inactive_priority_decisions(apl_path, context: PruneContext, list_name: str,
     rows = [decision for decision in decisions if decision.status == "dead"]
     if talent_only:
         # Talent-gated: dead for this build, but not once its talents and hero tree are unknown.
-        blind = {row.line_no: row.status for row in summarize_list_decisions(apl_path, without_talents(context), list_name)}
-        rows = [decision for decision in rows if blind[decision.line_no] != "dead"]
+        blind = summarize_list_decisions(apl_path, without_talents(context), list_name)
+        # Inline lists can contain several different actions on one source line.
+        rows = [decision for decision, unknown in zip(decisions, blind, strict=True)
+                if decision.status == "dead" and unknown.status != "dead"]
     return rows
 
 
@@ -377,11 +379,7 @@ def compare_branches(apl_path, left_context: PruneContext, right_context: PruneC
     right_decisions = summarize_list_decisions(apl_path, right_context, right_focus_list)
     focus_changes: list[str] = []
     if left_focus_list == right_focus_list:
-        right_by_line = {row.line_no: row for row in right_decisions}
-        for left_row in left_decisions:
-            right_row = right_by_line.get(left_row.line_no)
-            if not right_row:
-                continue
+        for left_row, right_row in zip(left_decisions, right_decisions, strict=True):
             if left_row.status != right_row.status or left_row.reason != right_row.reason:
                 focus_changes.append(
                     f"L{left_row.line_no} {left_row.action_label}: {left_row.status} -> {right_row.status}"

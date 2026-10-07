@@ -10,9 +10,24 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Added
 
+- CI and release checks install the root wheel outside the checkout and verify all console scripts, schema output, package origins, and bundled Icy Veins discovery data.
+
 ### Changed
 
+- Guide comparisons write new exports under `bundles/<generation>/<provider>` and publish their relative paths atomically in the root manifest. Follow `manifest.providers[].bundle_path`; earlier exports remain available after a refresh.
+- Composed guide exports call provider services directly, without capturing console output. Warcraft Logs discovery and readiness also use services independent of the CLI module.
+
 ### Fixed
+
+- A failed guide comparison refresh cannot overwrite bundles from a previous completed comparison. Reuse verifies the saved bundle identity and refreshes altered or corrupt bundles.
+- SimC APL comparison and validation reject output paths that collide with any input or another output before writing, including JSON reports, symlinks, hardlinks, and case aliases.
+- Static SimC APL analysis honors `actions=` replacement, empty resets, inline `/` action separators, and dispatch options in any order. Branch filtering distinguishes actions sharing a source line.
+- Raidbots input summaries and talent handoffs honor the last assignments within the first actor's scope, including combined and split talent overrides; global settings retain their final values.
+- Warcraft Logs guild report listing accepts canonical and localized realm names through the same fallback as character and guild reads.
+- Warcraft Logs sampled pull deduplication keeps different keystone levels and contradictory rosters separate, and shares roster reads with spec filtering. Non-object OAuth token responses fail as invalid responses.
+- Raider.IO samples pin the first resolved season for later pages and reject inconsistent or unidentified seasons instead of mixing cohorts.
+- Wowhead linked graphs preserve edges between retained nodes at the node limit. Every full-comment citation anchor has a corresponding source.
+- Provider cache defaults follow the current runtime roots when settings load. Missing-credential end-to-end tests run outside repository dotenv discovery, and pip deployment resolves the repository from any caller directory.
 
 ### Removed
 

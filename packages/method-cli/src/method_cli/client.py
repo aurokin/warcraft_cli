@@ -9,7 +9,6 @@ from method_cli.page_parser import guide_ref_parts, guide_url, parse_guide_page,
 
 METHOD_BASE_URL = "https://www.method.gg"
 METHOD_SITEMAP_URL = f"{METHOD_BASE_URL}/sitemap.xml"
-DEFAULT_CACHE_DIR = provider_cache_root("method") / "http"
 METHOD_SITE = GuideSite(
     label="Method",
     sitemap_url=METHOD_SITEMAP_URL,
@@ -22,7 +21,7 @@ METHOD_SITE = GuideSite(
 def load_method_cache_settings_from_env() -> tuple[CacheSettings, int, int]:
     settings = load_prefixed_cache_settings_from_env(
         env_prefix="METHOD",
-        default_cache_dir=DEFAULT_CACHE_DIR,
+        default_cache_dir=provider_cache_root("method") / "http",
         default_redis_prefix="method_cli",
         ttl_defaults=CacheTTLConfig(search_suggestions=86400, page_html=3600),
         ttl_env_overrides={

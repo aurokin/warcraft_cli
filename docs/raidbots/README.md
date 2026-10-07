@@ -59,6 +59,9 @@ Every command emits the shared envelope (`ok`, `provider`, `command`, `kind`, `s
 `input` carries the report's SimC input once, in `data.input`; `explain-input` does not echo the text
 back. `--compact` never shortens a `*input` value, so the input stays whole for `simc sim -` or
 raidbots.com. The handoff's `suggested_simc_commands` name what to run with it.
+Scalar summaries use the final assignment for the first actor; later actors, pets and copied actors
+do not replace its talents. Combined and split-tree talent assignments travel together in the
+handoff, while global simulation options use their final assignment across the input.
 
 A quick-sim `report` carries `actor` and `metrics` for the first actor, plus `actor_count` and
 `other_actors` (each with `actor` and `metrics`) when the sim had more than one.

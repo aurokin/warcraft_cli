@@ -17,7 +17,6 @@ URL_TEMPLATES: dict[str, str] = {
     "data_json": BASE_URL + DATA_PATH_TEMPLATE,
     "simc_input": BASE_URL + INPUT_PATH_TEMPLATE,
 }
-DEFAULT_CACHE_DIR = provider_cache_root("raidbots") / "http"
 
 # A report ID is the trailing path segment after `/report/`; accept the same
 # characters Raidbots uses for its slugs (alphanumerics plus `-`/`_`).
@@ -77,7 +76,7 @@ def input_url(report_id: str) -> str:
 def load_raidbots_cache_settings_from_env() -> tuple[CacheSettings, int]:
     settings = load_prefixed_cache_settings_from_env(
         env_prefix="RAIDBOTS",
-        default_cache_dir=DEFAULT_CACHE_DIR,
+        default_cache_dir=provider_cache_root("raidbots") / "http",
         default_redis_prefix="raidbots_cli",
         # Completed reports are immutable, so cache them for a full day by default.
         ttl_defaults=CacheTTLConfig(entity_response=86400),

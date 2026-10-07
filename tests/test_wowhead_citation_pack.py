@@ -125,3 +125,43 @@ def test_entity_command_can_emit_citation_pack(monkeypatch) -> None:
     assert "citation_pack" in payload["data"]
     assert payload["data"]["citation_pack"]["source_count"] >= 1
     assert payload["data"]["citation_pack"]["anchors"]
+
+
+def test_full_comment_citations_resolve_sources_in_entity_and_comparison() -> None:
+    entity = {
+        "ref": "item:19019",
+        "entity": {"page_url": "https://www.wowhead.com/item=19019"},
+        "comments": {
+            "items": [
+                {"body": "First", "citation_url": "https://www.wowhead.com/item=19019#comments:id=1"},
+                {"body": "Fallback to entity page"},
+                {"body": "Third", "citation_url": "https://www.wowhead.com/item=19019#comments:id=3"},
+            ],
+        },
+    }
+    for pack in (citation_pack_from_entity(entity), citation_pack_from_compare({"entities": [entity]})):
+        sources = {row["key"]: row for row in pack["sources"]}
+        assert len(pack["anchors"]) == 3
+        for anchor in pack["anchors"]:
+            assert sources[anchor["source_key"]]["url"] == anchor["url"]
+
+
+def test_entity_full_comment_citation_pack_includes_each_comment_source(monkeypatch) -> None:
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.tooltip", lambda *args, **kwargs: {"name": "Synthetic item"})
+    monkeypatch.setattr(
+        "wowhead_cli.main.WowheadClient.entity_page_html",
+        lambda *args: '''<html><body><script>var lv_comments0 = [
+          {"id": 1, "body": "First synthetic comment", "rating": 5},
+          {"id": 2, "body": "Second synthetic comment", "rating": 1}
+        ];</script></body></html>''',
+    )
+    result = runner.invoke(app, ["--citation-pack", "entity", "item", "19019", "--include-all-comments"])
+    assert result.exit_code == 0, result.stderr
+    data = json.loads(result.stdout)["data"]
+    assert len(data["comments"]["items"]) == 2
+    pack = data["citation_pack"]
+    sources = {row["key"]: row for row in pack["sources"]}
+    for index in range(2):
+        key = f"comments.items[{index}]"
+        assert sources[key]["url"] == data["comments"]["items"][index]["citation_url"]
+        assert any(anchor["source_key"] == key for anchor in pack["anchors"])

@@ -9,7 +9,6 @@ from warcraft_core.paths import provider_cache_root
 from warcraft_wiki_cli.page_parser import normalize_article_ref, parse_article_page, parse_search_results
 
 WIKI_API_URL = "https://warcraft.wiki.gg/api.php"
-DEFAULT_CACHE_DIR = provider_cache_root("warcraft-wiki") / "http"
 # MediaWiki searches the main namespace only by default. The wiki moved its API reference pages into
 # the custom "API:" namespace (id 3000) and its game events into "Event:" (id 3004), leaving the old
 # main-namespace titles as redirects, which list=search does not return. Without these ids search
@@ -27,7 +26,7 @@ class WarcraftWikiAPIError(RuntimeError):
 def load_warcraft_wiki_cache_settings_from_env() -> tuple[CacheSettings, int, int]:
     settings = load_prefixed_cache_settings_from_env(
         env_prefix="WARCRAFT_WIKI",
-        default_cache_dir=DEFAULT_CACHE_DIR,
+        default_cache_dir=provider_cache_root("warcraft-wiki") / "http",
         default_redis_prefix="warcraft_wiki_cli",
         ttl_defaults=CacheTTLConfig(search_suggestions=1800, page_html=3600),
         ttl_env_overrides={
