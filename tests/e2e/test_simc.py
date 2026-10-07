@@ -1441,11 +1441,17 @@ def test_harness_validate_compare_and_report_workflow(require, checkout: Checkou
     assert validated.data["warnings"] == []
 
     # SimC exits 0 after dropping an option it does not know, so the warning is what makes it invalid.
-    typo_apl = out_dir / "typo.simc"
-    typo_apl.write_text(checkout.apl.read_text() + "\nactions+=/wait,sec=1,iff=1\n")
+    typo_apl = out_dir / "typo_apl.simc"
+    typo_text = checkout.apl.read_text() + "\nactions+=/wait,sec=1,iff=1\n"
+    typo_apl.write_text(typo_text)
+    rejected = run("simc", "validate-apl", str(harness_path), str(typo_apl), "--label", "typo_apl",
+                   "--out-dir", str(out_dir), expect=EXIT_USAGE, error_code="invalid_query")
+    assert rejected.exit_code == EXIT_USAGE
+    assert typo_apl.read_text() == typo_text
     typo = run("simc", "validate-apl", str(harness_path), str(typo_apl), "--label", "typo", "--out-dir", str(out_dir), timeout=300)
     assert (typo.data["valid"], typo.data["returncode"]) == (False, 0), typo.describe()
     assert any("unknown option 'iff'" in line for line in typo.data["warnings"]), typo.describe()
+    assert typo_apl.read_text() == typo_text
 
     report_path = out_dir / "report.json"
     compared = run(
