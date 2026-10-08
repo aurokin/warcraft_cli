@@ -75,10 +75,6 @@ def test_entity_page_emits_page_backed_normalization(monkeypatch) -> None:
         "wowhead_cli.main._resolve_page_fetch_target",
         lambda *args, **kwargs: MagicMock(page_entity_type="item", page_entity_id=19019),
     )
-    monkeypatch.setattr(
-        "wowhead_cli.main.extract_linked_entities_from_href",
-        lambda *args, **kwargs: [],
-    )
     monkeypatch.setattr("wowhead_cli.main.parse_page_meta_json", lambda html: None)
 
     result = runner.invoke(app, ["entity-page", "item", "19019", "--max-links", "1", "--no-include-gatherer"])

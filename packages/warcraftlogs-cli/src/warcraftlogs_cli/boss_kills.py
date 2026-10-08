@@ -138,6 +138,7 @@ class _PullIdentity:
     encounter_id: int | None
     difficulty: int | None
     size: int | None
+    keystone_level: int | None
 
 
 # The players in one sampled fight, for telling two logs of one pull from two pulls.
@@ -149,6 +150,7 @@ def _pull_identity(fight: dict[str, Any]) -> _PullIdentity:
         encounter_id=fight.get("encounterID") if isinstance(fight.get("encounterID"), int) else None,
         difficulty=fight.get("difficulty") if isinstance(fight.get("difficulty"), int) else None,
         size=fight.get("size") if isinstance(fight.get("size"), int) else None,
+        keystone_level=fight.get("keystoneLevel") if isinstance(fight.get("keystoneLevel"), int) else None,
     )
 
 
@@ -186,6 +188,7 @@ class _PullCluster:
     pull: SampledPull
     guild_id: int | None
     windows: list[tuple[float, float]]
+    members: list[tuple[dict[str, Any], dict[str, Any]]]
 
     def within(self, window: tuple[float, float], tolerance_ms: int = DUPLICATE_PULL_TOLERANCE_MS) -> bool:
         return any(_same_window(member, window, tolerance_ms) for member in self.windows)
@@ -204,9 +207,11 @@ def deduplicate_pulls(
 
     Warcraft Logs exposes no cross-report pull ID, so the match is deliberately narrow and is
     labelled in the payload rather than inferred silently (docs/foundation/SAFE_ANALYTICS_RULES.md).
-    Fights must share encounter, difficulty and raid size, and then either come from the same guild
+    Fights must share encounter, difficulty, raid size and keystone level, and then either come from the same guild
     with wall-clock start *and* end within ``DUPLICATE_PULL_TOLERANCE_MS``, or list the same
-    non-empty set of players (``roster``) within ``ROSTER_MATCH_TOLERANCE_MS``. Timing is checked
+    non-empty set of players (``roster``) within ``ROSTER_MATCH_TOLERANCE_MS``. Two known, different
+    rosters always prevent a match, including the same-guild timing heuristic. Roster reads are
+    memoized per fight and only needed for otherwise plausible matches. Timing is checked
     against every fight already folded into a pull, so an unrelated pull starting in between cannot
     split one double-logged pull in two. Fights are clustered in start order, so the answer does not
     depend on the order reports were listed in, and the earliest-starting report represents the
@@ -216,6 +221,14 @@ def deduplicate_pulls(
     whose roster does not match, where either side has no guild, is kept and marked
     ``possible_duplicate_of`` that pull.
     """
+    roster_cache: dict[tuple[str, int | None], frozenset[str]] = {}
+
+    def players(report: dict[str, Any], fight: dict[str, Any]) -> frozenset[str]:
+        key = (str(report.get("code") or ""), fight.get("id"))
+        if key not in roster_cache:
+            roster_cache[key] = roster(report, fight) if roster is not None else frozenset()
+        return roster_cache[key]
+
     kept: list[SampledPull] = []
     timed: list[tuple[tuple[float, float], dict[str, Any], dict[str, Any]]] = []
     for report, fight in candidates:
@@ -232,15 +245,20 @@ def deduplicate_pulls(
         guild_id = guild_id if isinstance(guild_id, int) else None
         near = [known for known in pulls if known.within(window, ROSTER_MATCH_TOLERANCE_MS)]
         match = next(
-            (known for known in near if guild_id is not None and known.guild_id == guild_id and known.within(window)), None
-        ) or next((known for known in near if _same_roster(roster, known.pull, report, fight)), None)
+            (
+                known for known in near
+                if guild_id is not None and known.guild_id == guild_id and known.within(window)
+                and _roster_match(players, known, report, fight) is not False
+            ), None
+        ) or next((known for known in near if _roster_match(players, known, report, fight) is True), None)
         if match is not None:
             match.pull.duplicates.append(_pull_citation(report, fight))
             match.windows.append(window)
+            match.members.append((report, fight))
             continue
         pull = SampledPull(report=report, fight=fight, possible_duplicate_of=_possible_duplicate_of(near, window, guild_id))
         kept.append(pull)
-        pulls.append(_PullCluster(pull=pull, guild_id=guild_id, windows=[window]))
+        pulls.append(_PullCluster(pull=pull, guild_id=guild_id, windows=[window], members=[(report, fight)]))
     return kept
 
 
@@ -252,11 +270,14 @@ def _possible_duplicate_of(
     return _pull_citation(close.pull.report, close.pull.fight) if close is not None else None
 
 
-def _same_roster(roster: RosterLookup | None, pull: SampledPull, report: dict[str, Any], fight: dict[str, Any]) -> bool:
-    if roster is None:
-        return False
-    players = roster(pull.report, pull.fight)
-    return bool(players) and players == roster(report, fight)
+def _roster_match(roster: RosterLookup, cluster: _PullCluster, report: dict[str, Any], fight: dict[str, Any]) -> bool | None:
+    """Any known cluster roster can contradict a match, even when its first upload had none."""
+    for known_report, known_fight in cluster.members:
+        players = roster(known_report, known_fight)
+        if players:
+            other = roster(report, fight)
+            return players == other if other else None
+    return None
 
 
 def sampled_cohort_notes(sample: dict[str, Any]) -> list[str]:
@@ -266,7 +287,7 @@ def sampled_cohort_notes(sample: dict[str, Any]) -> list[str]:
     if isinstance(removed, int) and removed > 0:
         notes.append(
             f"{removed} sampled fight(s) were the same pull logged in more than one report (same encounter, "
-            f"difficulty and raid size, and either the same guild with start and end within "
+            f"difficulty, raid size and keystone level, without contradictory rosters, and either the same guild with start and end within "
             f"{DUPLICATE_PULL_TOLERANCE_MS // 1000}s or the same players within {ROSTER_MATCH_TOLERANCE_MS // 1000}s) "
             "and were collapsed into one kill; the collapsed report codes are on each kill's duplicate_reports"
         )
@@ -497,31 +518,11 @@ def _fight_player_details(
     )
 
 
-def _fight_roster(
-    client: WarcraftLogsClient, *, report: dict[str, Any], fight: dict[str, Any], difficulty: int | None
-) -> frozenset[str]:
+def _fight_roster(details: dict[str, Any]) -> frozenset[str]:
     """Every player in the fight as ``name-server``."""
-    details = _fight_player_details(client, report=report, fight=fight, difficulty=difficulty)
     return frozenset(
         f"{row.get('name')}-{row.get('server')}" for rows in player_details_roles(details).values() for row in rows
     )
-
-
-def _matching_players_for_fight(
-    client: WarcraftLogsClient,
-    *,
-    report: dict[str, Any],
-    fight: dict[str, Any],
-    difficulty: int | None,
-    spec_name: str | None,
-) -> list[dict[str, Any]] | None:
-    if not spec_name:
-        return []
-    details_report = _fight_player_details(client, report=report, fight=fight, difficulty=difficulty)
-    matching_players = matching_spec_players(details_report, spec_name=spec_name)
-    if not matching_players:
-        return None
-    return matching_players
 
 
 def _matching_kill_fights(
@@ -593,22 +594,23 @@ def _scan_reports_for_boss_kills(
         kill_time_min=kill_time_min,
         kill_time_max=kill_time_max,
     )
-    # Collapse before the per-fight player-details fetch, so a double-logged pull neither
-    # double-counts nor costs a second upstream request.
+    # Roster confirmation and spec filtering share each fight's details even when HTTP caching
+    # is disabled. Only plausible duplicate pairs or an explicit spec filter require the read.
+    details_cache: dict[tuple[str, int | None], dict[str, Any]] = {}
+
+    def details(report: dict[str, Any], fight: dict[str, Any]) -> dict[str, Any]:
+        key = (str(report.get("code") or ""), fight.get("id"))
+        if key not in details_cache:
+            details_cache[key] = _fight_player_details(client, report=report, fight=fight, difficulty=difficulty)
+        return details_cache[key]
     pulls = deduplicate_pulls(
         candidates,
-        roster=lambda report, fight: _fight_roster(client, report=report, fight=fight, difficulty=difficulty),
+        roster=lambda report, fight: _fight_roster(details(report, fight)),
     )
     boss_kills: list[dict[str, Any]] = []
     for pull in pulls:
-        matching_players = _matching_players_for_fight(
-            client,
-            report=pull.report,
-            fight=pull.fight,
-            difficulty=difficulty,
-            spec_name=spec_name,
-        )
-        if spec_name and matching_players is None:
+        matching_players = matching_spec_players(details(pull.report, pull.fight), spec_name=spec_name) if spec_name else []
+        if spec_name and not matching_players:
             continue
         boss_kills.append(
             boss_kill_row(

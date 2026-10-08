@@ -7,7 +7,7 @@ call into this module; nothing here touches Typer, prints, or raises ``typer.Exi
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from statistics import median
 from typing import Any
@@ -282,7 +282,9 @@ def sample_leaderboard_runs(client: RaiderIOClient, request: SampleRequest) -> t
     """Read up to ``request.pages`` leaderboard pages, keeping at most ``request.limit`` distinct runs.
 
     Raider.IO pages can overlap (a page may repeat the previous page's last run); a repeat is dropped
-    and counted in ``duplicates_removed``, so a short sample says why it is short.
+    and counted in ``duplicates_removed``, so a short sample says why it is short. Once the first
+    response identifies the season, subsequent pages request that season explicitly, including
+    when the first page was cached before a rollover. Contradictory season echoes fail the sample.
     """
     seen_run_ids: set[str] = set()
     duplicates = 0
@@ -292,12 +294,22 @@ def sample_leaderboard_runs(client: RaiderIOClient, request: SampleRequest) -> t
     effective_season = request.season_param
     limit = request.limit
     for offset in range(request.pages):
-        fetched = _runs_page(client, request, page=request.page + offset)
+        if offset and effective_season is None:
+            raise ProviderError("invalid_response", "Raider.IO did not identify the season needed to paginate this sample.")
+        pinned_request = replace(request, season=effective_season) if effective_season else request
+        fetched = _runs_page(client, pinned_request, page=request.page + offset)
         payload = fetched.payload
         read_pages.append(fetched)
         served_season = response_season(payload)
         if served_season:
+            if effective_season is not None and served_season != effective_season:
+                raise ProviderError(
+                    "invalid_response",
+                    "Raider.IO returned a different season within one leaderboard sample.",
+                    details={"expected_season": effective_season, "served_season": served_season, "page": request.page + offset},
+                )
             effective_season = served_season
+
         leaderboard_url = payload.get("leaderboard_url")
         if isinstance(leaderboard_url, str) and leaderboard_url and leaderboard_url not in leaderboard_urls:
             leaderboard_urls.append(leaderboard_url)

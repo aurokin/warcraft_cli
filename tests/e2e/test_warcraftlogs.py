@@ -2022,7 +2022,8 @@ def test_missing_credentials_exit_3_with_a_recovery_hint(require, tmp_path):
     """No client credentials anywhere is an auth answer (exit 3) that names the variables to set.
 
     The config and state roots point at empty directories and the cache is off, so neither the real
-    credentials nor a saved token or cached response can answer instead.
+    credentials nor a saved token or cached response can answer instead. The empty cwd also keeps
+    the checkout's .env.local out of credential discovery.
     """
     require("warcraftlogs")
     blank = {
@@ -2032,7 +2033,7 @@ def test_missing_credentials_exit_3_with_a_recovery_hint(require, tmp_path):
         "WARCRAFTLOGS_CLIENT_SECRET": "",
         **no_cache_env(),
     }
-    result = run("warcraftlogs", "zones", expect=EXIT_AUTH, env=blank)
+    result = run("warcraftlogs", "zones", expect=EXIT_AUTH, env=blank, cwd=tmp_path)
     assert result.error_code in {"missing_public_auth", "missing_client_credentials"}, result.describe()
     assert "WARCRAFTLOGS_CLIENT_ID" in result.payload["error"]["message"], result.describe()
 

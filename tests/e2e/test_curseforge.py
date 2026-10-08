@@ -145,6 +145,7 @@ def test_a_non_wow_mod_id_is_refused(require) -> None:
 
 def test_a_missing_api_key_exits_3_with_a_recovery_hint(require, tmp_path: Path) -> None:
     require("curseforge")
+    # The empty cwd prevents the checkout's .env.local from supplying a key.
     blank = {"XDG_CONFIG_HOME": str(tmp_path / "config"), "CURSEFORGE_API_KEY": ""}
-    result = run("curseforge", "addon", CURSEFORGE_ADDON_ID, expect=EXIT_AUTH, error_code="missing_api_key", env=blank)
+    result = run("curseforge", "addon", CURSEFORGE_ADDON_ID, expect=EXIT_AUTH, error_code="missing_api_key", env=blank, cwd=tmp_path)
     assert "CURSEFORGE_API_KEY" in result.payload["error"]["message"]

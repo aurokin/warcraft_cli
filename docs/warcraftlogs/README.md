@@ -93,14 +93,15 @@ and `next_command: null`; its command is still in `match.follow_up.command`.
 
 `server`, `guild`, `guild-rankings`, `guild-members`, `guild-attendance`, `character` and
 `character-rankings` take a realm in any spelling (`Azjol-Nerub`, `azjolnerub`, `Mal'Ganis`) and try
-each slug spelling until Warcraft Logs finds the entity. `reports`/`guild-reports`, the sampled
-`--guild-realm` and `encounter-rankings --server-slug` send one slug (`Azjol-Nerub` becomes
-`azjol-nerub`), so pass Warcraft Logs' own slug there (`azjolnerub`, as `server` reports it).
+each slug spelling until Warcraft Logs finds the entity. `reports`/`guild-reports` and sampled
+`--guild-realm` use the same fallback. `encounter-rankings --server-slug` sends one slug
+(`Azjol-Nerub` becomes `azjol-nerub`), so pass Warcraft Logs' own slug there
+(`azjolnerub`, as `server` reports it).
 Most native-script realm names are their own Warcraft Logs slug (`아즈샤라`, `血之谷`, `Гордунни`), but
 Warcraft Logs slugs some Russian realms in English (`Ревущий фьорд` is `howling-fjord`, as are
 `Ясеневый лес`, `Борейская тундра`, `Черный Шрам` and `Разувий`). When no spelling of a non-Latin name
 is found, those realm-taking commands read the region's server list (1-3 pages, cached like other
-world data) and retry with the slug whose display name matches. The single-slug flags above do not:
+world data) and retry with the slug whose display name matches. The single-slug ranking flag does not:
 pass `howling-fjord` there.
 
 Regions are `us`, `eu`, `kr`, `tw` or `cn`, or an alias such as `na`; `oce`/`oceanic` read `us`,
@@ -267,10 +268,11 @@ can come from cache. `freshness.cache_hit_count`, `freshness.upstream_request_co
 sample is scanned, so a wrong id fails with `not_found` (exit 4) instead of returning `count: 0`.
 
 When two raiders in one group each upload the pull, Warcraft Logs holds it as two reports. Those
-are collapsed into one sampled kill when they share encounter, difficulty and raid size and either
-come from the same guild id with wall-clock start *and* end within 5 s, or list the same set of
-players (from the fight's player details, fetched only for such candidates) with start and end
-within 30 s. Timing is checked against every report already folded into a pull, so uploads a few
+are collapsed into one sampled kill when they share encounter, difficulty, raid size and keystone
+level and either come from the same guild id with wall-clock start *and* end within 5 s, or list
+the same set of players with start and end within 30 s. Available player rosters must agree even
+for the same-guild shortcut; contradictory rosters keep the pulls separate. Player details are
+fetched only for candidates and reused for spec filtering. Timing is checked against every report already folded into a pull, so uploads a few
 seconds apart chain into one pull. Every open pull is a candidate,
 so another pull that starts in between cannot split a double-logged one. Fights are clustered in
 start order, so the result does not depend on report listing order, and the earliest-starting

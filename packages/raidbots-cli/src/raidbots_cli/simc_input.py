@@ -46,7 +46,7 @@ def _scalar_assignments(lines: list[str]) -> dict[str, str]:
             continue
         key, _, value = line.partition("=")
         key = key.strip()
-        if key and key not in values:
+        if key:
             values[key] = value.strip()
     return values
 
@@ -61,6 +61,29 @@ def _find_actor(lines: list[str]) -> tuple[str | None, str | None]:
         if actor_class in _WOW_CLASSES:
             return actor_class, match.group(2).strip()
     return None, None
+
+
+def _first_actor_assignments(lines: list[str]) -> dict[str, str]:
+    """Read only the first actor's options; later actors and copies own their builds."""
+    _, first_name = _find_actor(lines)
+    if first_name is None:
+        return _scalar_assignments(lines)
+    values: dict[str, str] = {}
+    seen_actor = False
+    selected = False
+    for line in lines:
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip()
+        if normalize_actor_class(key) in _WOW_CLASSES:
+            selected = not seen_actor
+            seen_actor = True
+        elif key == "active":
+            selected = value.strip('"') == first_name
+        elif key in {"copy", "pet"}:
+            selected = False
+        elif selected and not key.startswith("profileset."):
+            values[key] = value
+    return values
 
 
 def _profileset_names(lines: list[str]) -> set[str]:
@@ -79,12 +102,13 @@ def looks_like_simc_input(text: str) -> bool:
 
 def classify_simc_input(text: str) -> dict[str, Any]:
     lines = _iter_clean_lines(text)
-    assignments = _scalar_assignments(lines)
+    assignments = _first_actor_assignments(lines)
 
     actor_class, actor_name = _find_actor(lines)
     profileset_names = _profileset_names(lines)
     copy_count = sum(1 for line in lines if "=" in line and line.split("=", 1)[0].strip() == "copy")
-    options = {key: assignments[key] for key in _OPTION_KEYS if key in assignments}
+    global_assignments = _scalar_assignments(lines)
+    options = {key: global_assignments[key] for key in _OPTION_KEYS if key in global_assignments}
 
     if profileset_names or copy_count:
         sim_type_guess = "top_gear_or_droptimizer"
@@ -100,7 +124,7 @@ def classify_simc_input(text: str) -> dict[str, Any]:
         "spec": assignments.get("spec"),
         "profileset_count": len(profileset_names),
         "copy_count": copy_count,
-        "talents_present": "talents" in assignments or any(key in assignments for key in _SPLIT_TALENT_KEYS),
+        "talents_present": bool(assignments.get("talents")) or any(assignments.get(key) for key in _SPLIT_TALENT_KEYS),
         "options": options,
     }
 
@@ -108,24 +132,12 @@ def classify_simc_input(text: str) -> dict[str, Any]:
 def _talents_value(text: str) -> str | None:
     # Split on the first `=` and strip the key so `talents = CYG` (space-padded, valid SimC)
     # is recognized like `talents=CYG`, consistent with _scalar_assignments / _find_actor.
-    for line in _iter_clean_lines(text):
-        key, sep, value = line.partition("=")
-        if sep and key.strip() == "talents":
-            value = value.strip()
-            return value or None
-    return None
+    return _first_actor_assignments(_iter_clean_lines(text)).get("talents") or None
 
 
 def _split_talents(text: str) -> dict[str, str]:
-    found: dict[str, str] = {}
-    for line in _iter_clean_lines(text):
-        key, sep, value = line.partition("=")
-        key = key.strip()
-        if sep and key in _SPLIT_TALENT_KEYS and key not in found:
-            value = value.strip()
-            if value:
-                found[key] = value
-    return found
+    assignments = _first_actor_assignments(_iter_clean_lines(text))
+    return {key: assignments[key] for key in _SPLIT_TALENT_KEYS if assignments.get(key)}
 
 
 _SIM_TYPE_EXPLANATIONS = {
@@ -156,17 +168,14 @@ def simc_handoff(text: str, classification: dict[str, Any]) -> dict[str, Any]:
     spec = classification.get("spec")
     # A bare SimC talent code cannot resolve class/spec on its own, so only suggest the
     # talent-decode commands when both are known, and pass them explicitly. shlex.quote keeps
-    # the (untrusted, report-sourced) values shell-safe. Prefer the combined `talents=` line;
-    # fall back to the split class/spec/hero keys (the form edited/saved profiles use) so the
-    # decode/describe handoff still fires. simc decode-build/describe-build accept both forms.
-    if talents:
-        talents_flags = f"--talents {shlex.quote(talents)}"
-    else:
-        talents_flags = " ".join(
-            f"--{key.replace('_', '-')} {shlex.quote(split_talents[key])}"
-            for key in _SPLIT_TALENT_KEYS
-            if key in split_talents
-        )
+    # the (untrusted, report-sourced) values shell-safe. Split tree options override
+    # their trees in a combined loadout, so carry both forms when both are present.
+    talent_parts = [f"--talents {shlex.quote(talents)}"] if talents else []
+    talent_parts.extend(
+        f"--{key.replace('_', '-')} {shlex.quote(split_talents[key])}"
+        for key in _SPLIT_TALENT_KEYS if key in split_talents
+    )
+    talents_flags = " ".join(talent_parts)
     if talents_flags and actor_class and spec:
         identity = f"--actor-class {shlex.quote(str(actor_class))} --spec {shlex.quote(str(spec))}"
         commands.append(

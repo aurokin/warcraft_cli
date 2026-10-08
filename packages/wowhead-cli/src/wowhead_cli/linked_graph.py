@@ -117,13 +117,13 @@ def _expand_page(
     visited_pages: set[tuple[str, int]],
 ) -> None:
     for link in entity_page_links(html, page_url=page_url, include_gatherer=options.include_gatherer):
-        if len(state.nodes) >= options.node_limit:
-            state.truncated = True
-            return
         ref = _link_ref(link, options.relation_filter)
         if ref is None or _node_key(*ref) == parent_key:
             continue
         link_type, link_id = ref
+        if _node_key(*ref) not in state.nodes and len(state.nodes) >= options.node_limit:
+            state.truncated = True
+            continue
         _record_link(state, parent_key=parent_key, link=link, link_type=link_type, link_id=link_id)
         _enqueue_child(
             queue,
@@ -158,9 +158,8 @@ def _traverse(state: _GraphState, options: LinkedGraphOptions, *, fetch_page: An
             queue=queue,
             visited_pages=visited_pages,
         )
-        if state.truncated:
-            break
-    # Every queued page is one the depth asked for; --max-fetches or --node-limit left it unread.
+    # Every queued page is one the depth asked for; --max-fetches left it unread.
+    # The node budget can omit new nodes while fetched pages still contribute edges among retained nodes.
     state.pages_skipped = len(queue)
     state.truncated = state.truncated or bool(queue)
 

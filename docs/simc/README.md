@@ -123,6 +123,9 @@ exit code there.
 
 ## APL analysis
 
+- Static views use the effective action lists: `actions=` replaces a list, an empty assignment
+  clears it, and `/` separates inline actions. Append assignments preserve SimC string-append
+  semantics, including option continuations. Action source lines remain available as provenance.
 - A relative APL path names the file under the current directory when one is there, and otherwise the
   file under the checkout (`ActionPriorityLists/default/monk_windwalker.simc`). A bare file name the
   checkout root does not hold names a spec APL in `ActionPriorityLists/default/`, so `monk_windwalker.simc`
@@ -170,7 +173,10 @@ exit code there.
   `log_path`) and removes the directory when a run fails. It times only the profile's first actor (the
   player `sim` reports), so a pet casting an action of the same name is not counted. `log-actions` names
   the `actor` behind each hit's `performed_at`, which may be a pet (`<player>_<pet>`); `--actor NAME`
-  counts only that actor's lines. `validate-apl` without `--out-dir` writes its
+  counts only that actor's lines. Before writing, `compare-apls` and `validate-apl` reject generated
+  profile/report paths that collide with any harness or APL input, or with another output, as
+  `invalid_query` (exit 2). This includes symlink, hardlink and case aliases.
+  `validate-apl` without `--out-dir` writes its
   merged profile to a temp directory (`profile_path`) and leaves it there for you to read or delete.
 
 ## Build input flags

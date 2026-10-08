@@ -484,17 +484,55 @@ def test_simc_handoff_emits_split_talent_flags() -> None:
     assert any(c.startswith("simc describe-build") for c in commands)
 
 
-def test_simc_handoff_prefers_combined_talents_over_split() -> None:
-    # When both a combined talents= line and split keys are present, the combined form wins
-    # (it is the canonical addon-export shape); split flags are not also appended.
-    text = 'mage="Main"\nspec=frost\ntalents=CYG\nclass_talents=IGNOREDD\n'
+def test_simc_handoff_carries_split_tree_overrides_alongside_combined_talents() -> None:
+    text = 'mage="Main"\nspec=frost\ntalents=CYG\nclass_talents=OVERRIDE\n'
     decode = next(
         c["command"]
         for c in simc_handoff(text, classify_simc_input(text))["suggested_simc_commands"]
         if c["command"].startswith("simc decode-build")
     )
     assert "--talents CYG" in decode
-    assert "--class-talents" not in decode
+    assert "--class-talents OVERRIDE" in decode
+
+
+def test_simc_handoff_and_classification_use_last_first_actor_values_and_global_options() -> None:
+    text = (
+        'iterations=100\nmage="Main"\nspec=arcane\nspec=frost\n'
+        'talents=OLD\ntalents=NEW\nclass_talents=OLD_TREE\nclass_talents=NEW_TREE\n'
+        'warrior="Alt"\nspec=fury\ntalents=OTHER\nhero_talents=OTHER_HERO\niterations=10000\n'
+    )
+    classification = classify_simc_input(text)
+    assert classification["actor_class"] == "mage"
+    assert classification["spec"] == "frost"
+    assert classification["options"] == {"iterations": "10000"}
+    decode = simc_handoff(text, classification)["suggested_simc_commands"][1]["command"]
+    assert "--talents NEW" in decode
+    assert "--class-talents NEW_TREE" in decode
+    assert "OTHER" not in decode
+
+
+def test_simc_handoff_does_not_use_copy_build_and_honors_reselected_first_actor() -> None:
+    text = 'mage="Main"\nspec=frost\ntalents=ORIGINAL\ncopy=Alt\nspec=arcane\ntalents=OTHER\nactive=Main\ntalents=NEW\n'
+    classification = classify_simc_input(text)
+    decode = simc_handoff(text, classification)["suggested_simc_commands"][1]["command"]
+    assert "--spec frost" in decode
+    assert "--talents NEW" in decode
+
+
+def test_simc_handoff_empty_last_talent_assignment_clears_stale_decode() -> None:
+    text = 'mage="Main"\nspec=frost\ntalents=OLD\ntalents=\n'
+    assert len(simc_handoff(text, classify_simc_input(text))["suggested_simc_commands"]) == 1
+
+
+def test_raidbots_default_cache_path_uses_current_environment(monkeypatch, tmp_path: Path) -> None:
+    from raidbots_cli.client import load_raidbots_cache_settings_from_env
+
+    monkeypatch.delenv("RAIDBOTS_CACHE_DIR", raising=False)
+    for root_name in ("first", "second"):
+        root = tmp_path / root_name
+        monkeypatch.setenv("XDG_CACHE_HOME", str(root))
+        settings, _ = load_raidbots_cache_settings_from_env()
+        assert settings.cache_dir == root / "warcraft" / "raidbots" / "http"
 
 
 def test_classify_strips_trailing_inline_comments() -> None:

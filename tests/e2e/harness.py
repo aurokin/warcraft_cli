@@ -127,7 +127,14 @@ def _inherited_env() -> dict[str, str]:
     return {key: value for key, value in os.environ.items() if key not in dropped}
 
 
-def run_raw(binary: str, *args: str, timeout: float = DEFAULT_TIMEOUT_SECONDS, env: dict[str, str] | None = None, stdin: str | None = None) -> Result:
+def run_raw(
+    binary: str,
+    *args: str,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    env: dict[str, str] | None = None,
+    stdin: str | None = None,
+    cwd: Path | None = None,
+) -> Result:
     """Execute a binary and capture both streams without asserting anything."""
     merged_env = {**_inherited_env(), **SESSION_ENV, **(env or {})}
     _pace(binary)
@@ -139,7 +146,7 @@ def run_raw(binary: str, *args: str, timeout: float = DEFAULT_TIMEOUT_SECONDS, e
         timeout=timeout,
         env=merged_env,
         input=stdin,
-        cwd=REPO_ROOT,
+        cwd=REPO_ROOT if cwd is None else cwd,
         check=False,
     )
     return Result(binary, tuple(args), completed.returncode, completed.stdout, completed.stderr, time.monotonic() - started)
@@ -154,6 +161,7 @@ def run(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     env: dict[str, str] | None = None,
     stdin: str | None = None,
+    cwd: Path | None = None,
 ) -> Result:
     """Run a binary and enforce the output contract.
 
@@ -164,7 +172,7 @@ def run(
     stderr carries one error envelope. Every envelope must pass ``envelope_violations``.
     A ``--fields`` call prunes the envelope keys this checks, so those journeys use ``run_raw``.
     """
-    result = run_raw(binary, *args, timeout=timeout, env=env, stdin=stdin)
+    result = run_raw(binary, *args, timeout=timeout, env=env, stdin=stdin, cwd=cwd)
     if expect is not None and result.exit_code != expect:
         raise JourneyFailure(f"expected exit {expect}\n{result.describe()}")
     if "Traceback (most recent call last)" in result.stderr:

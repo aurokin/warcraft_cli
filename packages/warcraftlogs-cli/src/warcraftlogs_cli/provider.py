@@ -3,10 +3,6 @@
 Functions here never print and never raise ``typer.Exit``: they return an ``Envelope`` or raise
 ``ProviderError``. ``warcraftlogs_cli.main`` wraps them for the CLI, and the ``warcraft`` wrapper
 can call ``PROVIDER`` in-process instead of shelling out.
-
-The payload builders still live in ``warcraftlogs_cli.main`` (a 6k-line module that also owns the
-50+ report commands), so they are imported lazily inside each function: importing them at module
-scope would make ``main`` -> ``provider`` -> ``main`` a real import cycle.
 """
 
 from __future__ import annotations
@@ -18,6 +14,7 @@ from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope
 from warcraft_core.provider import ProviderError, ProviderSurface
 
 from warcraftlogs_cli.client import RETAIL_PROFILE, WarcraftLogsSiteProfile, resolve_site_profile
+from warcraftlogs_cli.services import doctor_payload, explicit_report_reference, report_resolve_payload, report_search_payload
 
 PROVIDER_NAME = "warcraftlogs"
 
@@ -42,33 +39,27 @@ def payload_body(payload: dict[str, Any]) -> dict[str, Any]:
 
 def search(query: str, *, limit: int = 10, **options: Any) -> Envelope:
     """Match an explicit Warcraft Logs report URL or code; free text returns a discovery hint."""
-    from warcraftlogs_cli.main import _explicit_report_reference, _report_search_payload
-
     if not query.strip():
         raise ProviderError("invalid_query", "Query cannot be empty.")
     site = site_profile(options)
-    data = _report_search_payload(query, ref=_explicit_report_reference(query), site=site, limit=limit)
+    data = report_search_payload(query, ref=explicit_report_reference(query), site=site, limit=limit)
     return success_envelope(provider=PROVIDER_NAME, command="search", kind=SEARCH_KIND, data=data, query=query)
 
 
 def resolve(target: str, **options: Any) -> Envelope:
     """Resolve an explicit Warcraft Logs report URL or code to a single report reference."""
-    from warcraftlogs_cli.main import _explicit_report_reference, _report_resolve_payload
-
     if not target.strip():
         raise ProviderError("invalid_query", "Query cannot be empty.")
     site = site_profile(options)
-    data = _report_resolve_payload(target, ref=_explicit_report_reference(target), site=site)
+    data = report_resolve_payload(target, ref=explicit_report_reference(target), site=site)
     return success_envelope(provider=PROVIDER_NAME, command="resolve", kind=RESOLVE_KIND, data=data, query=target)
 
 
 def doctor(**options: Any) -> Envelope:
     """Report auth, site-profile, and per-command readiness. Pass ``live=False`` to skip auth probes."""
-    from warcraftlogs_cli.main import _doctor_payload
-
     site = site_profile(options)
     live = bool(options.get("live", True))
-    payload = _doctor_payload(live=live, site=site)
+    payload = doctor_payload(live=live, site=site)
     return success_envelope(provider=PROVIDER_NAME, command="doctor", kind="doctor", data=payload_body(payload))
 
 

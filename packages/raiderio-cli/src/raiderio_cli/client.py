@@ -13,7 +13,6 @@ from warcraft_core.wow_normalization import normalize_name, normalize_region, pr
 
 RAIDERIO_BASE_URL = "https://raider.io/api/v1"
 RAIDERIO_SITE_BASE_URL = "https://raider.io"
-DEFAULT_CACHE_DIR = provider_cache_root("raiderio") / "http"
 DEFAULT_CHARACTER_FIELDS = ",".join(
     (
         "guild",
@@ -42,7 +41,7 @@ def load_raiderio_cache_settings_from_env() -> tuple[CacheSettings, int, int, in
     """Resolve cache settings plus the static, character, guild, M+ runs, and raid rankings TTLs."""
     settings = load_prefixed_cache_settings_from_env(
         env_prefix="RAIDERIO",
-        default_cache_dir=DEFAULT_CACHE_DIR,
+        default_cache_dir=provider_cache_root("raiderio") / "http",
         default_redis_prefix="raiderio_cli",
         ttl_defaults=CacheTTLConfig(
             search_suggestions=21600,

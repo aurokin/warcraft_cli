@@ -40,6 +40,43 @@ def test_summarize_branches_and_intent(tmp_path: Path) -> None:
     assert explained.priorities
 
 
+def test_branch_analysis_uses_replaced_inline_list_and_order_independent_dispatch(tmp_path: Path) -> None:
+    apl = tmp_path / "replace.simc"
+    apl.write_text(
+        "actions=run_action_list,name=obsolete\n"
+        "actions=run_action_list,if=active_enemies>=3,name=aoe/run_action_list,if=active_enemies<3,name=st\n"
+        "actions.aoe=fireball\n"
+        "actions.st=frostbolt/ice_lance,if=talent.shatter\n"
+    )
+    context = PruneContext(enabled_talents={"shatter"}, disabled_talents=set(), targets=1)
+    summary = summarize_branches(apl, context)
+    assert summary.guaranteed_dispatch == "st"
+    assert "obsolete" not in summary.branch_decisions
+    assert resolve_focus_list(apl, context).focus_list == "st"
+    assert len(summarize_intent(apl, context, "st")) == 2
+
+
+def test_inline_actions_are_distinguished_in_talent_filter_and_build_comparison(tmp_path: Path) -> None:
+    apl = tmp_path / "inline.simc"
+    apl.write_text("actions=fireball,if=talent.hot_streak/frostbolt,if=active_enemies>2/ice_lance\n")
+    without = PruneContext(enabled_talents=set(), disabled_talents={"hot_streak"}, targets=1)
+    with_talent = PruneContext(enabled_talents={"hot_streak"}, disabled_talents=set(), targets=1)
+    inactive = inactive_priority_decisions(apl, without, "default", talent_only=True)
+    assert [row.action_name for row in inactive] == ["fireball"]
+    comparison = compare_branches(apl, without, with_talent)
+    assert len(comparison.focus_changes) == 1
+    assert "fireball: dead -> guaranteed" in comparison.focus_changes[0]
+
+
+def test_appended_condition_prevents_false_static_dispatch(tmp_path: Path) -> None:
+    apl = tmp_path / "append.simc"
+    apl.write_text("actions=run_action_list,name=aoe\nactions+=,if=0/run_action_list,name=st\n")
+    context = PruneContext(enabled_talents=set(), disabled_talents=set(), targets=1)
+    summary = summarize_branches(apl, context)
+    assert summary.guaranteed_dispatch == "st"
+    assert summary.branch_decisions["aoe"].status == "dead"
+
+
 def test_compare_branch_summaries_and_focus_comparison(tmp_path: Path) -> None:
     apl = _sample_apl(tmp_path)
     left_context = PruneContext(enabled_talents={"mass_disintegrate"}, disabled_talents=set(), targets=3)

@@ -9,10 +9,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from simc_cli.compare import (
+    OutputPathConflict,
     VariantSummary,
     _extract_summary,
+    build_variant_profile,
     comparison_report,
+    preflight_output_paths,
     variant_report_payload,
 )
 
@@ -20,6 +24,42 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "simc"
 # A real 4-iteration, 30-second MID2 Arcane Mage run (SimC 1210-01), trimmed to the fields compare.py
 # and report.py read. SimC printed `DPS=362851.8712606381 DPS-Error=38374.55027921543` for it.
 CAPTURED_REPORT = json.loads((FIXTURES / "captured_arcane_mage_json2_report.json").read_text())
+
+
+@pytest.mark.parametrize("alias_kind", ["symlink", "hardlink"])
+def test_profile_generation_rejects_aliases_to_source_files(tmp_path: Path, alias_kind: str) -> None:
+    harness = tmp_path / "harness.simc"
+    harness.write_text('mage="h"\nspec=frost\n')
+    apl = tmp_path / "apl.simc"
+    apl.write_text("actions=frostbolt\n")
+    output = tmp_path / "variant.simc"
+    if alias_kind == "symlink":
+        output.symlink_to(apl)
+    else:
+        output.hardlink_to(apl)
+    with pytest.raises(OutputPathConflict, match="would overwrite"):
+        build_variant_profile(harness, apl, label="variant", out_dir=tmp_path)
+    assert apl.read_text() == "actions=frostbolt\n"
+
+
+def test_preflight_rejects_output_aliases_to_each_other(tmp_path: Path) -> None:
+    output = tmp_path / "report.json"
+    output.write_text("original")
+    alias = tmp_path / "other.json"
+    alias.hardlink_to(output)
+    with pytest.raises(OutputPathConflict):
+        preflight_output_paths([], [output, alias])
+
+
+def test_profile_generation_writes_merged_profile_without_changing_sources(tmp_path: Path) -> None:
+    harness = tmp_path / "harness.simc"
+    harness.write_text('mage="h"\nspec=frost\n')
+    apl = tmp_path / "apl.simc"
+    apl.write_text("actions=frostbolt\n")
+    output = build_variant_profile(harness, apl, label="base", out_dir=tmp_path / "out")
+    assert output.read_text() == 'mage="h"\nspec=frost\nactions=frostbolt\n'
+    assert harness.read_text() == 'mage="h"\nspec=frost\n'
+    assert apl.read_text() == "actions=frostbolt\n"
 
 
 def _summary(label: str, *, report: dict[str, object] | None = None) -> VariantSummary:

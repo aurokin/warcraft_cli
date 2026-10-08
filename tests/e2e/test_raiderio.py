@@ -588,13 +588,12 @@ def test_sample_mythic_plus_runs_reports_what_it_read(current_season: str, basel
     _assert_sampled_provenance(result)
 
 
-def test_the_sampled_bounds_return_strict_subsets_that_add_back_up(baseline_sample: Result) -> None:
-    """``--score-min``/``--score-max``/``--level-min``/``--level-max`` narrow the same sample.
+def test_sampled_bounds_match_observed_values_and_preserve_inclusive_boundaries(baseline_sample: Result) -> None:
+    """Every score/key bound keeps precisely its matching runs from the same cached sample.
 
-    Each bound is placed where it has to bite whatever the live leaderboard looks like: the score
-    halves split the sample around an observed score, and the level bounds are set one step outside
-    the observed range, which no sample can satisfy. A flag that stopped being wired returns the
-    whole sample and fails every one of them.
+    A leaderboard page may contain one key level or tied scores. Exact memberships and inclusive
+    boundaries still verify filtering; strict subsets are required when the observed values admit
+    one. Bounds outside each observed range must exclude everything even in a uniform cohort.
     """
     runs = _rows(baseline_sample, "runs")
     everything = _run_keys(baseline_sample)
@@ -604,14 +603,29 @@ def test_the_sampled_bounds_return_strict_subsets_that_add_back_up(baseline_samp
     above = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--score-min", str(midpoint))
     below = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--score-max", str(midpoint))
     above_keys, below_keys = _run_keys(above), _run_keys(below)
+    expected_above = {_run_key(row) for row in runs if row["score"] >= midpoint}
+    expected_below = {_run_key(row) for row in runs if row["score"] <= midpoint}
+    assert above_keys == expected_above, above.describe()
+    assert below_keys == expected_below, below.describe()
+    if min(scores) < midpoint:
+        assert above_keys < everything, "--score-min must drop the runs below the bound"
+    if max(scores) > midpoint:
+        assert below_keys < everything, "--score-max must drop the runs above the bound"
+    # Inclusive halves overlap exactly on scores equal to the bound and cover the whole sample.
+    assert above_keys | below_keys == everything
+    assert above_keys & below_keys == {_run_key(row) for row in runs if row["score"] == midpoint}
+    for result, expected in ((above, expected_above), (below, expected_below)):
+        filtering = result.data["sample"]["filtering"]
+        assert filtering["source_run_count"] == len(everything)
+        assert filtering["excluded_run_count"] == len(everything) - len(expected)
 
-    assert above_keys < everything, "--score-min must drop the runs below the bound"
-    assert below_keys < everything, "--score-max must drop the runs above the bound"
-    assert all(row["score"] >= midpoint for row in _rows(above, "runs"))
-    assert all(row["score"] <= midpoint for row in _rows(below, "runs"))
-    # Inclusive bounds around one observed score: every run is in one half or the other.
-    assert above_keys | below_keys == everything, "the two halves must cover the whole sample"
-    assert above.data["sample"]["filtering"]["source_run_count"] == len(everything)
+    for flag, bound in (("--score-min", max(scores) + 1), ("--score-max", min(scores) - 1)):
+        excluded = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, flag, str(bound))
+        assert excluded.data["runs"] == [], excluded.describe()
+        assert excluded.data["sample"]["filtering"]["excluded_run_count"] == len(everything)
+    score_edges = run("raiderio", "sample", "mythic-plus-runs", *SCOPE,
+                      "--score-min", str(min(scores)), "--score-max", str(max(scores)))
+    assert _run_keys(score_edges) == everything, score_edges.describe()
 
     levels = [row["mythic_level"] for row in runs]
     floor = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--level-min", str(max(levels) + 1))
@@ -622,18 +636,20 @@ def test_the_sampled_bounds_return_strict_subsets_that_add_back_up(baseline_samp
     assert capped.data["runs"] == [], "no run can fit under a cap below the lowest sampled key level"
     assert capped.data["sample"]["filtering"]["excluded_run_count"] == len(everything)
 
-    # The other direction: bounds sitting exactly on the observed range are inclusive and keep every
-    # run, so a level filter that dropped everything would fail here instead of passing the two above.
     edges = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--level-min", str(min(levels)), "--level-max", str(max(levels)))
     assert _run_keys(edges) == everything, edges.describe()
 
-    # And a floor inside the range keeps exactly the runs at the top key level: a strict, non-empty
-    # subset, so a bound that only works at the extremes (or off by one) cannot pass.
-    assert min(levels) < max(levels), "the sample needs two key levels for a bound inside the range to bite"
-    top = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, "--level-min", str(max(levels)))
-    expected = {_run_key(row) for row in runs if row["mythic_level"] == max(levels)}
-    assert _run_keys(top) == expected, top.describe()
-    assert expected < everything
+    # Bounds on the observed extremes keep exactly those levels. If every run has the same level,
+    # both must keep the entire cohort; otherwise both must narrow it to a non-empty strict subset.
+    for flag, bound in (("--level-min", max(levels)), ("--level-max", min(levels))):
+        narrowed = run("raiderio", "sample", "mythic-plus-runs", *SCOPE, flag, str(bound))
+        expected = {_run_key(row) for row in runs if row["mythic_level"] == bound}
+        assert _run_keys(narrowed) == expected, narrowed.describe()
+        assert narrowed.data["sample"]["filtering"]["excluded_run_count"] == len(everything) - len(expected)
+        if min(levels) < max(levels):
+            assert expected < everything
+        else:
+            assert expected == everything
 
 
 def test_the_roster_filters_keep_exactly_the_runs_that_carry_the_value(baseline_sample: Result) -> None:

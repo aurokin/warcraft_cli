@@ -2462,10 +2462,10 @@ def test_simc_describe_build_uses_leaf_focus_and_full_action_diff(monkeypatch, t
         "\n".join(
             [
                 "actions=call_action_list,name=cooldowns",
-                "actions+=call_action_list,name=leaf",
+                "actions+=/call_action_list,name=leaf",
                 "actions.cooldowns=metamorphosis",
                 "actions.leaf=void_ray",
-                "actions.leaf+=collapsing_star,if=active_enemies>1",
+                "actions.leaf+=/collapsing_star,if=active_enemies>1",
             ]
         )
         + "\n"
@@ -4454,6 +4454,69 @@ def test_compare_apls_rejects_labels_that_would_overwrite_a_profile(tmp_path: Pa
     exit_code, payload = _invoke(tmp_path, *args)
 
     assert (exit_code, payload["error"]["code"]) == (2, "invalid_query")
+
+
+@pytest.mark.parametrize("command", ["validate-apl", "compare-apls"])
+@pytest.mark.parametrize("input_name", ["base.simc", "Base.simc", "harness.simc"])
+def test_apl_commands_reject_input_output_alias_before_writing(tmp_path: Path, command: str, input_name: str) -> None:
+    harness = tmp_path / "harness.simc"
+    harness.write_text('mage="h"\nspec=frost\n')
+    apl = tmp_path / input_name
+    if apl != harness:
+        apl.write_text("actions=frostbolt\n")
+    before = {path: path.read_bytes() for path in (harness, apl)}
+    label = "harness" if input_name == "harness.simc" else "base"
+    args = [str(harness), str(apl), "--label", label] if command == "validate-apl" else [str(harness), "--base-apl", str(apl), "--base-label", label]
+
+    exit_code, payload = _invoke(tmp_path, command, *args, "--out-dir", str(tmp_path))
+
+    assert (exit_code, payload["error"]["code"]) == (2, "invalid_query")
+    assert "would overwrite" in payload["error"]["message"]
+    assert all(path.read_bytes() == contents for path, contents in before.items())
+    assert not (tmp_path / "base.json").exists()
+
+
+@pytest.mark.parametrize("collision", ["variant_input", "json_input", "report_input", "report_profile", "report_json"])
+def test_compare_apls_preflights_every_input_and_output_before_writing(tmp_path: Path, collision: str) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    harness = source / "harness.simc"
+    harness.write_text('mage="h"\nspec=frost\n')
+    base = source / "base.simc"
+    base.write_text("actions=frostbolt\n")
+    variant = source / "variant.simc"
+    if collision == "variant_input":
+        variant = out / "base.simc"
+    elif collision == "json_input":
+        variant = out / "base.json"
+    variant.write_text("actions=ice_lance\n")
+    report = {"report_input": harness, "report_profile": out / "base.simc", "report_json": out / "other.json"}.get(collision)
+    args = ["compare-apls", str(harness), "--base-apl", str(base), "--variant", f"other={variant}", "--out-dir", str(out)]
+    if report is not None:
+        args += ["--report-out", str(report)]
+    before = {path: path.read_bytes() for path in (harness, base, variant)}
+    out_before = set(out.iterdir())
+
+    exit_code, payload = _invoke(tmp_path, *args)
+
+    assert (exit_code, payload["error"]["code"]) == (2, "invalid_query")
+    assert all(path.read_bytes() == contents for path, contents in before.items())
+    assert set(out.iterdir()) == out_before
+
+
+def test_compare_apls_report_input_collision_does_not_create_default_output_directory(tmp_path: Path) -> None:
+    harness = tmp_path / "harness.simc"
+    harness.write_text('mage="h"\nspec=frost\n')
+    apl = tmp_path / "apl.simc"
+    apl.write_text("actions=frostbolt\n")
+
+    exit_code, payload = _invoke(tmp_path, "compare-apls", str(harness), "--base-apl", str(apl), "--report-out", str(harness))
+
+    assert (exit_code, payload["error"]["code"]) == (2, "invalid_query")
+    assert not list(tmp_path.rglob("simc-cli-compare-*"))
+    assert harness.read_text() == 'mage="h"\nspec=frost\n'
 
 
 @pytest.mark.parametrize(

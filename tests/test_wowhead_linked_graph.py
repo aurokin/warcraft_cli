@@ -113,3 +113,40 @@ def test_linked_graph_rejects_an_unknown_relation_type() -> None:
     error = json.loads(result.stderr)["error"]
     assert error["code"] == "invalid_argument"
     assert error["message"].startswith("Unsupported relation 'npcs'. Expected one of: ")
+
+
+def test_node_limit_retains_edges_between_existing_nodes_after_omitted_links() -> None:
+    pages = {
+        1: '<a href="/item=2">child</a><a href="/item=3">omitted</a>',
+        2: '<a href="/item=4">omitted first</a><a href="/item=1">back to root</a>',
+    }
+    payload = build_linked_graph_payload(
+        root_type="item", root_id=1, root_url="https://www.wowhead.com/item=1",
+        fetch_page=lambda entity_type, entity_id: (pages[entity_id], {}),
+        depth=2, relation_filter=set(), node_limit=2, max_fetches=5, include_gatherer=False,
+    )
+    assert {node["key"] for node in payload["graph"]["nodes"]} == {"item:1", "item:2"}
+    assert {(edge["from"], edge["to"]) for edge in payload["graph"]["edges"]} == {("item:1", "item:2"), ("item:2", "item:1")}
+    assert payload["sampling"] == {
+        "pages_fetched": 2,
+        "pages_skipped": 0,
+        "truncated": True,
+        "caveat": "Relations are entity-type edges parsed from href, gatherer and relation-tab (Listview) links on fetched pages only.",
+    }
+
+
+def test_graph_at_node_limit_is_complete_when_only_filtered_or_existing_links_remain() -> None:
+    pages = {
+        1: '<a href="/item=2">child</a><a href="/item=1">self</a><a href="/npc=3">filtered</a>',
+        2: '<a href="/npc=4">filtered</a><a href="/item=2">self</a><a href="/item=1">root</a>',
+    }
+    payload = build_linked_graph_payload(
+        root_type="item", root_id=1, root_url="https://www.wowhead.com/item=1",
+        fetch_page=lambda entity_type, entity_id: (pages[entity_id], {}),
+        depth=2, relation_filter={"item"}, node_limit=2, max_fetches=5, include_gatherer=False,
+    )
+    assert payload["graph"]["node_count"] == 2
+    assert payload["graph"]["edge_count"] == 2
+    assert payload["sampling"]["pages_fetched"] == 2
+    assert payload["sampling"]["pages_skipped"] == 0
+    assert payload["sampling"]["truncated"] is False

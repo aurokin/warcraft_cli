@@ -17,3 +17,6 @@ tb
 # TypedDict keys: callers read them by subscript, which vulture cannot see.
 schema_version
 all_hits
+
+# Frozen pull-identity dataclass field participates in equality/hash, keeping keystone cohorts separate.
+keystone_level

@@ -1732,11 +1732,11 @@ def test_warcraft_guide_compare_query_can_include_simc_build_handoff(
     assert handoff["builds"][0]["simc"]["describe"]["payload"]["kind"] == "describe-build"
     assert invoke_calls[0] == {
         "provider": "method",
-        "args": ["guide-export", "mistweaver-monk", "--out", str(tmp_path / "orchestrated" / "method")],
+        "args": ["guide-export", "mistweaver-monk", "--out", payload["data"]["provider_results"][0]["bundle_path"]],
     }
     assert invoke_calls[1] == {
         "provider": "wowhead",
-        "args": ["guide-export", "mistweaver-monk", "--out", str(tmp_path / "orchestrated" / "wowhead")],
+        "args": ["guide-export", "mistweaver-monk", "--out", payload["data"]["provider_results"][1]["bundle_path"]],
     }
     assert invoke_calls[2]["provider"] == "simc"
     assert invoke_calls[2]["command"] == "identify-build"

@@ -15,7 +15,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
+from uuid import uuid4
 
 import typer
 from warcraft_content.article_bundle import ArticleBundleError, compare_article_bundles, load_article_bundle
@@ -32,7 +34,7 @@ from warcraft_cli.providers import (
     DescribeOptions,
     PacketInput,
     ProviderCalls,
-    ProviderInvoke,
+    ProviderGuideExport,
     SimcCall,
     failed_call,
     get_provider,
@@ -271,6 +273,7 @@ def _write_guide_compare_manifest(
                 "freshness": freshness,
                 # Saved so a later run that reuses this bundle still reports the redirect.
                 "redirect": row.get("redirect"),
+                "bundle_identity": row.get("bundle_identity"),
             }
         )
     payload = {
@@ -282,7 +285,15 @@ def _write_guide_compare_manifest(
         "providers": providers,
     }
     root.mkdir(parents=True, exist_ok=True)
-    _guide_compare_manifest_path(root).write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    # Publish the completed generation in one filesystem operation; existing readers retain valid bundles.
+    with NamedTemporaryFile(mode="w", encoding="utf-8", dir=root, delete=False) as staged:
+        staged_path = Path(staged.name)
+        try:
+            staged.write(json.dumps(payload, indent=2, sort_keys=True))
+            staged.close()
+            staged_path.replace(_guide_compare_manifest_path(root))
+        finally:
+            staged_path.unlink(missing_ok=True)
     return payload
 
 
@@ -889,7 +900,6 @@ def _guide_compare_reusable(
         return False
     same_candidate = (
         str(existing_row.get("candidate_ref") or "") == str(candidate["ref"])
-        and manifest_bundle_path(export_dir.parent, str(existing_row.get("bundle_path") or "")) == export_dir
     )
     return same_candidate and freshness.get("status") == "fresh" and export_dir.exists()
 
@@ -914,6 +924,27 @@ def _guide_compare_invalid_bundle_row(
     }
 
 
+def _guide_bundle_identity(bundle: dict[str, Any]) -> dict[str, Any]:
+    """The provider and source metadata of the bundle a completed comparison actually read."""
+    manifest = as_dict(bundle.get("manifest"))
+    return {key: manifest.get(key) for key in ("provider", "exported_at", "guide", "page", "redirect")}
+
+
+def _guide_bundle_matches_row(
+    bundle: dict[str, Any], provider_name: str, candidate: dict[str, Any], existing_row: dict[str, Any] | None,
+) -> bool:
+    identity = _guide_bundle_identity(bundle)
+    if existing_row is None or identity["provider"] != provider_name:
+        return False
+    saved_identity = existing_row.get("bundle_identity")
+    if isinstance(saved_identity, dict):
+        return identity == saved_identity
+    # Older manifests have no identity snapshot. Only reuse when their timestamp and source agree.
+    guide = as_dict(identity["guide"])
+    source_refs = {str(guide.get(key)) for key in ("input", "slug", "id") if guide.get(key) is not None}
+    return identity["exported_at"] == existing_row.get("exported_at") and str(candidate["ref"]) in source_refs
+
+
 def _guide_compare_reuse_row(
     provider_name: str,
     *,
@@ -925,6 +956,8 @@ def _guide_compare_reuse_row(
     """Load the already-exported bundle instead of re-exporting it."""
     try:
         bundle = load_article_bundle(export_dir)
+        if not _guide_bundle_matches_row(bundle, provider_name, candidate, existing_row):
+            raise ValueError("The exported bundle no longer matches the completed comparison manifest.")
     except (ValueError, OSError) as exc:
         return _guide_compare_invalid_bundle_row(
             provider_name,
@@ -936,6 +969,7 @@ def _guide_compare_reuse_row(
     return {
         "provider": provider_name,
         "status": "reused",
+        "bundle_identity": _guide_bundle_identity(bundle),
         "candidate": candidate,
         "bundle_path": str(export_dir),
         "freshness": freshness,
@@ -952,14 +986,10 @@ def _guide_compare_export_row(
     freshness: dict[str, Any],
     expansion: str | None,
     max_age_hours: int,
-    invoke: ProviderInvoke,
+    export: ProviderGuideExport,
 ) -> tuple[dict[str, Any], tuple[Path, dict[str, Any]] | None]:
     """Run the provider's guide-export into ``export_dir`` and load the bundle it wrote."""
-    export_result = invoke(
-        provider_name,
-        ["guide-export", candidate["ref"], "--out", str(export_dir)],
-        expansion=expansion,
-    )
+    export_result = export(provider_name, candidate["ref"], out=export_dir, expansion=expansion)
     failure = failed_call(export_result)
     if failure is not None:
         return {
@@ -1000,6 +1030,7 @@ def _guide_compare_export_row(
     return {
         "provider": provider_name,
         "status": "exported",
+        "bundle_identity": _guide_bundle_identity(bundle),
         "candidate": candidate,
         "bundle_path": str(export_dir),
         "freshness": _guide_compare_freshness(exported_at, max_age_hours=max_age_hours),
@@ -1025,8 +1056,8 @@ def _process_guide_compare_provider(
     if candidate is None:
         return decline, None
 
-    export_dir = orchestration_root / provider_name
     existing_row = manifest_by_provider.get(provider_name)
+    export_dir = manifest_bundle_path(orchestration_root, str((existing_row or {}).get("bundle_path") or provider_name))
     existing_freshness = _guide_compare_existing_freshness(existing_row, max_age_hours=max_age_hours)
     if _guide_compare_reusable(
         existing_row,
@@ -1035,13 +1066,17 @@ def _process_guide_compare_provider(
         freshness=existing_freshness,
         force_refresh=force_refresh,
     ):
-        return _guide_compare_reuse_row(
+        reused = _guide_compare_reuse_row(
             provider_name,
             candidate=candidate,
             export_dir=export_dir,
             existing_row=existing_row,
             freshness=existing_freshness,
         )
+        if reused[1] is not None:
+            return reused
+    # Never overwrite a bundle referenced by the previous completed manifest, even on force refresh.
+    export_dir = orchestration_root / "bundles" / uuid4().hex / provider_name
     return _guide_compare_export_row(
         provider_name,
         candidate=candidate,
@@ -1049,7 +1084,7 @@ def _process_guide_compare_provider(
         freshness=existing_freshness,
         expansion=requested_expansion,
         max_age_hours=max_age_hours,
-        invoke=calls.invoke,
+        export=calls.guide_export,
     )
 
 

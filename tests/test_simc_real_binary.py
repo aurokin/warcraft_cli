@@ -17,12 +17,14 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
 from simc_cli.build_input import BuildResolution, BuildSpec, SimcBuildError, decode_build, encode_build, tree_entries_string
 from simc_cli.main import app as simc_app
 from simc_cli.repo import RepoPaths, discover_repo
+from simc_cli.run import run_profile
 from simc_cli.trait_data import TraitTable, load_trait_table
 from typer.testing import CliRunner
 from warcraft_core.talent_transport import CLASS_ID_BY_ACTOR_CLASS, specialization_ids
@@ -83,6 +85,37 @@ def decoded_profiles(repo: RepoPaths) -> list[_Decoded]:
             resolution = None
         decoded.append(_Decoded(name=name, build_spec=build_spec, resolution=resolution))
     return decoded
+
+
+@pytest.mark.parametrize(
+    ("actions", "cast", "excluded"),
+    [
+        ("actions=frostbolt\nactions+=,if=0/ice_lance\n", "ice_lance", "frostbolt"),
+        ("actions=fireball\nactions=frostbolt/ice_lance,if=0\n", "frostbolt", "fireball"),
+        (
+            "actions=run_action_list,if=0,name=old/run_action_list,name=new\n"
+            "actions.old=fireball\nactions.new=frostbolt\n",
+            "frostbolt", "fireball",
+        ),
+        ("actions=frostbolt,if=0/\nactions+=ice_lance\n", "ice_lance", "frostbolt"),
+    ],
+)
+def test_real_apl_assignment_semantics(repo: RepoPaths, tmp_path: Path, actions: str, cast: str, excluded: str) -> None:
+    """Check the assignment/separator semantics static APL analysis relies on against SimC's casts."""
+    profile = tmp_path / "assignment.simc"
+    report = tmp_path / "assignment.json"
+    profile.write_text(
+        'mage="assignment_check"\nspec=frost\nlevel=90\nload_default_gear=1\nload_default_talents=1\n' + actions
+    )
+    result = run_profile(
+        repo, profile,
+        simc_args=["iterations=1", "threads=1", "target_error=0", "max_time=3", "fixed_time=1", f"json2={report}"],
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    stats = json.loads(report.read_text())["sim"]["players"][0]["stats"]
+    casts = {row["name"]: row["num_executes"]["mean"] for row in stats}
+    assert casts[cast] > 0
+    assert casts.get(excluded, 0) == 0
 
 
 def test_every_stock_profile_decodes_whole_or_fails_loudly(decoded_profiles: list[_Decoded]) -> None:

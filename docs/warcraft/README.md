@@ -209,7 +209,10 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   `<data root>/guide_compare/<query-slug>` (the `paths.data_root` that `warcraft doctor` reports: the
   checkout's `.warcraft/runtime/data` for a checkout install, `<XDG data dir>/warcraft` for a wheel),
   never into the current directory. `manifest.json` stores each `bundle_path` relative to the root, so
-  a copied or moved root reads its own bundles. Flags that
+  a copied or moved root reads its own bundles. New exports use `bundles/<generation>/<provider>`;
+  follow the manifest paths rather than assuming a fixed provider directory. A failed refresh leaves
+  the previous manifest and its bundles intact. Successful refreshes retain earlier raw exports,
+  and reuse verifies the saved bundle identity. Flags that
   leave fewer than two providers (a single `--provider`, or a non-retail `--expansion`, since method
   and icy-veins are retail-only) fail `invalid_argument` (exit 2) before any provider call, naming
   which of the two it was. Fewer than

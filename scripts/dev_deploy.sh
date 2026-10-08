@@ -49,7 +49,7 @@ if command -v uv >/dev/null 2>&1; then
   (cd "$ROOT_DIR" && uv sync --all-extras)
 else
   "$VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel >/dev/null
-  "$VENV_DIR/bin/pip" install -e '.[dev]'
+  (cd "$ROOT_DIR" && "$VENV_DIR/bin/pip" install -e '.[dev]')
 fi
 "$ROOT_DIR/scripts/setup_worktree_env.sh" >/dev/null
 

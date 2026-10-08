@@ -141,6 +141,9 @@ jobs:
       - name: Build wheel
         run: uv build --wheel
 
+      - name: Verify the installed release wheel outside the checkout
+        run: uv run --no-project --python 3.12 scripts/verify_wheel.py dist/*.whl
+
       - name: Upload wheel
         uses: actions/upload-artifact@v7
         with:

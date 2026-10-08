@@ -53,8 +53,10 @@ It does not:
 
 Composition is a legitimate wrapper responsibility; a second implementation of a provider is not.
 The wrapper reaches providers in-process through `warcraft_cli.providers`: `search`, `resolve` and
-`doctor` call the registered `PROVIDER` surfaces, the simc build steps call `simc_cli` functions, and
-the other composites run the provider's Typer app with its output captured and parsed. It never
+`doctor` call the registered `PROVIDER` surfaces, guide exports call typed provider services, and
+the simc build steps call `simc_cli` functions. Composites without a provider operation still run
+the provider's Typer app with its output captured and parsed. Warcraft Logs discovery/readiness
+and Wowhead guide retrieval/export live in service modules independent of CLI state. The wrapper never
 spawns a provider binary and never drives one through a Typer test runner.
 
 ### Backward Compatibility

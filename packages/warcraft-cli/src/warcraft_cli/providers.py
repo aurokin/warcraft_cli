@@ -1,7 +1,7 @@
 """The single place the wrapper imports provider packages.
 
 Every ``warcraft`` composite command reaches a provider through this registry: the pure
-``PROVIDER`` surfaces for search/resolve/doctor, and the provider Typer app for passthrough and
+``PROVIDER`` surfaces for search/resolve/doctor, typed guide exports, and the provider Typer app for passthrough and
 for the commands that have no surface method yet. No other ``warcraft_cli`` module imports a
 provider package.
 """
@@ -13,6 +13,7 @@ import json
 from collections.abc import Callable, Mapping
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 import typer
@@ -20,11 +21,13 @@ from blizzard_api_cli.main import app as blizzard_app
 from blizzard_api_cli.provider import PROVIDER as blizzard_provider
 from curseforge_cli.main import app as curseforge_app
 from curseforge_cli.provider import PROVIDER as curseforge_provider
+from icy_veins_cli import provider as icy_veins_operations
 from icy_veins_cli.main import app as icy_veins_app
 from icy_veins_cli.provider import PROVIDER as icy_veins_provider
 from lorrgs_cli.main import app as lorrgs_app
 from lorrgs_cli.provider import PROVIDER as lorrgs_provider
 from lorrgs_cli.search import parse_report_reference as parse_lorrgs_report_reference
+from method_cli import provider as method_operations
 from method_cli.main import app as method_app
 from method_cli.provider import PROVIDER as method_provider
 from raidbots_cli.main import app as raidbots_app
@@ -49,13 +52,14 @@ from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_USAGE, exi
 from warcraft_core.expansions import list_expansions, resolve_expansion, warcraftlogs_site_for_expansion
 from warcraft_core.output import to_json
 from warcraft_core.paths import cache_root, config_root, data_root, state_root, worktree_runtime_details
-from warcraft_core.provider import ProviderSurface
+from warcraft_core.provider import ProviderError, ProviderSurface
 from warcraft_core.shapes import as_dict
 from warcraft_wiki_cli.main import app as warcraft_wiki_app
 from warcraft_wiki_cli.provider import PROVIDER as warcraft_wiki_provider
 from warcraft_wiki_cli.search import QUERY_COVERAGE_REASONS as WIKI_QUERY_COVERAGE_REASONS
 from warcraftlogs_cli.main import app as warcraftlogs_app
 from warcraftlogs_cli.provider import PROVIDER as warcraftlogs_provider
+from wowhead_cli import provider as wowhead_operations
 from wowhead_cli.main import app as wowhead_app
 from wowhead_cli.provider import PROVIDER as wowhead_provider
 from wowhead_cli.ranking import STALE_GUIDE_REASON
@@ -69,6 +73,7 @@ __all__ = [
     "PacketInput",
     "ProviderCalls",
     "ProviderFetch",
+    "ProviderGuideExport",
     "ProviderRegistration",
     "expansion_filtered_providers",
     "expansion_support_snapshot",
@@ -84,6 +89,7 @@ __all__ = [
     "provider_expansion_options",
     "provider_expansion_support",
     "provider_invoke",
+    "provider_guide_export",
     "provider_payload_data",
     "provider_resolve",
     "provider_search",
@@ -735,7 +741,29 @@ def invoke_provider_command(app: typer.Typer, *, args: list[str], prog_name: str
         raise typer.Exit(exit_code)
 
 
+def provider_guide_export(provider: str, guide_ref: str, *, out: Path, expansion: str | None = None) -> dict[str, Any]:
+    """Export one provider guide in-process through a typed, output-free operation."""
+    registration = get_provider(provider)
+    unsupported = _unsupported_expansion_result(registration, expansion, command="guide-export", query=guide_ref)
+    if unsupported is not None:
+        return unsupported
+
+    def export() -> Envelope:
+        if provider == "method":
+            return method_operations.guide_export(guide_ref, out=out)
+        if provider == "icy-veins":
+            return icy_veins_operations.guide_export(guide_ref, out=out)
+        if provider == "wowhead":
+            return wowhead_operations.guide_export(guide_ref, out=out, expansion=expansion)
+        raise ProviderError("invalid_argument", f"{provider} does not export guide bundles.")
+
+    code, payload = _call_surface(provider, "guide-export", export, query={"guide_ref": guide_ref, "out": str(out)})
+    return {"provider": provider, "exit_code": code, "payload": payload}
+
+
 def provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+    if len(args) == 4 and args[0] == "guide-export" and args[2] == "--out":
+        return provider_guide_export(provider, args[1], out=Path(args[3]), expansion=expansion)
     registration = get_provider(provider)
     unsupported = _unsupported_expansion_result(registration, expansion, command=" ".join(args[:1]))
     if unsupported is not None:
@@ -790,6 +818,12 @@ class ProviderInvoke(Protocol):
     def __call__(self, provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]: ...
 
 
+class ProviderGuideExport(Protocol):
+    """One provider's complete guide bundle written to an explicit directory."""
+
+    def __call__(self, provider: str, guide_ref: str, *, out: Path, expansion: str | None = None) -> dict[str, Any]: ...
+
+
 class ProviderLookup(Protocol):
     """``provider_search`` / ``provider_resolve``: one free-text lookup, as ``{provider, exit_code, payload}``."""
 
@@ -818,6 +852,10 @@ class ProviderCalls:
     resolve: ProviderLookup
     search: ProviderLookup
     simc: SimcCall
+
+    def guide_export(self, provider: str, guide_ref: str, *, out: Path, expansion: str | None = None) -> dict[str, Any]:
+        """Typed guide operation; the invoke adapter preserves call-time injection for composite tests."""
+        return self.invoke(provider, ["guide-export", guide_ref, "--out", str(out)], expansion=expansion)
 
 
 def failed_call(result: Mapping[str, Any]) -> tuple[dict[str, Any], int] | None:

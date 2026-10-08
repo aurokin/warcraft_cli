@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,10 @@ DEFAULT_TALENTS_DISCLOSURE = (
     "The profile sets load_default_talents=1, so SimC sims the spec's default talents and ignores any talents= line. "
     "To sim a build, pass its talents to build-harness, which writes a harness without load_default_talents=1."
 )
+
+
+class OutputPathConflict(ValueError):
+    """A requested artifact aliases an input or a different artifact."""
 
 
 def profile_disclosures(profile_text: str) -> list[str]:
@@ -109,14 +114,31 @@ def build_variant_profile(harness_path: str | Path, apl_path: str | Path, *, lab
         raise FileNotFoundError(f"Harness profile not found: {harness}")
     if not apl.exists():
         raise FileNotFoundError(f"APL file not found: {apl}")
-    if out_dir is None:
-        target_dir = Path(tempfile.mkdtemp(prefix="simc-cli-variant-"))
-    else:
-        target_dir = Path(out_dir).expanduser().resolve()
-        target_dir.mkdir(parents=True, exist_ok=True)
+    target_dir = (
+        Path(tempfile.gettempdir()) / f"simc-cli-variant-{uuid.uuid4().hex}"
+        if out_dir is None else Path(out_dir).expanduser().resolve()
+    )
     target = target_dir / f"{label}.simc"
+    preflight_output_paths([harness, apl], [target])
+    target_dir.mkdir(parents=True, exist_ok=True)
     target.write_text(_merge_harness_and_apl(harness.read_text(), apl.read_text()))
     return target
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    # Conservatively reject case-only collisions even on case-sensitive hosts so
+    # a safe comparison does not become destructive when moved to macOS/Windows.
+    if str(left.resolve()).casefold() == str(right.resolve()).casefold():
+        return True
+    return left.exists() and right.exists() and left.samefile(right)
+
+
+def preflight_output_paths(inputs: list[Path], outputs: list[Path]) -> None:
+    """Reject input/output aliases and output collisions before writing any artifact."""
+    for index, output in enumerate(outputs):
+        for other in [*inputs, *outputs[:index]]:
+            if _paths_overlap(output, other):
+                raise OutputPathConflict(f"Output path would overwrite an input or another output: {output} (conflicts with {other})")
 
 
 def compare_apl_variants(
@@ -130,8 +152,18 @@ def compare_apl_variants(
     threads: int,
     out_dir: str | Path | None = None,
     validate_first: bool = True,
+    report_out: str | Path | None = None,
 ) -> dict[str, Any]:
     compare_dir = _resolve_compare_dir(out_dir)
+    labelled_inputs = [(base_label, base_apl_path), *variant_specs]
+    inputs = [Path(value).expanduser().resolve() for value in [harness_path, *(value for _, value in labelled_inputs)]]
+    for source in inputs:
+        if not source.is_file():
+            raise FileNotFoundError(f"Input file not found: {source}")
+    outputs = [compare_dir / f"{label}.{suffix}" for label, _ in labelled_inputs for suffix in ("simc", "json")]
+    if report_out is not None:
+        outputs.append(Path(report_out).expanduser().resolve())
+    preflight_output_paths(inputs, outputs)
     base_profile = build_variant_profile(harness_path, base_apl_path, label=base_label, out_dir=compare_dir)
     profiles: list[tuple[str, Path, Path]] = [(base_label, Path(base_apl_path).expanduser().resolve(), base_profile)]
     for label, apl_path in variant_specs:
@@ -283,14 +315,10 @@ def _merge_harness_and_apl(harness_text: str, apl_text: str) -> str:
 
 
 def _resolve_compare_dir(out_dir: str | Path | None) -> Path:
-    if out_dir is None:
-        base_dir = default_compare_dir()
-        base_dir.mkdir(parents=True, exist_ok=True)
-        target = Path(tempfile.mkdtemp(prefix="simc-cli-compare-", dir=str(base_dir)))
-    else:
-        target = Path(out_dir).expanduser().resolve()
-    target.mkdir(parents=True, exist_ok=True)
-    return target
+    return (
+        default_compare_dir() / f"simc-cli-compare-{uuid.uuid4().hex}"
+        if out_dir is None else Path(out_dir).expanduser().resolve()
+    )
 
 
 def _simulate_variant(

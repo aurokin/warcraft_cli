@@ -227,6 +227,8 @@ raiderio cutoffs --region us
   every recent run Raider.IO returns (up to 10) in `recent_runs`, so `recent_run_count` is the
   length of that list. Both use the run row shape below.
 - Every Mythic+ payload echoes `resolved_season`, so the season a sample actually used is explicit.
+  Multi-page samples pin that season after the first page and reject later pages naming another
+  season, including a rollover while the default current season is being sampled.
 - Leaderboard and sampled run rows carry `clear_time_ms`, `keystone_time_ms` (the dungeon timer) and
   `num_chests` (0 means not timed), plus `run_id` and `logged_run_id`, Raider.IO's own integer id
   for a logged run (`null` when there is none; it is not a Warcraft Logs report code). `character` best and recent runs use the same names: `dungeon` (name),
