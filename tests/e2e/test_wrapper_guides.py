@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -340,10 +341,16 @@ def test_guide_compare_query_exports_bundles_and_compares_them(require, orchestr
     assert payload["simc_build_handoff"] is None
 
 
-def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(require, orchestration: Orchestration) -> None:
-    """A second run reuses fresh bundles; ``--force-refresh`` re-exports the same paths anyway."""
+def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(
+    require, orchestration: Orchestration, out_dir: Path,
+) -> None:
+    """Copied comparisons reuse fresh bundles, then publish new paths without changing old exports."""
     require("wowhead", "method", "icy-veins")
-    result = run("warcraft", "guide-compare-query", GUIDE_QUERY, "--out-root", str(orchestration.out_root), timeout=300)
+    # Keep the module fixture immutable for later journeys that read its original manifest.
+    refresh_root = out_dir / "comparison-copy"
+    shutil.copytree(orchestration.out_root, refresh_root)
+    previous_paths = tuple(refresh_root / row["bundle_path"] for row in orchestration.payload["manifest"]["providers"])
+    result = run("warcraft", "guide-compare-query", GUIDE_QUERY, "--out-root", str(refresh_root), timeout=300)
     reused = [row for row in result.data["provider_results"] if row["status"] == "reused"]
     previous = {row["provider"]: row["exported_at"] for row in orchestration.payload["provider_results"] if row["status"] == "exported"}
     assert {row["provider"] for row in reused} == set(previous), result.describe()
@@ -356,17 +363,17 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(require, o
 
     refreshed = run(
         "warcraft", "guide-compare-query", GUIDE_QUERY,
-        "--out-root", str(orchestration.out_root), "--force-refresh", timeout=300,
+        "--out-root", str(refresh_root), "--force-refresh", timeout=300,
     )
     assert refreshed.data["force_refresh"] is True
     rows = {row["provider"]: row for row in refreshed.data["provider_results"] if row["status"] == "exported"}
     assert set(rows) == set(previous), refreshed.describe()
     for provider, row in rows.items():
         assert row["exported_at"] > previous[provider], f"{provider} was not re-exported"
-    refreshed_paths = [orchestration.out_root / row["bundle_path"] for row in refreshed.data["manifest"]["providers"]]
-    assert set(refreshed_paths).isdisjoint(orchestration.bundle_paths)
+    refreshed_paths = [refresh_root / row["bundle_path"] for row in refreshed.data["manifest"]["providers"]]
+    assert set(refreshed_paths).isdisjoint(previous_paths)
     assert all(path.is_dir() for path in refreshed_paths)
-    assert all(path.is_dir() for path in orchestration.bundle_paths)
+    assert all(path.is_dir() for path in previous_paths)
 
 
 def test_a_reused_bundle_reports_the_redirect_its_export_saw(require, out_dir: Path) -> None:
