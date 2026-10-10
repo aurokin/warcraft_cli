@@ -41,7 +41,7 @@ A `--fight-id`, `--encounter-id`, or `--difficulty` that matches no fight in the
 Use identity flags when the question is about one actor, target, ability, event family, or table grouping:
 
 - `--source-id`: source actor id; on Buffs tables it pins the grouping actor (the aura holder under `--view-by source`, the caster under `--view-by target`) and the rows then name the other one
-- `--target-id`: target actor id; on Buffs tables it filters the actor the rows do not group by
+- `--target-id`: target actor id; on Buffs tables it filters the actor the rows do not group by. Buffs event reads use it to select the aura caster, identified by `sourceID` in the raw events
 - `--ability-id`: ability game id
 - `--hostility-type`: `Friendlies` or `Enemies`
 - `--kill-type`: `All`, `Encounters`, `Kills`, `Trash` or `Wipes`

@@ -1358,16 +1358,17 @@ def _complete_event_rows(*scope: str) -> list[dict[str, Any]]:
     raise JourneyFailure("Event discovery exceeded 20 pages; no complete baseline is available for the filter check")
 
 
-def test_event_target_filter_keeps_exactly_the_selected_targets(require):
+def test_buff_event_target_filter_keeps_exactly_the_selected_caster(require):
     require("warcraftlogs")
     found = anchor()
+    # Buffs views scope target-id to the caster, which raw events identify with sourceID.
     scope = ("report-events", found.code, "--fight-id", str(found.fight_id), "--data-type", "buffs", "--limit", "10000")
     events = _complete_event_rows(*scope)
-    counts = Counter(event.get("targetID") for event in events)
-    target_id = next((actor for actor, count in counts.most_common() if isinstance(actor, int) and 0 < count < len(events)), None)
-    assert target_id is not None, "the baseline needs events for more than one target to prove filtering"
-    expected = [event for event in events if event.get("targetID") == target_id]
-    filtered = _complete_event_rows(*scope, "--target-id", str(target_id))
+    counts = Counter(event.get("sourceID") for event in events)
+    caster_id = next((actor for actor, count in counts.most_common() if isinstance(actor, int) and 0 < count < len(events)), None)
+    assert caster_id is not None, "the baseline needs events for more than one caster to prove filtering"
+    expected = [event for event in events if event.get("sourceID") == caster_id]
+    filtered = _complete_event_rows(*scope, "--target-id", str(caster_id))
     assert filtered == expected
     assert 0 < len(expected) < len(events)
 
