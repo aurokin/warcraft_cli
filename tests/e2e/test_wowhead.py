@@ -355,6 +355,8 @@ def test_a_spec_shorthand_guide_query_resolves_to_the_guide(require) -> None:
     assert match["entity_type"] == "guide" and "Restoration Druid" in match["name"], resolved.describe()
     assert resolved.data["confidence"] == "high", resolved.describe()
     assert resolved.data["next_command"] == f"{BINARY} guide {match['id']}", resolved.describe()
+    guide = run_follow_up(resolved.data["next_command"])
+    assert guide.data["guide"]["id"] == match["id"], guide.describe()
 
 
 def test_a_class_guide_query_lists_current_guides_before_retired_ones(require) -> None:
@@ -666,6 +668,15 @@ def test_comment_filters_keep_exactly_the_rows_that_pass_them(require) -> None:
     assert [row["id"] for row in replied.data["comments"]] == expected_replied
     assert len(expected_replied) < len(rows), "--min-replies 1 kept every comment, so it filtered nothing"
 
+    words = sorted(set(re.findall(r"[a-z]{5,}", " ".join(row["body"].lower() for row in rows))))
+    keyword = next(word for word in words if 0 < sum(word in row["body"].lower() for row in rows) < len(rows))
+    matching = run(
+        BINARY, "comments", "item", str(pins.ITEM_ID), "--limit", "500", "--sort", "rating",
+        "--keyword", keyword.upper(),
+    )
+    assert [row["id"] for row in matching.data["comments"]] == [row["id"] for row in rows if keyword in row["body"].lower()]
+    assert 0 < len(matching.data["comments"]) < len(rows), matching.describe()
+
     # A malformed date window is a usage error raised before the page fetch (behind a dead proxy),
     # not an internal error after it.
     run(
@@ -777,6 +788,21 @@ def test_linked_graph_follows_a_zones_relation_tabs(require) -> None:
     )
 
 
+def test_linked_graph_relation_keeps_exactly_the_matching_root_edges(require) -> None:
+    require("wowhead")
+    args = ("linked-graph", "item", str(pins.ITEM_ID), "--depth", "1", "--limit", "500", "--max-fetches", "1")
+    baseline = run(BINARY, *args)
+    assert baseline.data["sampling"]["truncated"] is False, baseline.describe()
+    edges = baseline.data["graph"]["edges"]
+    expected = [edge for edge in edges if edge["relation"] == "npc"]
+    assert 0 < len(expected) < len(edges), baseline.describe()
+    filtered = run(BINARY, *args, "--relation", "npc")
+    assert filtered.data["graph"]["edges"] == expected, filtered.describe()
+    assert {node["key"] for node in filtered.data["graph"]["nodes"]} == {
+        baseline.data["root"]["key"], *(edge["to"] for edge in expected),
+    }
+
+
 def test_linked_graph_reports_the_pages_a_fetch_cap_left_unread(require) -> None:
     """``--depth 2`` has to read every child page the root links, so a ``--max-fetches`` that stops
     short is a sample and must say so; it once reported ``truncated: false`` after reading one child.
@@ -863,6 +889,26 @@ def test_guide_patch_filters_cut_the_listing_down_to_their_patch_window(require,
     assert 0 < older.data["total_matches"] < total, "--patch-max kept every guide"
     # The two windows overlap on nothing and together cover every guide that carries a patch build.
     assert newer.data["total_matches"] + older.data["total_matches"] <= total, "the windows double-counted guides"
+
+
+def test_guide_update_bounds_remove_guides_on_both_sides_of_a_discovered_date(require, class_guide_baseline: Result) -> None:
+    require("wowhead")
+    baseline = class_guide_baseline
+    dates = sorted({row["last_updated"] for row in baseline.data["results"] if row.get("last_updated")})
+    assert len(dates) > 2, baseline.describe()
+    bound = dates[len(dates) // 2]
+    timestamp = datetime.fromisoformat(bound)
+    for flag, newer in (("--updated-after", True), ("--updated-before", False)):
+        filtered = run(BINARY, "guides", "classes", "--limit", "200", flag, bound)
+        assert 0 < filtered.data["total_matches"] < baseline.data["total_matches"], filtered.describe()
+        assert filtered.data["results"], filtered.describe()
+        assert all(
+            row.get("last_updated") and (
+                datetime.fromisoformat(row["last_updated"]) >= timestamp if newer
+                else datetime.fromisoformat(row["last_updated"]) <= timestamp
+            )
+            for row in filtered.data["results"]
+        ), filtered.describe()
 
 
 def test_guide_export_writes_a_bundle_the_bundle_commands_can_query(
@@ -1163,6 +1209,14 @@ def test_listing_field_filters_keep_exactly_the_rows_that_carry_that_value(
         row["id"] for row in blue_rows if row["author"] == blue_authors[0]
     }
     assert 0 < blue_filtered.data["count"] < len(blue_rows), "--author returned the whole listing"
+
+    forums = blue_listing.data["facets"]["forums"]
+    assert forums, blue_listing.describe()
+    forum = next(value for value in forums if 0 < sum(str(row.get("forum") or row.get("forum_area") or "").lower() == value.lower() for row in blue_rows) < len(blue_rows))
+    by_forum = run(BINARY, "blue-tracker", "--limit", "200", "--forum", forum)
+    assert {row["id"] for row in by_forum.data["results"]} == {
+        row["id"] for row in blue_rows if str(row.get("forum") or row.get("forum_area") or "").lower() == forum.lower()
+    }, by_forum.describe()
 
 
 def test_blue_tracker_listing_leads_to_one_blue_topic(require, blue_listing: Result) -> None:

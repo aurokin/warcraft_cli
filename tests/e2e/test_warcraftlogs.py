@@ -1341,6 +1341,66 @@ def test_raw_report_surfaces_return_scoped_slices(require):
     assert ranked_names <= roster, rankings.describe()
 
 
+def _complete_event_rows(*scope: str) -> list[dict[str, Any]]:
+    """Read complete event streams before comparing filters, rejecting stalled pagination."""
+    events: list[dict[str, Any]] = []
+    start: int | None = None
+    for _ in range(20):
+        continuation = ("--start-time", str(start)) if start is not None else ()
+        page = run("warcraftlogs", *scope, *continuation)
+        events.extend(page.data["events"])
+        following = page.data["next_page_timestamp"]
+        if following is None:
+            return events
+        assert isinstance(following, (int, float)), page.describe()
+        assert start is None or following > start, f"event pagination stalled: {page.describe()}"
+        start = int(following)
+    raise JourneyFailure("Event discovery exceeded 20 pages; no complete baseline is available for the filter check")
+
+
+def test_event_target_filter_keeps_exactly_the_selected_targets(require):
+    require("warcraftlogs")
+    found = anchor()
+    scope = ("report-events", found.code, "--fight-id", str(found.fight_id), "--data-type", "buffs", "--limit", "10000")
+    events = _complete_event_rows(*scope)
+    counts = Counter(event.get("targetID") for event in events)
+    target_id = next((actor for actor, count in counts.most_common() if isinstance(actor, int) and 0 < count < len(events)), None)
+    assert target_id is not None, "the baseline needs events for more than one target to prove filtering"
+    expected = [event for event in events if event.get("targetID") == target_id]
+    filtered = _complete_event_rows(*scope, "--target-id", str(target_id))
+    assert filtered == expected
+    assert 0 < len(expected) < len(events)
+
+
+def test_event_kill_type_excludes_a_kill_from_wipe_only_reads(require):
+    require("warcraftlogs")
+    found = anchor()
+    scope = ("report-events", found.code, "--fight-id", str(found.fight_id), "--data-type", "casts", "--limit", "10000")
+    baseline = _complete_event_rows(*scope)
+    assert baseline
+    kills = _complete_event_rows(*scope, "--kill-type", "Kills")
+    wipes = _complete_event_rows(*scope, "--kill-type", "Wipes")
+    assert kills == baseline
+    assert wipes == []
+
+
+def test_event_hostility_filter_separates_enemy_and_friendly_cast_sources(require):
+    require("warcraftlogs")
+    found = anchor()
+    scope = ("report-events", found.code, "--fight-id", str(found.fight_id), "--data-type", "casts", "--limit", "10000")
+    friendly = _complete_event_rows(*scope, "--hostility-type", "Friendlies")
+    enemy = _complete_event_rows(*scope, "--hostility-type", "Enemies")
+    for result in (friendly, enemy):
+        assert result
+    friendly_sources = {event["sourceID"] for event in friendly if isinstance(event.get("sourceID"), int)}
+    enemy_sources = {event["sourceID"] for event in enemy if isinstance(event.get("sourceID"), int)}
+    assert friendly_sources and enemy_sources
+    assert friendly_sources.isdisjoint(enemy_sources)
+    roster = {player["id"] for player in found.players}
+    assert friendly_sources & roster
+    assert not enemy_sources & roster
+
+
 def test_healers_are_ranked_on_healing_unless_a_metric_is_named(require):
     """In a raid Warcraft Logs ranks every role on dps when no metric is sent, so a healer's default parse was a damage parse."""
     require("warcraftlogs")

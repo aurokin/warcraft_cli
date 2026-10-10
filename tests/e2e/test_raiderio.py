@@ -117,6 +117,32 @@ def player_sample() -> Result:
     return run("raiderio", "sample", "mythic-plus-players", *SCOPE, "--player-limit", "25")
 
 
+def test_current_and_concrete_season_samples_each_preserve_multipage_scope() -> None:
+    """Each live snapshot keeps one season and distinct runs across both pages.
+
+    Current and explicit-season requests use different cache keys, so legitimate leaderboard
+    changes can give them different run IDs. Check each snapshot's own scope and accounting.
+    """
+    scope = ("--region", "us", "--pages", "2", "--limit", "40")
+    current = run_retrying("raiderio", "sample", "mythic-plus-runs", "--season", "current", *scope)
+    season = current.payload["query"]["resolved_season"]
+    assert isinstance(season, str) and season, current.describe()
+    concrete = run_retrying("raiderio", "sample", "mythic-plus-runs", "--season", season, *scope)
+    for result in (current, concrete):
+        sample = result.data["sample"]
+        assert sample["season"] == result.payload["query"]["resolved_season"] == season, result.describe()
+        assert sample["pages_requested"] == sample["pages_fetched"] == 2, result.describe()
+        runs = result.data["runs"]
+        run_ids = [row["run_id"] for row in runs]
+        assert all(run_id is not None for run_id in run_ids), result.describe()
+        assert len(run_ids) == len(set(run_ids)) == sample["run_count"], result.describe()
+        assert len(runs) > RANKING_PAGE_SIZE, result.describe()
+        assert len(runs) + sample["duplicates_removed"] == 2 * RANKING_PAGE_SIZE, result.describe()
+        assert {row["season"] for row in runs} == {season}, result.describe()
+        assert all(season in url for url in result.data["citations"]["leaderboard_urls"]), result.describe()
+        _assert_sampled_provenance(result)
+
+
 # Spec slugs more than one class uses; a class-qualified spec filter has to tell them apart.
 SHARED_SPEC_CLASSES: dict[str, tuple[str, ...]] = {
     "frost": ("death-knight", "mage"),

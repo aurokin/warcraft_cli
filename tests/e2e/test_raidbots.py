@@ -11,6 +11,7 @@ docs/architecture/E2E_TESTING.md.
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 from tests.e2e.harness import EXIT_NOT_FOUND, EXIT_USAGE, run
@@ -114,8 +115,8 @@ def test_a_missing_report_is_not_found_on_both_report_surfaces(require) -> None:
     assert "<html" not in simc_input.stderr.lower()
 
 
-def test_a_live_report_round_trips_through_inspect_and_input(require, optional) -> None:
-    require("raidbots")
+def test_a_live_report_round_trips_through_inspect_and_input(require, optional, out_dir: Path) -> None:
+    require("raidbots", "simc")
     reference = optional("raidbots-report", "WARCRAFT_E2E_RAIDBOTS_REPORT")
 
     report = run("raidbots", "inspect-report", reference)
@@ -148,3 +149,29 @@ def test_a_live_report_round_trips_through_inspect_and_input(require, optional) 
     # The SimC input is what gets pasted or piped into `simc sim -`, so --compact keeps it whole.
     compacted = run("raidbots", "--compact", "input", reference)
     assert compacted.data["input"] == text, compacted.describe()
+
+    doctor = run("simc", "doctor")
+    assert doctor.data["repo"]["build_ready"] is True, doctor.describe()
+    assert doctor.data["repo"]["binary"]["matches_checkout"] is True, doctor.describe()
+    commands = simc_input.data["handoff"]["suggested_simc_commands"]
+    assert any(shlex.split(row["command"])[1] == "sim" for row in commands)
+    for row in commands:
+        argv = shlex.split(row["command"])
+        assert argv[0] == "simc", row
+        if argv[1] == "sim":
+            local = run(
+                "simc", *argv[1:], "--iterations", "2", "--threads", "1", "--max-time", "3",
+                "--json-out", str(out_dir / "raidbots-local.json"), stdin=text, timeout=300,
+            )
+            actors = [local.data["player"], *(actor["player"] for actor in local.data["other_actors"])]
+            assert {(actor["name"], actor["spec"]) for actor in actors} == {
+                (actor["name"], actor["specialization"]) for actor in raw["sim"]["players"]
+            }, local.describe()
+            if parsed["kind"] == "multi_profile":
+                assert {variant["name"] for variant in local.data["profilesets"]["results"]} == {
+                    variant["name"] for variant in parsed["profilesets"]["results"]
+                }, local.describe()
+        else:
+            local = run("simc", *argv[1:], timeout=300)
+            build = local.data["build"] if argv[1] == "describe-build" else local.data["decoded"]
+            assert build["enabled_talents"], local.describe()

@@ -11,6 +11,9 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 ### Added
 
 - CI and release checks install the root wheel outside the checkout and verify all console scripts, schema output, package origins, and bundled Icy Veins discovery data.
+- Installed-wheel checks exercise offline doctor, usage errors, strict field selection, missing authentication, and provider passthrough under a subprocess network guard. CI verifies Python 3.12–3.14 and independently installed provider and modular wrapper wheels.
+- Real Redis verification covers expiry, namespace isolation, cached provider replay, outage handling, and reconnection by a fresh invocation.
+- Live verification checks meaningful guide/comment/forum/composition filters, unchanged guide evidence across refreshes and failed refresh recovery, multi-page season consistency, and generated Raidbots-to-SimC handoffs.
 
 ### Changed
 

@@ -99,6 +99,8 @@ jobs:
             cli: blizzard
           - package: curseforge-cli
             cli: curseforge
+          - package: warcraft-cli
+            cli: warcraft
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -109,25 +111,17 @@ jobs:
           enable-cache: true
           python-version: "3.12"
 
-      # Proves a single provider package still installs without the umbrella
-      # wheel: a missing runtime dependency in its pyproject fails here.
-      - name: Install provider into a clean environment
-        run: |
-          uv venv /tmp/iso --python 3.12
-          uv pip install --python /tmp/iso \
-            packages/warcraft-core \
-            packages/warcraft-api \
-            packages/warcraft-content \
-            packages/${{ matrix.package }}
-
-      - name: Smoke test the console script
-        run: |
-          /tmp/iso/bin/${{ matrix.cli }} --help
-          /tmp/iso/bin/${{ matrix.cli }} doctor --help
+      - name: Verify provider wheel and declared dependencies outside the checkout
+        run: uv run --no-project --python 3.12 scripts/verify_provider_wheels.py --package ${{ matrix.package }}
 
   wheel:
+    name: Installed wheel (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -136,20 +130,65 @@ jobs:
         uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Build wheel
         run: uv build --wheel
 
       - name: Verify the installed release wheel outside the checkout
-        run: uv run --no-project --python 3.12 scripts/verify_wheel.py dist/*.whl
+        run: uv run --no-project --python ${{ matrix.python-version }} scripts/verify_wheel.py dist/*.whl
 
       - name: Upload wheel
         uses: actions/upload-artifact@v7
         with:
-          name: warcraft-wheel
+          name: warcraft-wheel-${{ matrix.python-version }}
           path: dist/*.whl
           if-no-files-found: error
+
+  redis-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra dev --extra redis
+
+      - name: Verify real Redis with guarded synthetic provider HTTP
+        env:
+          VERIFY_REDIS_URL: redis://127.0.0.1:6379/0
+          VERIFY_REDIS_OUTAGE_URL: redis://127.0.0.1:6380/0
+          VERIFY_REDIS_OUTAGE_CONTAINER: warcraft-verify-outage-ci
+        run: |
+          docker run --rm -d --name "$VERIFY_REDIS_OUTAGE_CONTAINER" \
+            --publish 127.0.0.1:6380:6379 redis:7-alpine \
+            redis-server --save '' --appendonly no
+          trap 'docker rm -f "$VERIFY_REDIS_OUTAGE_CONTAINER" >/dev/null' EXIT
+          for ((attempt = 0; attempt < 30; attempt++)); do
+            if docker exec "$VERIFY_REDIS_OUTAGE_CONTAINER" redis-cli ping >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          docker exec "$VERIFY_REDIS_OUTAGE_CONTAINER" redis-cli ping
+          uv run pytest -q tests/test_redis_integration.py
 
   gitleaks:
     runs-on: ubuntu-latest

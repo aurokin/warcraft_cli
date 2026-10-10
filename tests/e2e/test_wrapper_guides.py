@@ -62,11 +62,9 @@ DPS_SPEC = "fury"
 HEALER_LEGS = {"identify": True, "decode": True, "describe": False}
 # Every monk hero tree, so a label naming a tree none of the codes decode to is still caught.
 MONK_HERO_TREES = ("Master of Harmony", "Conduit of the Celestials", "Shado-Pan")
-# Retired 2026-09-29: Icy Veins serves the Mistweaver healing guide at this slug, and the query
-# below resolves to it there (test_icy_veins.py pins the same page), while Wowhead still serves its
-# own Legion Remix mistweaver guide for the query.
+# Retired 2026-09-29: Icy Veins serves its current Mistweaver healing guide at this slug.
+# Export it directly: a retired URL need not stay in the provider's discovery index.
 RETIRED_ICY_VEINS_GUIDE = "mistweaver-monk-legion-remix-guide"
-RETIRED_GUIDE_QUERY = "mistweaver monk legion remix guide"
 
 
 @dataclass(frozen=True)
@@ -130,6 +128,10 @@ def _bundle_rows(bundle_path: Path, name: str) -> list[dict[str, Any]]:
 def _manifest(bundle_path: Path) -> dict[str, Any]:
     manifest: dict[str, Any] = json.loads((bundle_path / "manifest.json").read_text())
     return manifest
+
+
+def _bundle_bytes(paths: tuple[Path, ...]) -> dict[Path, bytes]:
+    return {file: file.read_bytes() for path in paths for file in path.rglob("*") if file.is_file()}
 
 
 def _assert_bundle_on_disk(bundle_path: Path) -> None:
@@ -350,6 +352,7 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(
     refresh_root = out_dir / "comparison-copy"
     shutil.copytree(orchestration.out_root, refresh_root)
     previous_paths = tuple(refresh_root / row["bundle_path"] for row in orchestration.payload["manifest"]["providers"])
+    previous_bytes = _bundle_bytes(previous_paths)
     result = run("warcraft", "guide-compare-query", GUIDE_QUERY, "--out-root", str(refresh_root), timeout=300)
     reused = [row for row in result.data["provider_results"] if row["status"] == "reused"]
     previous = {row["provider"]: row["exported_at"] for row in orchestration.payload["provider_results"] if row["status"] == "exported"}
@@ -374,29 +377,72 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(
     assert set(refreshed_paths).isdisjoint(previous_paths)
     assert all(path.is_dir() for path in refreshed_paths)
     assert all(path.is_dir() for path in previous_paths)
+    assert _bundle_bytes(previous_paths) == previous_bytes
+    original = run("warcraft", "guide-compare", *(str(path) for path in previous_paths), env=dead_proxy_env())
+    assert original.data["compared_bundle_count"] == len(previous_paths), original.describe()
 
 
-def test_a_reused_bundle_reports_the_redirect_its_export_saw(require, out_dir: Path) -> None:
+def test_failed_refresh_preserves_a_completed_comparison(
+    require, orchestration: Orchestration, out_dir: Path,
+) -> None:
+    require("wowhead", "method", "icy-veins")
+    root = out_dir / "completed-comparison"
+    shutil.copytree(orchestration.out_root, root)
+    manifest_path = root / "manifest.json"
+    manifest_bytes = manifest_path.read_bytes()
+    paths = tuple(root / row["bundle_path"] for row in orchestration.payload["manifest"]["providers"])
+    bundle_bytes = _bundle_bytes(paths)
+    failed = run(
+        "warcraft", "guide-compare-query", GUIDE_QUERY, "--out-root", str(root), "--force-refresh",
+        env={**dead_proxy_env(), **no_cache_env()}, expect=EXIT_NETWORK, error_code="network_error",
+    )
+    assert all(row["status"] == "error" for row in failed.payload["error"]["details"]["provider_results"])
+    assert manifest_path.read_bytes() == manifest_bytes
+    assert _bundle_bytes(paths) == bundle_bytes
+    comparison = run("warcraft", "guide-compare", *(str(path) for path in paths), env=dead_proxy_env())
+    assert comparison.data["compared_bundle_count"] == len(paths), comparison.describe()
+
+
+def test_a_reused_bundle_reports_the_redirect_its_export_saw(
+    require, orchestration: Orchestration, out_dir: Path,
+) -> None:
     """Reuse once dropped the redirect, so a retired guide read as the one asked for.
 
-    The query lands Icy Veins on its retired remix guide, which it serves as another guide, and
-    Wowhead on its own remix guide, which it serves as itself: both a set and an empty redirect have
-    to survive reuse.
+    Export the retired URL directly: it need not remain discoverable after retirement. Its served
+    guide matches the current query's candidate, so adopt that real export into a completed scratch
+    comparison and verify reuse preserves both its redirect and Wowhead's empty redirect.
     """
     require("wowhead", "icy-veins")
-    argv = (
-        "guide-compare-query", RETIRED_GUIDE_QUERY, "--provider", "wowhead", "--provider", "icy-veins",
-        "--out-root", str(out_dir),
+    root = out_dir / "redirect-comparison"
+    shutil.copytree(orchestration.out_root, root)
+    retired_path = root / "bundles" / "direct-retired-export" / "icy-veins"
+    direct = run("icy-veins", "guide-export", RETIRED_ICY_VEINS_GUIDE, "--out", str(retired_path), timeout=300)
+    redirect = direct.data["redirect"]
+    assert redirect is not None and redirect["requested"] == RETIRED_ICY_VEINS_GUIDE, direct.describe()
+    manifest = _manifest(root)
+    manifest["providers"] = [row for row in manifest["providers"] if row["provider"] in {"wowhead", "icy-veins"}]
+    rows = {row["provider"]: row for row in manifest["providers"]}
+    assert redirect["served"] == rows["icy-veins"]["candidate_ref"], direct.describe()
+    assert rows["wowhead"]["redirect"] is None
+    retired_manifest = _manifest(retired_path)
+    rows["icy-veins"].update(
+        bundle_path=str(retired_path.relative_to(root)), exported_at=retired_manifest["exported_at"],
+        redirect=redirect,
+        bundle_identity={key: retired_manifest.get(key) for key in ("provider", "exported_at", "guide", "page", "redirect")},
     )
-    exported = {row["provider"]: row for row in run("warcraft", *argv, timeout=300).data["provider_results"]}
-    redirect = exported["icy-veins"]["redirect"]
-    assert redirect is not None and redirect["requested"] == RETIRED_ICY_VEINS_GUIDE, exported["icy-veins"]
-    assert exported["wowhead"]["status"] == "exported" and exported["wowhead"]["redirect"] is None, exported["wowhead"]
-
-    reused = run("warcraft", *argv, timeout=300)
+    paths = tuple(root / row["bundle_path"] for row in manifest["providers"])
+    compared = run("warcraft", "guide-compare", *(str(path) for path in paths))
+    assert compared.data["compared_bundle_count"] == 2, compared.describe()
+    (root / "manifest.json").write_text(json.dumps(manifest))
+    original_bytes = _bundle_bytes(paths)
+    reused = run(
+        "warcraft", "guide-compare-query", GUIDE_QUERY, "--provider", "wowhead", "--provider", "icy-veins",
+        "--out-root", str(root), timeout=300,
+    )
     for row in reused.data["provider_results"]:
         assert row["status"] == "reused", reused.describe()
-        assert row["redirect"] == exported[row["provider"]]["redirect"], reused.describe()
+        assert row["redirect"] == rows[row["provider"]]["redirect"], reused.describe()
+    assert _bundle_bytes(paths) == original_bytes
 
 
 def test_guide_compare_reads_two_exported_bundles(require, orchestration: Orchestration) -> None:
