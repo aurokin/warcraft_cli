@@ -21,13 +21,15 @@ Every journey executes an installed binary (`.venv/bin/<name>`) as a real subpro
 On top of that, journeys assert real content: names, ids, counts, files on disk, and agreement
 between commands (search, resolve, and entity must name the same thing, and the page a typed
 lookup returns must be the page the query names). A journey follows an agent workflow end to end
-rather than probing one endpoint. Every `next_command` except Lorrgs' and the Wowhead guide
-resolve's, the Wowhead and wrapper search `follow_up.command`, the wrapper `fallback_search_command`
-and simc's `suggested_command` are split with `shlex` and run. The other hand-offs are only compared
-as strings: the Wowhead guide resolve's `next_command`, the search `follow_up.command` of Icy Veins,
-Method, Warcraft Wiki and Raider.IO, every Lorrgs hand-off, Raider.IO's `fallback_search_command`,
-Raidbots' `suggested_simc_commands`, the Blizzard and CurseForge stubs' `suggested_command`, and the
-wrapper composites' `sources.*.command`. The wrapper composites run against the real providers, and the
+rather than probing one endpoint. Journeys execute provider `next_command`s, the Wowhead and
+wrapper search `follow_up.command`, the wrapper `fallback_search_command`, and simc's
+`suggested_command` using `shlex`. This includes Wowhead guide resolve and Lorrgs ranking
+search/resolve handoffs. The optional live Raidbots report journey executes its generated SimC commands,
+checks actor identity and profileset membership, and simulates the report input locally; it does not
+require equal DPS from different simulator versions or settings. Other hand-offs are only compared
+as strings: other Lorrgs handoffs, the search `follow_up.command` of Icy Veins, Method, Warcraft Wiki and Raider.IO,
+Raider.IO's `fallback_search_command`, the Blizzard and CurseForge stubs' `suggested_command`, and
+the wrapper composites' `sources.*.command`. The wrapper composites run against the real providers, and the
 ones that hand builds to simc (`guide-builds-simc`, `guide-compare-query --simc-build-handoff`,
 `talent-packet`, `talent-describe`) run against the local SimulationCraft checkout rather than a
 stub.
@@ -79,7 +81,7 @@ filtered result against the exact rows that bound keeps. Not every such flag has
 ## Running
 
 ```bash
-make test-e2e                                   # everything, about ten minutes
+make test-e2e                                   # duration depends on provider latency and available fixtures
 make test-e2e E2E_PATHS="tests/e2e/test_wowhead.py"
 make test-e2e E2E_ARGS="-k cooldown"
 WARCRAFT_E2E_SKIP=curseforge make test-e2e
@@ -102,6 +104,13 @@ The binaries read provider env files from `~/.config/warcraft/providers/` (mode 
 Everything else is keyless. Store the canonical copies in your password manager and render the
 files from there; never commit them. `warcraft doctor` reports which providers are configured
 without printing secrets.
+
+For scoped credential injection, check `warcraftlogs doctor`'s `auth.credential_source`: a complete
+pair in `.env.local` or the provider file wins over process environment variables. Check
+`auth.public_api_access.ready`, rather than exit zero alone, before running public journeys. Saved
+user access is separate: `auth whoami` and private-report journeys need the user token and the
+appropriate `view-user-profile` / `view-private-reports` scopes. Doctor's public probe bypasses the
+response cache and uses the client endpoint.
 
 ## Coverage
 
@@ -138,10 +147,9 @@ What a green run does **not** prove:
   counted: a flag string that some journey passes can still be missing from every other command
   that documents it, so a count of strings found anywhere in `tests/e2e/` overstates coverage.
   Flags with no journey at all include result-shaping filters such as
-  `wowhead guides --updated-after/--updated-before`, `comments --keyword`, `blue-tracker --forum`,
-  `linked-graph --relation`, the Warcraft Logs `--boss-name`, `--target-id`, `--hostility-type`
-  and `--kill-type` filters, the `encounter-rankings` partition and server filters, and
-  `lorrgs comp-ranking --role`.
+  the Warcraft Logs `--boss-name` filter and the `encounter-rankings` partition and server filters.
+  New journeys derive Wowhead comment/date/forum/graph and Lorrgs composition bounds from real
+  baselines; WCL event journeys exercise target, hostility, and kill-type filters.
 - **Raidbots report parsing is untested against a real report.** The `inspect-report` / `input`
   success path runs only when `WARCRAFT_E2E_RAIDBOTS_REPORT` is set, CI excludes it, and the fast
   tests parse synthetic reports only.
@@ -194,5 +202,23 @@ run with `open_issue` set) opens or comments on the `live-failure` tracking issu
 
 The pull-request and release wheel jobs run `scripts/verify_wheel.py` after building. It installs the
 root wheel into a fresh environment outside the checkout, uses empty runtime roots, checks all
-console entry points and package origins, and verifies the schema and bundled Icy Veins index.
-These checks exercise packaged offline behavior; live-provider journeys remain separate.
+console entry points and package origins, and verifies schema, bundled Icy Veins data, offline
+doctor, usage errors, strict field selection, and missing-authentication behavior. A socket guard
+also runs in console-script subprocesses and records swallowed network attempts. PR wheel jobs
+cover Python 3.12, 3.13, and 3.14; release checks use 3.12.
+
+`scripts/verify_provider_wheels.py` builds local wheels and installs each provider alone, letting
+its declared dependencies resolve without preinstalling shared packages. `--package warcraft-cli`
+checks the modular wrapper and its provider dependencies. CI runs both forms. These checks
+exercise packaged offline behavior; live-provider journeys remain separate.
+
+CI also runs `tests/test_redis_integration.py` with disposable loopback Redis instances and guarded
+synthetic provider HTTP. It verifies expiry, prefix/namespace isolation, provider replay without
+HTTP, error provenance during an outage, and reconnection by a new process. Locally, set
+`VERIFY_REDIS_URL` for the basic checks; the outage check additionally requires
+`VERIFY_REDIS_OUTAGE_URL` and a task-owned `VERIFY_REDIS_OUTAGE_CONTAINER` whose name starts with
+`warcraft-verify-outage-`. Never point that test at a persistent service.
+
+`WARCRAFT_SIMC_TESTS_REPO=<checkout>` also enables the real Raidbots actor-override oracle in
+`tests/test_raidbots_simc_real_binary.py`. It compares extracted builds with talent conditions
+evaluated by the actual simulator, including split-tree overrides and later/copied actors.

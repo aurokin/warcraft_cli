@@ -9,6 +9,7 @@ journeys below.
 from __future__ import annotations
 
 import math
+import shlex
 from dataclasses import dataclass
 from typing import Any
 
@@ -348,6 +349,36 @@ def test_comp_ranking_role_filter_takes_the_documented_syntax(catalog: Catalog) 
     raise AssertionError("no boss has a populated comp ranking to filter")
 
 
+def test_comp_role_bound_removes_nonmatching_comps_and_keeps_matching_top_rows(catalog: Catalog) -> None:
+    """Use a varied role count, since valid syntax and an impossible bound do not prove a useful filter."""
+    roles_by_spec = {row["full_name_slug"]: row["role"] for row in catalog.specs.data["specs"]}
+    scanned: list[str] = []
+    for boss in _comp_ranking_candidates(catalog):
+        baseline = run("lorrgs", "comp-ranking", boss, "--limit", "50", expect=None)
+        if not baseline.ok:
+            assert baseline.error_code == "not_found", baseline.describe()
+            continue
+        rows = baseline.data["reports"]
+        for role in COMP_ROLES:
+            counts = { (row["report_id"], row["fights"][0]["fight_id"]): sum(
+                roles_by_spec[player["spec_slug"]] == role for player in row["fights"][0]["players"]
+            ) for row in rows }
+            values = sorted(set(counts.values()))
+            if len(values) < 2:
+                continue
+            bound = values[len(values) // 2]
+            filtered = run("lorrgs", "comp-ranking", boss, "--limit", "50", "--role", f"{role}.gte.{bound}")
+            kept = {(row["report_id"], row["fights"][0]["fight_id"]) for row in filtered.data["reports"]}
+            expected = {key for key, count in counts.items() if count >= bound}
+            assert 0 < len(expected) < len(counts), baseline.describe()
+            assert expected <= kept, filtered.describe()
+            assert not (set(counts) - expected) & kept, filtered.describe()
+            assert all(sum(roles_by_spec[player["spec_slug"]] == role for player in row["fights"][0]["players"]) >= bound for row in filtered.data["reports"]), filtered.describe()
+            return
+        scanned.append(boss)
+    raise AssertionError(f"no varied role count in the top 50 comps: {scanned}")
+
+
 def test_static_metadata_is_served_from_the_cache_once_fetched(require) -> None:
     """A warm cache answers ``specs`` with every connection refused, and says it replayed the data."""
     require("lorrgs")
@@ -538,6 +569,8 @@ def test_search_ranks_the_spec_ranking_surface_first(catalog: Catalog) -> None:
     assert top["spec_slug"] == catalog.spec_slug
     assert top["boss_slug"] == catalog.boss_slug
     assert top["follow_up"]["command"] == f"lorrgs spec-ranking {catalog.spec_slug} {catalog.boss_slug}"
+    handoff = run(*shlex.split(top["follow_up"]["command"]))
+    assert (handoff.data["spec_slug"], handoff.data["boss_slug"]) == (catalog.spec_slug, catalog.boss_slug), handoff.describe()
     assert top["url"] == f"https://lorrgs.io/spec_ranking/{catalog.spec_slug}/{catalog.boss_slug}"
     assert result.data["count"] == len(results) <= result.data["total_matches"], result.describe()
     assert result.data["truncated"] is (result.data["total_matches"] > len(results)), result.describe()
@@ -549,6 +582,8 @@ def test_resolve_turns_a_lorrgs_url_into_the_next_command(catalog: Catalog) -> N
     assert result.data["resolved"] is True
     assert result.data["confidence"] == "high"
     assert result.data["next_command"] == f"lorrgs spec-ranking {catalog.spec_slug} {catalog.boss_slug}"
+    handoff = run(*shlex.split(result.data["next_command"]))
+    assert (handoff.data["spec_slug"], handoff.data["boss_slug"]) == (catalog.spec_slug, catalog.boss_slug), handoff.describe()
     assert result.data["match"]["url"] == url, result.describe()
 
 

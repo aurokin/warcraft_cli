@@ -17,38 +17,43 @@ PRODUCT_PREFIXES = (
     "RAIDERIO_", "SIMC_", "WARCRAFT_", "WARCRAFTLOGS_", "WOWHEAD_",
 )
 
-# Executed with the clean environment's interpreter in isolated mode. Checking module origins also
-# catches an editable install accidentally making the checkout available to this verification.
-INSTALLED_PROBE = '''
-import importlib
-import importlib.metadata
-import json
-import pathlib
+# The guard is inherited by real console-script subprocesses, including attempts swallowed by retries.
+NETWORK_GUARD = """
+import os
 import socket
 import sys
-network_attempts = []
+from pathlib import Path
+
 def blocked(*args, **kwargs):
-    network_attempts.append(str(args))
-    raise RuntimeError("Installed-wheel verification must not contact providers")
+    with Path(os.environ["VERIFY_NETWORK_LOG"]).open("a") as log:
+        log.write(repr(sys.argv) + ": " + repr(args) + "\\n")
+    raise RuntimeError("Installed verification must not contact providers")
+
 socket.socket.connect = blocked
 socket.socket.connect_ex = blocked
 socket.getaddrinfo = blocked
-from icy_veins_cli.site_index import load_site_index
-from warcraft_core.paths import worktree_root
-expected = json.loads(sys.argv[1])
-dist = importlib.metadata.distribution("warcraft")
-actual = {entry.name: entry.value for entry in dist.entry_points if entry.group == "console_scripts"}
-assert actual == expected, (actual, expected)
-for target in actual.values():
-    module = importlib.import_module(target.split(":")[0])
-    origin = pathlib.Path(module.__file__).resolve()
-    assert origin.is_relative_to(pathlib.Path(sys.prefix).resolve()), origin
-assert worktree_root() is None, worktree_root()
-index = load_site_index()
-assert index is not None and index.bundled and index.pages, "Missing bundled Icy Veins index"
-assert not network_attempts, network_attempts
-print(f"Verified {len(actual)} installed console scripts and {len(index.pages)} bundled index pages")
-'''
+socket.gethostbyname = blocked
+socket.gethostbyname_ex = blocked
+socket.socket.sendto = blocked
+"""
+
+
+def install_network_guard(root: Path, env: dict[str, str]) -> None:
+    guard = root / "guard"
+    guard.mkdir()
+    (guard / "sitecustomize.py").write_text(NETWORK_GUARD)
+    env["PYTHONPATH"] = str(guard)
+    env["VERIFY_GUARD_PATH"] = str(guard / "sitecustomize.py")
+    env["VERIFY_NETWORK_LOG"] = str(root / "network-attempts.log")
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        env[name] = "http://127.0.0.1:9"
+    env["NO_PROXY"] = ""
+
+
+def run_installed_probe(python: Path, distribution: str, scripts: dict[str, str], cwd: Path, env: dict[str, str]) -> None:
+    probe = Path(__file__).with_name("verify_installed.py").resolve()
+    subprocess.run([str(python), "-I", str(probe), distribution, json.dumps(scripts)],
+                   cwd=cwd, env=env, check=True, timeout=180)
 
 
 def isolated_env(root: Path) -> dict[str, str]:
@@ -78,23 +83,8 @@ def verify_wheel(wheel: Path) -> None:
         subprocess.run(["uv", "venv", str(venv), "--python", sys.executable], cwd=cwd, env=env, check=True)
         python = venv / "bin" / "python"
         subprocess.run(["uv", "pip", "install", "--python", str(python), str(wheel)], cwd=cwd, env=env, check=True)
-        # Provider requests must fail locally if a help command accidentally starts one.
-        for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
-            env[name] = "http://127.0.0.1:9"
-        env["NO_PROXY"] = ""
-        for binary in expected_scripts:
-            for args in (["--help"], ["doctor", "--help"]):
-                result = subprocess.run([str(venv / "bin" / binary), *args], cwd=cwd, env=env,
-                                        capture_output=True, text=True, check=True, timeout=30)
-                if not result.stdout.strip():
-                    raise RuntimeError(f"{binary} {' '.join(args)} produced no help")
-        result = subprocess.run([str(venv / "bin" / "warcraft"), "schema"], cwd=cwd, env=env,
-                                capture_output=True, text=True, check=True, timeout=30)
-        payload = json.loads(result.stdout)
-        if payload.get("ok") is not True or payload.get("kind") != "envelope_schema" or not payload["data"]["schema"]["required"]:
-            raise RuntimeError("Installed warcraft schema did not return the envelope schema")
-        subprocess.run([str(python), "-I", "-c", INSTALLED_PROBE, json.dumps(expected_scripts)],
-                       cwd=cwd, env=env, check=True, timeout=30)
+        install_network_guard(root, env)
+        run_installed_probe(python, "warcraft", expected_scripts, cwd, env)
 
 
 def main() -> None:
