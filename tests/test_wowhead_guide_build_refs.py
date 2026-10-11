@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
-from warcraft_content.article_bundle import load_article_bundle, query_article_bundle
+from warcraft_content.article_bundle import load_article_bundle
 from wowhead_cli.guide_builds import guide_build_references
 from wowhead_cli.main import app
 
@@ -142,7 +142,8 @@ def test_duplicate_build_block_and_calculator_link_keep_both_sources() -> None:
     assert {citation["url"] for citation in row["citations"]} == {SOURCE, url}
 
 
-def test_exported_wowhead_builds_are_queryable_by_the_shared_bundle_reader(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("kind", [None, "build_references"])
+def test_exported_wowhead_builds_are_queryable_by_native_commands(monkeypatch, tmp_path: Path, kind: str | None) -> None:
     html = SAMPLE_GUIDE_HTML.replace(
         '"[h2 toc=', '"[url=https://www.wowhead.com/talent-calc/death-knight/frost/ABC123]Raid[/url] [h2 toc=',
         1,
@@ -155,6 +156,13 @@ def test_exported_wowhead_builds_are_queryable_by_the_shared_bundle_reader(monke
     assert manifest["counts"]["build_references"] == 1
     assert manifest["files"]["build_references_jsonl"] == "build-references.jsonl"
     bundle = load_article_bundle(out)
-    matches = query_article_bundle(bundle, query="Raid", limit=5, kinds={"build_references"}, section_title_filter=None)
+    assert len(bundle["build_references"]) == 1
+    options = ["--kind", kind] if kind else []
+    native = CliRunner().invoke(app, ["guide-query", str(out), "Raid", *options])
+    assert native.exit_code == 0, native.stdout + native.stderr
+    matches = json.loads(native.stdout)["data"]
     assert matches["match_counts"]["build_references"] == 1
     assert matches["matches"]["build_references"][0]["source_url"].startswith("https://www.wowhead.com/guide/")
+    aggregate = CliRunner().invoke(app, ["guide-bundle-query", "Raid", "--root", str(tmp_path), *options])
+    assert aggregate.exit_code == 0, aggregate.stdout + aggregate.stderr
+    assert json.loads(aggregate.stdout)["data"]["counts"]["build_references"] == 1

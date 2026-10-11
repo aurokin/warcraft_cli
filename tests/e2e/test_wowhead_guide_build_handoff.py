@@ -39,6 +39,12 @@ def test_guide_bundle_preserves_published_codes_and_original_urls(published_buil
             assert row["build_code"] in row["source"]["original_ref"]
             assert row["source_url"] == TALENT_GUIDE
             assert any(row["build_code"] in citation["url"] for citation in row["citations"])
+    code = refs[0]["build_code"]
+    queried = run("wowhead", "guide-query", str(output), code, "--kind", "build_references")
+    assert queried.data["match_counts"]["build_references"] >= 1, queried.describe()
+    assert any(row["build_code"] == code for row in queried.data["matches"]["build_references"])
+    aggregated = run("wowhead", "guide-bundle-query", code, "--root", str(output.parent), "--kind", "build_references")
+    assert aggregated.data["counts"]["build_references"] >= 1, aggregated.describe()
 
 
 def test_published_guide_build_reaches_simc_without_inferred_guide_identity(require, published_build_bundle):

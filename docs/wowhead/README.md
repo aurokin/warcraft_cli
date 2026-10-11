@@ -352,6 +352,8 @@ Class/spec calculator links validate their encoded identity; native
 `/talent-calc/blizzard/<loadout>` links retain unknown identity until SimC decodes them.
 Rejected calculator references appear in `manifest.build_reference_exclusions`.
 The shared article commands and `warcraft guide-compare` can consume the bundle's build rows.
+`guide-query` and `guide-bundle-query` include them by default; `--kind build_references`
+restricts an offline search to published builds.
 Older bundles without the build-reference file remain readable.
 
 Scan a topic across a date window:

@@ -558,8 +558,8 @@ def _normalize_canonical_entity_url(
     return base
 
 
-# The bundle kinds guide-query and guide-bundle-query search; a wowhead guide-export has no build references.
-GUIDE_QUERY_KINDS = ("sections", "analysis_surfaces", "navigation", "linked_entities", "gatherer_entities", "comments")
+# The native offline query surfaces share the exported content categories.
+GUIDE_QUERY_KINDS = ("sections", "analysis_surfaces", "navigation", "linked_entities", "gatherer_entities", "comments", "build_references")
 LINK_SOURCE_FILTERS = ("href", "gatherer", "multi")
 
 
@@ -3161,7 +3161,7 @@ def guide_query(
         "--kind",
         help=(
             "Restrict search kinds. Repeat or pass comma-separated values from: sections, "
-            "analysis_surfaces, navigation, linked_entities, gatherer_entities, comments."
+            "analysis_surfaces, navigation, linked_entities, gatherer_entities, comments, build_references."
         ),
     ),
     section_title: str | None = typer.Option(
@@ -3257,7 +3257,7 @@ def _guide_bundle_query_matches(
     options: GuideBundleQueryOptions,
 ) -> GuideBundleQueryMatches:
     # Seeded so a query that matches nothing still reports every kind, as each bundle's match_counts does.
-    aggregate_counts = dict.fromkeys((*GUIDE_QUERY_KINDS, "build_references"), 0)
+    aggregate_counts = dict.fromkeys(GUIDE_QUERY_KINDS, 0)
     matched_bundles: list[dict[str, Any]] = []
     top_matches: list[dict[str, Any]] = []
 
@@ -3326,7 +3326,7 @@ def guide_bundle_query(
         "--kind",
         help=(
             "Restrict search kinds. Repeat or pass comma-separated values from: sections, "
-            "analysis_surfaces, navigation, linked_entities, gatherer_entities, comments."
+            "analysis_surfaces, navigation, linked_entities, gatherer_entities, comments, build_references."
         ),
     ),
     section_title: str | None = typer.Option(
