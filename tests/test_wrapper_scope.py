@@ -360,3 +360,49 @@ def test_graphql_adapter_fight_helpers_respect_declared_shape_and_explicit_varia
     )
     variable_name = declared.partition(":")[0]
     assert calls[0]["variables"] == {variable_name: expected}
+
+
+@pytest.mark.parametrize(
+    "reference_type,url",
+    [("wow_talent_export", "ABC123"), ("wowhead_talent_calc_url", "https://www.wowhead.com/talent-calc/monk/mistweaver/ABC123")],
+)
+def test_singular_guide_source_url_survives_handoff_without_inventing_source_identity(tmp_path, reference_type, url):
+    from warcraft_cli.guide_compare import guide_builds_simc_payload
+
+    source_url = "https://www.wowhead.com/guide/classes/monk/mistweaver/overview-pve-healer"
+    unknown = {"status": "unknown", "confidence": "none", "class_spec_identity": {"identity": {"actor_class": None, "spec": None}}}
+    packet = guide_builds_simc_payload(
+        source_path=tmp_path,
+        source_kind="bundle",
+        source_manifest={},
+        bundle_inputs=[
+            (
+                tmp_path,
+                {
+                    "manifest": {"provider": "wowhead"},
+                    "build_references": [
+                        {
+                            "url": url,
+                            "reference_type": reference_type,
+                            "build_code": "ABC123",
+                            "source_url": source_url,
+                            "build_identity": unknown,
+                        }
+                    ],
+                },
+            )
+        ],
+        decode=False,
+        apl_path=None,
+        limit=20,
+        simc=lambda *_args, **_kwargs: {
+            "exit_code": 0,
+            "payload": success_envelope(provider="simc", command="identify-build", kind="build_identity", data={}),
+        },
+    )
+    build = packet["builds"][0]
+    assert packet["citations"]["source_urls"] == [source_url]
+    assert build["sources"][0]["source_urls"] == build["evidence"]["source_urls"] == [source_url]
+    assert build["sources"][0]["build_identity"] == build["reference"]["build_identity"] == unknown
+    if reference_type == "wowhead_talent_calc_url":
+        assert build["talent_transport_packet"]["raw_evidence"]["source_urls"] == [source_url]

@@ -338,7 +338,7 @@ def _collect_build_reference_handoff_rows(
                 "provider": provider,
                 "bundle_path": str(bundle_path),
                 "label": row.get("label"),
-                "source_urls": list(row.get("source_urls") or []),
+                "source_urls": unique_strings(as_list(row.get("source_urls")) or [row.get("source_url")]),
                 "build_identity": row.get("build_identity"),
             }
             if record is None:
