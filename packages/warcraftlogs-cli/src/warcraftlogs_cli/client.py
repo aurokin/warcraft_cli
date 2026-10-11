@@ -660,6 +660,7 @@ query Report($code: String!, $allowUnlisted: Boolean) {
   reportData {
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
+      revision
       title
       startTime
       endTime
@@ -716,6 +717,7 @@ query Reports(
     ) {
       data {
         code
+        revision
         title
         startTime
         endTime
@@ -769,6 +771,7 @@ query ReportFights($code: String!, $difficulty: Int, $allowUnlisted: Boolean) {
   reportData {
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
+      revision
       title
       endTime
       zone {
@@ -818,6 +821,7 @@ query ReportEvents(
   reportData {
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
+      revision
       title
       endTime
       zone {
@@ -871,6 +875,7 @@ query ReportTable(
   reportData {
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
+      revision
       title
       endTime
       zone {
@@ -922,6 +927,7 @@ query ReportGraph(
   reportData {
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
+      revision
       title
       endTime
       zone {
@@ -961,6 +967,7 @@ query ReportMasterData(
   reportData {
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
+      revision
       title
       endTime
       zone {
@@ -1009,6 +1016,7 @@ query ReportPlayerDetails(
   reportData {
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
+      revision
       title
       endTime
       zone {
@@ -1044,6 +1052,7 @@ query ReportRankings(
   reportData {
     report(code: $code, allowUnlisted: $allowUnlisted) {
       code
+      revision
       title
       endTime
       zone {
@@ -1377,8 +1386,14 @@ class WarcraftLogsClient(CachedHttpClient):
         *,
         site: WarcraftLogsSiteProfile = RETAIL_PROFILE,
         timeout_seconds: float = 20.0,
+        endpoint: str = "client",
+        refresh: bool = False,
         retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     ) -> None:
+        if endpoint not in {"client", "user", "auto"}:
+            raise WarcraftLogsClientError("invalid_argument", "endpoint must be one of: client, user, auto.")
+        self._endpoint = endpoint
+        self._refresh = refresh
         auth = load_warcraftlogs_auth_config()
         self._site = site
         self._timeout_seconds = timeout_seconds
@@ -1424,13 +1439,15 @@ class WarcraftLogsClient(CachedHttpClient):
         return json_cache_key(namespace, {"site": self._site.key, "namespace": namespace, "payload": payload})
 
     def _read_cache(self, key: str) -> Any | None:
+        if getattr(self, "_refresh", False):
+            return None
         cached = super()._read_cache(key)
         if cached is not None:
             self._cache_hit_count += 1
         return cached
 
     def _read_raw_cache(self, key: str) -> Any:
-        if self._cache_store is None:
+        if getattr(self, "_refresh", False) or self._cache_store is None:
             return _CACHE_MISS
         cached = self._cache_store.get(key)
         if cached is None:
@@ -1800,7 +1817,8 @@ class WarcraftLogsClient(CachedHttpClient):
         force_client: bool = False,
         ttl_resolver: Callable[[dict[str, Any]], int] | None = None,
     ) -> dict[str, Any]:
-        if not force_client and self._has_user_token():
+        policy = getattr(self, "_endpoint", "auto")
+        if not force_client and (policy == "user" or (policy == "auto" and self._has_user_token())):
             return self._graphql_user(
                 operation_name=operation_name,
                 query=query,
@@ -1964,8 +1982,9 @@ class WarcraftLogsClient(CachedHttpClient):
         fetched while live (cached for the short report TTL) can still be served from
         that live entry for up to ``self._report_ttl`` seconds after it finishes. We
         deliberately cache live reports (per the AUR-388 spec decision) rather than
-        no-cache them; the short live TTL bounds the staleness window and finished WoW
-        logs are immutable thereafter. See docs/warcraftlogs/CACHING.md.
+        no-cache them; the short live TTL bounds this transition window. Finished reports
+        can still be re-exported, and their longer TTL is a staleness policy rather than
+        an immutability guarantee. Use explicit refresh for revalidation. See docs/warcraftlogs/CACHING.md.
         """
         finished_ttl = ttl_override if ttl_override is not None else self._finished_report_ttl
         live_ttl = self._report_ttl
@@ -1992,8 +2011,8 @@ class WarcraftLogsClient(CachedHttpClient):
         finish_state_ttl: bool = True,
     ) -> dict[str, Any]:
         # Most report-detail payloads (fights/events/tables/graphs/master-data/player-details)
-        # are immutable once the report finishes, so they key on finish state and earn the long
-        # finished TTL. Callers with population-relative or otherwise mutable output (rankings)
+        # use a longer bounded staleness policy after the report finishes. This does not
+        # guarantee immutability. Callers with population-relative output (rankings)
         # pass finish_state_ttl=False to stay on the short live TTL.
         ttl_resolver = self._report_finish_ttl_resolver(ttl_override=ttl_override) if finish_state_ttl else None
         data = self._graphql(

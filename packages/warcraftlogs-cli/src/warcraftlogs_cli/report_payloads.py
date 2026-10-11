@@ -55,6 +55,7 @@ def report_payload(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "code": report.get("code"),
         "title": report.get("title"),
+        "revision": report.get("revision"),
         "start_time": report.get("startTime"),
         "end_time": report.get("endTime"),
         "visibility": report.get("visibility"),
@@ -77,6 +78,7 @@ def report_brief_payload(report: dict[str, Any]) -> dict[str, Any]:
     return {
         "code": report.get("code"),
         "title": report.get("title"),
+        "revision": report.get("revision"),
         "zone": {"id": zone.get("id"), "name": zone.get("name")} if zone else None,
     }
 

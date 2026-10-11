@@ -8,6 +8,7 @@ version = "0.6.0"
 description = "Agent-first CLI for querying Wowhead"
 requires-python = ">=3.12"
 dependencies = [
+  "beautifulsoup4>=4.12.3,<5.0.0",
   "httpx>=0.28.1,<1.0.0",
   "typer>=0.12.5,<1.0.0",
   "warcraft-api-cli>=0.1.0",

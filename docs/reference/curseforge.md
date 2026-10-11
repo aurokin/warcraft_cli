@@ -2,7 +2,7 @@
 
 # curseforge
 
-Public CurseForge addon API CLI (World of Warcraft). Experimental tier: the surface is one addon lookup plus doctor and search/resolve are stubs. Host, x-api-key auth, slug search, mod lookup, and file changelog are confirmed against live CurseForge traffic, so addon payloads report provenance.verified=true.
+Public CurseForge addon API CLI (World of Warcraft). Experimental tier: the surface is one addon lookup plus doctor and free-text discovery is unsupported. Host, x-api-key auth, slug search, mod lookup, and file changelog are confirmed against live CurseForge traffic, so addon payloads report provenance.verified=true.
 
 ## Global options
 
@@ -33,7 +33,7 @@ Fetch a WoW addon's metadata, latest files, and latest changelog by slug or mod 
 
 ## curseforge search
 
-Coming soon: structured addon discovery search is not implemented yet.
+Fail explicitly for unsupported free-text addon discovery.
 
 **Arguments**
 
@@ -45,11 +45,11 @@ Coming soon: structured addon discovery search is not implemented yet.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 5 | Unused until curseforge search ships. |
+| `--limit` | int range [1<=x<=50] | 5 | Compatibility limit; free-text discovery is unsupported. |
 
 ## curseforge resolve
 
-Coming soon: conservative single-addon resolution is not implemented yet.
+Fail explicitly for unsupported free-text addon resolution.
 
 **Arguments**
 
@@ -61,4 +61,4 @@ Coming soon: conservative single-addon resolution is not implemented yet.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 5 | Unused until curseforge resolve ships. |
+| `--limit` | int range [1<=x<=50] | 5 | Compatibility limit; free-text discovery is unsupported. |

@@ -1,20 +1,19 @@
 """The single place the wrapper imports provider packages.
 
 Every ``warcraft`` composite command reaches a provider through this registry: the pure
-``PROVIDER`` surfaces for search/resolve/doctor, typed guide exports, and the provider Typer app for passthrough and
-for the commands that have no surface method yet. No other ``warcraft_cli`` module imports a
+``PROVIDER`` surfaces for search/resolve/doctor, typed guide exports, and typed report/profile/catalog
+operations. The provider Typer app is only for passthrough. No other ``warcraft_cli`` module imports a
 provider package.
 """
 
 from __future__ import annotations
 
-import io
 import json
+import re
 from collections.abc import Callable, Mapping
-from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 
 import typer
 from blizzard_api_cli.main import app as blizzard_app
@@ -24,6 +23,7 @@ from curseforge_cli.provider import PROVIDER as curseforge_provider
 from icy_veins_cli import provider as icy_veins_operations
 from icy_veins_cli.main import app as icy_veins_app
 from icy_veins_cli.provider import PROVIDER as icy_veins_provider
+from lorrgs_cli import operations as lorrgs_operations
 from lorrgs_cli.main import app as lorrgs_app
 from lorrgs_cli.provider import PROVIDER as lorrgs_provider
 from lorrgs_cli.search import parse_report_reference as parse_lorrgs_report_reference
@@ -32,10 +32,11 @@ from method_cli.main import app as method_app
 from method_cli.provider import PROVIDER as method_provider
 from raidbots_cli.main import app as raidbots_app
 from raidbots_cli.provider import PROVIDER as raidbots_provider
+from raiderio_cli import profiles as raiderio_operations
 from raiderio_cli.main import app as raiderio_app
 from raiderio_cli.provider import PROVIDER as raiderio_provider
 from simc_cli.build_input import PacketInput
-from simc_cli.main import (
+from simc_cli.build_services import (
     DescribeOptions,
     decode_build_payload,
     describe_build_payload,
@@ -47,8 +48,8 @@ from simc_cli.provider import PROVIDER as simc_provider
 from simc_cli.provider import simc_envelope
 from warcraft_core.cache_ledger import cache_ledger, with_cache_provenance
 from warcraft_core.cli import command_path_from_args, error_envelope_for
-from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope, error_envelope
-from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_NETWORK, EXIT_USAGE, exit_code_for
+from warcraft_core.envelope import Envelope, error_envelope
+from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.expansions import list_expansions, resolve_expansion, warcraftlogs_site_for_expansion
 from warcraft_core.output import to_json
 from warcraft_core.paths import cache_root, config_root, data_root, state_root, worktree_runtime_details
@@ -57,15 +58,43 @@ from warcraft_core.shapes import as_dict
 from warcraft_wiki_cli.main import app as warcraft_wiki_app
 from warcraft_wiki_cli.provider import PROVIDER as warcraft_wiki_provider
 from warcraft_wiki_cli.search import QUERY_COVERAGE_REASONS as WIKI_QUERY_COVERAGE_REASONS
+from warcraftlogs_cli import operations as wcl_operations
+from warcraftlogs_cli.client import (
+    ReportFilterOptions,
+    ReportPlayerDetailsOptions,
+    WarcraftLogsClient,
+    WarcraftLogsClientError,
+    resolve_site_profile,
+)
+from warcraftlogs_cli.errors import client_error_exit_code
 from warcraftlogs_cli.main import app as warcraftlogs_app
 from warcraftlogs_cli.provider import PROVIDER as warcraftlogs_provider
 from wowhead_cli import provider as wowhead_operations
+from wowhead_cli.entity_types import RESOLVE_ENTITY_TYPES
 from wowhead_cli.main import app as wowhead_app
 from wowhead_cli.provider import PROVIDER as wowhead_provider
 from wowhead_cli.ranking import STALE_GUIDE_REASON
 
+from warcraft_cli.discovery_scope import filter_candidates
+from warcraft_cli.operation_args import OperationArgs
+from warcraft_cli.provider_calls import (
+    ProviderCalls,
+    ProviderFetch,
+    ProviderGuideExport,
+    ProviderInvoke,
+    SimcCall,
+    SimcCommand,
+    failed_call,
+    provider_payload_data,
+    shared_failure,
+    source_exit_code,
+    wrapper_envelope,
+)
+
 __all__ = [
     "PROVIDERS",
+    "normalize_discovery_scope",
+    "discovery_filtered_providers",
     "STALE_GUIDE_REASON",
     "WIKI_QUERY_COVERAGE_REASONS",
     "wrapper_envelope",
@@ -75,6 +104,9 @@ __all__ = [
     "ProviderFetch",
     "ProviderGuideExport",
     "ProviderRegistration",
+    "ProviderInvoke",
+    "SimcCall",
+    "source_exit_code",
     "expansion_filtered_providers",
     "expansion_support_snapshot",
     "failed_call",
@@ -117,7 +149,7 @@ def resolve_wrapper_expansion_key(value: str | None) -> str:
 
 
 # Readiness of one wrapper surface for one provider, as advertised by `warcraft doctor`.
-SurfaceStatus = Literal["ready", "ready_explicit_report_only", "coming_soon", "not_supported"]
+SurfaceStatus = Literal["ready", "ready_explicit_report_only", "not_supported"]
 ProviderTier = Literal["core", "supported", "experimental"]
 
 
@@ -178,8 +210,7 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         supported_expansions=("retail",),
         expansion_review_status="reviewed",
         expansion_policy_note=(
-            "Current supported live guide/article families are retail-focused "
-            "and do not expose reliable non-retail routing."
+            "Current supported live guide/article families are retail-focused and do not expose reliable non-retail routing."
         ),
         wrapper_capabilities={
             "doctor": "ready",
@@ -201,8 +232,7 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         supported_expansions=("retail",),
         expansion_review_status="reviewed",
         expansion_policy_note=(
-            "Current supported guide families are retail-focused "
-            "and do not provide a reliable wrapper-level non-retail split."
+            "Current supported guide families are retail-focused and do not provide a reliable wrapper-level non-retail split."
         ),
         wrapper_capabilities={
             "doctor": "ready",
@@ -295,13 +325,12 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         supported_expansions=(),
         expansion_review_status="deferred",
         expansion_policy_note=(
-            "Local repo analysis is versioned differently from wrapper content providers "
-            "and should not join expansion fanout yet."
+            "Local repo analysis is versioned differently from wrapper content providers and should not join expansion fanout yet."
         ),
         wrapper_capabilities={
             "doctor": "ready",
-            "search": "coming_soon",
-            "resolve": "coming_soon",
+            "search": "not_supported",
+            "resolve": "not_supported",
         },
         surface=simc_provider,
         tier="core",
@@ -317,10 +346,7 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         expansion_mode="fixed",
         supported_expansions=("retail",),
         expansion_review_status="reviewed",
-        expansion_policy_note=(
-            "Raidbots reports are retail-focused SimulationCraft runs; "
-            "report consumption stays fixed to retail."
-        ),
+        expansion_policy_note=("Raidbots reports are retail-focused SimulationCraft runs; report consumption stays fixed to retail."),
         wrapper_capabilities={
             "doctor": "ready",
             "search": "not_supported",
@@ -352,11 +378,11 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         ),
         wrapper_capabilities={
             "doctor": "ready",
-            "search": "coming_soon",
-            "resolve": "coming_soon",
+            "search": "not_supported",
+            "resolve": "not_supported",
         },
         surface=blizzard_provider,
-        tier="experimental",
+        tier="supported",
         expansion_option=None,
         app=blizzard_app,
     ),
@@ -378,8 +404,8 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         ),
         wrapper_capabilities={
             "doctor": "ready",
-            "search": "coming_soon",
-            "resolve": "coming_soon",
+            "search": "not_supported",
+            "resolve": "not_supported",
         },
         surface=curseforge_provider,
         tier="experimental",
@@ -590,54 +616,7 @@ def _unsupported_expansion_result(
     return {"provider": registration.name, "exit_code": EXIT_USAGE, "payload": dict(envelope)}
 
 
-def source_exit_code(source_result: Mapping[str, Any]) -> int:
-    """Exit with the failing source's own code (blocked -> 5, not_found -> 4) instead of a flat 1."""
-    code = source_result.get("exit_code")
-    if isinstance(code, int) and code != 0:
-        return code
-    error = source_result.get("error")
-    error_code = error.get("code") if isinstance(error, dict) else None
-    return exit_code_for(error_code) if isinstance(error_code, str) else EXIT_GENERIC
-
-
-def wrapper_envelope(command: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Shape a wrapper-built payload as the contract envelope: exactly the envelope keys, nothing else.
-
-    Envelope keys the payload sets win over the defaults, except that a failure's ``kind`` is always
-    ``error``. Every other key is payload content: it goes under ``data`` on success, and under
-    ``error.details`` on failure, where ``data`` is ``{}``.
-    """
-    ok = bool(payload.get("ok", "error" not in payload))
-    body = {key: value for key, value in payload.items() if key not in ENVELOPE_KEYS}
-    envelope: dict[str, Any] = {
-        "ok": ok,
-        "provider": "warcraft",
-        "command": command,
-        "kind": command,
-        "schema_version": SCHEMA_VERSION,
-        "query": None,
-        "provenance": {},
-        **{key: value for key, value in payload.items() if key in ENVELOPE_KEYS},
-    }
-    if ok:
-        envelope["data"] = {**body, **as_dict(payload.get("data"))}
-        return envelope
-    error = dict(as_dict(payload.get("error")))
-    details = {**body, **as_dict(error.get("details"))}
-    if details:
-        error["details"] = details
-    envelope.update(ok=False, kind="error", data={}, error=error)
-    return envelope
-
-
-def provider_payload_data(payload: Mapping[str, Any] | None) -> dict[str, Any]:
-    """The ``data`` body of a provider envelope: the only place a wrapper composite reads its fields."""
-    return as_dict(as_dict(payload).get("data"))
-
-
-def _call_surface(
-    provider: str, command: str, call: Callable[[], Mapping[str, Any]], *, query: Any = None
-) -> tuple[int, dict[str, Any]]:
+def _call_surface(provider: str, command: str, call: Callable[[], Mapping[str, Any]], *, query: Any = None) -> tuple[int, dict[str, Any]]:
     """Run one pure surface call, returning ``(exit_code, envelope)`` and never raising.
 
     A raised failure echoes ``query``, the input the wrapper handed the surface. The call runs in
@@ -654,6 +633,76 @@ def _call_surface(
     return 0, with_cache_provenance(envelope, ledger)
 
 
+DISCOVERY_ENTITY_TYPES: dict[str, frozenset[str]] = {
+    "wowhead": RESOLVE_ENTITY_TYPES,
+    "method": frozenset({"guide"}),
+    "icy-veins": frozenset({"guide"}),
+    "warcraft-wiki": frozenset({"article"}),
+    "raiderio": frozenset({"character", "guild"}),
+    "warcraftlogs": frozenset({"report", "report_encounter"}),
+    "lorrgs": frozenset({"spec", "boss", "spec_ranking", "comp_ranking", "report_overview", "user_report_fights"}),
+}
+
+
+def normalize_discovery_scope(providers: list[str] | None, entity_types: list[str] | None) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    names = tuple(dict.fromkeys(providers or []))
+    kinds = tuple(dict.fromkeys(entity_types or []))
+    unknown = set(names) - {row.name for row in PROVIDERS}
+    invalid = set(kinds) - set().union(*DISCOVERY_ENTITY_TYPES.values())
+    if unknown or invalid:
+        raise ProviderError(
+            "invalid_query",
+            "Unknown discovery scope.",
+            details={
+                "unknown_providers": sorted(unknown),
+                "unknown_entity_types": sorted(invalid),
+                "providers": [row.name for row in PROVIDERS],
+                "entity_types": sorted(set().union(*DISCOVERY_ENTITY_TYPES.values())),
+            },
+        )
+    return names, kinds
+
+
+def discovery_filtered_providers(
+    registrations: list[ProviderRegistration], *, providers: tuple[str, ...], entity_types: tuple[str, ...]
+) -> tuple[list[ProviderRegistration], list[dict[str, Any]]]:
+    included = []
+    excluded = []
+    for registration in registrations:
+        reason = None
+        if providers and registration.name not in providers:
+            reason = "provider_not_selected"
+        elif entity_types and not set(entity_types) & DISCOVERY_ENTITY_TYPES.get(registration.name, frozenset()):
+            reason = "provider_has_no_requested_entity_type"
+        if reason is None:
+            included.append(registration)
+        else:
+            excluded.append({"provider": registration.name, "command": registration.command, "reason": reason})
+    return included, excluded
+
+
+def _discovery_options(registration: ProviderRegistration, expansion: str | None, entity_types: tuple[str, ...]) -> dict[str, Any]:
+    options: dict[str, Any] = dict(provider_expansion_options(registration, expansion))
+    if entity_types and registration.name == "wowhead":
+        options["entity_types"] = tuple(kind for kind in entity_types if kind in RESOLVE_ENTITY_TYPES)
+    elif entity_types and registration.name == "raiderio":
+        selected = set(entity_types) & DISCOVERY_ENTITY_TYPES["raiderio"]
+        options["kind"] = next(iter(selected)) if len(selected) == 1 else "all"
+    return options
+
+
+def _scope_result(payload: dict[str, Any], *, provider: str, entity_types: tuple[str, ...], surface: str, limit: int) -> dict[str, Any]:
+    if not entity_types or payload.get("ok") is False:
+        return payload
+    if provider in {"wowhead", "raiderio"}:
+        data = as_dict(payload.get("data"))
+        return {
+            **payload,
+            "data": {**data, "entity_scope": {"mode": "native", "entity_types": list(entity_types), "candidate_limit": limit}},
+        }
+    return filter_candidates(payload, entity_types=entity_types, surface=surface, limit=limit)
+
+
 def provider_search(
     provider: str, query: str, *, limit: int = 5, expansion: str | None = None, entity_types: tuple[str, ...] = ()
 ) -> dict[str, Any]:
@@ -662,11 +711,13 @@ def provider_search(
     unsupported = _unsupported_expansion_result(registration, expansion, command="search", query=query)
     if unsupported is not None:
         return unsupported
-    options = {**provider_expansion_options(registration, expansion), **({"entity_types": entity_types} if entity_types else {})}
-    code, payload = _call_surface(
-        provider, "search", lambda: registration.surface.search(query, limit=limit, **options), query=query
-    )
-    return {"provider": provider, "exit_code": code, "payload": payload}
+    options = _discovery_options(registration, expansion, entity_types)
+    code, payload = _call_surface(provider, "search", lambda: registration.surface.search(query, limit=limit, **options), query=query)
+    return {
+        "provider": provider,
+        "exit_code": code,
+        "payload": _scope_result(payload, provider=provider, entity_types=entity_types, surface="search", limit=limit),
+    }
 
 
 def provider_resolve(
@@ -677,34 +728,13 @@ def provider_resolve(
     unsupported = _unsupported_expansion_result(registration, expansion, command="resolve", query=query)
     if unsupported is not None:
         return unsupported
-    options = {**provider_expansion_options(registration, expansion), **({"entity_types": entity_types} if entity_types else {})}
-    code, payload = _call_surface(
-        provider, "resolve", lambda: registration.surface.resolve(query, limit=limit, **options), query=query
-    )
-    return {"provider": provider, "exit_code": code, "payload": payload}
-
-
-def _capture_command(app: typer.Typer, args: list[str], *, prog_name: str) -> tuple[int, dict[str, Any] | None]:
-    """Run a provider Typer app in-process, capturing its exit code and JSON payload."""
-    command = typer.main.get_command(app)
-    out, err = io.StringIO(), io.StringIO()
-    exit_code = 0
-    failure: dict[str, Any] | None = None
-    try:
-        with redirect_stdout(out), redirect_stderr(err):
-            returned = command.main(args=args, prog_name=prog_name, standalone_mode=False)
-        if isinstance(returned, int):
-            exit_code = returned
-    except SystemExit as exc:
-        exit_code = exc.code if isinstance(exc.code, int) else EXIT_GENERIC
-    except Exception as exc:
-        # Usage errors and provider crashes both land here, and reach the agent as an envelope
-        # labelled with the subcommand path, exactly as the provider's own binary would label it.
-        envelope, exit_code = error_envelope_for(prog_name, command_path_from_args(app, args), exc)
-        failure = dict(envelope)
-    if failure is not None:
-        return exit_code, failure
-    return exit_code, parse_json_object(out.getvalue()) or parse_json_object(err.getvalue())
+    options = _discovery_options(registration, expansion, entity_types)
+    code, payload = _call_surface(provider, "resolve", lambda: registration.surface.resolve(query, limit=limit, **options), query=query)
+    return {
+        "provider": provider,
+        "exit_code": code,
+        "payload": _scope_result(payload, provider=provider, entity_types=entity_types, surface="resolve", limit=limit),
+    }
 
 
 def parse_json_object(text: str) -> dict[str, Any] | None:
@@ -761,19 +791,172 @@ def provider_guide_export(provider: str, guide_ref: str, *, out: Path, expansion
     return {"provider": provider, "exit_code": code, "payload": payload}
 
 
-def provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+def _lorrgs_operation(command: str, args: list[str]) -> Envelope:
+    if command == "bosses":
+        OperationArgs.parse(args, count=0)
+        return lorrgs_operations.bosses()
+    if command in {"spec-spells", "boss-spells"}:
+        parsed = OperationArgs.parse(args, count=1)
+        return (
+            lorrgs_operations.spec_spells(parsed.positionals[0])
+            if command == "spec-spells"
+            else lorrgs_operations.boss_spells(parsed.positionals[0])
+        )
+    if command == "spec-ranking":
+        parsed = OperationArgs.parse(args, count=2, values=frozenset({"--difficulty", "--metric"}))
+        return lorrgs_operations.spec_ranking(
+            *parsed.positionals, difficulty=parsed.text("--difficulty") or "mythic", metric=parsed.text("--metric")
+        )
+    if command == "user-report-fights":
+        parsed = OperationArgs.parse(
+            args, count=1, values=frozenset({"--fight", "--fight-id", "--player", "--type"}), repeated=frozenset({"--fight-id"})
+        )
+        return lorrgs_operations.user_report_fights(
+            parsed.positionals[0],
+            fight=parsed.text("--fight"),
+            fight_ids=parsed.integers("--fight-id"),
+            player=parsed.text("--player"),
+            data_type=parsed.text("--type"),
+        )
+    raise ProviderError("invalid_argument", f"Lorrgs operation {command!r} is not used by wrapper composites.")
+
+
+def _wcl_report_operation(client: WarcraftLogsClient, command: str, args: list[str], *, endpoint: str) -> Envelope:
+    if command == "report-fights":
+        parsed = OperationArgs.parse(args, count=1, switches=frozenset({"--allow-unlisted"}))
+        return wcl_operations.report_fights(client, reference=parsed.positionals[0], allow_unlisted="--allow-unlisted" in parsed.switches)
+    if command == "report-player-details":
+        parsed = OperationArgs.parse(
+            args, count=1, values=frozenset({"--fight-id"}), repeated=frozenset({"--fight-id"}), switches=frozenset({"--allow-unlisted"})
+        )
+        return wcl_operations.report_player_details(
+            client,
+            reference=parsed.positionals[0],
+            options=ReportPlayerDetailsOptions(fight_ids=parsed.integers("--fight-id")),
+            allow_unlisted="--allow-unlisted" in parsed.switches,
+        )
+    if command == "report-player-talents":
+        parsed = OperationArgs.parse(
+            args, count=1, values=frozenset({"--actor-id", "--fight-id"}), switches=frozenset({"--allow-unlisted"})
+        )
+        actor = parsed.integer("--actor-id")
+        if actor is None:
+            raise ProviderError("invalid_argument", "Actor ID is required.")
+        return wcl_operations.report_player_talents(
+            client,
+            reference=parsed.positionals[0],
+            actor_id=actor,
+            fight_id=parsed.integer("--fight-id"),
+            allow_unlisted="--allow-unlisted" in parsed.switches,
+        )
+    if command == "report-events":
+        parsed = OperationArgs.parse(
+            args,
+            count=1,
+            values=frozenset({"--fight-id", "--source-id", "--data-type", "--limit"}),
+            repeated=frozenset({"--fight-id"}),
+            switches=frozenset({"--allow-unlisted"}),
+        )
+        options = ReportFilterOptions(
+            fight_ids=parsed.integers("--fight-id"),
+            source_id=parsed.integer("--source-id"),
+            data_type=(parsed.text("--data-type") or "casts").title(),
+            limit=parsed.integer("--limit", 300),
+        )
+        return wcl_operations.report_events(
+            client, reference=parsed.positionals[0], options=options, allow_unlisted="--allow-unlisted" in parsed.switches
+        )
+    if command == "graphql":
+        parsed = OperationArgs.parse(
+            args,
+            count=0,
+            values=frozenset({"--query", "--report-code", "--variables-json", "--fight-id"}),
+            repeated=frozenset({"--fight-id"}),
+            switches=frozenset({"--allow-unlisted"}),
+        )
+        query = parsed.text("--query")
+        if not query:
+            raise ProviderError("invalid_argument", "GraphQL query is required.")
+        try:
+            variables = json.loads(parsed.text("--variables-json") or "{}")
+        except json.JSONDecodeError as exc:
+            raise ProviderError("invalid_argument", "GraphQL variables must be JSON.") from exc
+        if not isinstance(variables, dict):
+            raise ProviderError("invalid_argument", "GraphQL variables must be an object.")
+        variables = _graphql_fight_variables(query, variables, parsed.integers("--fight-id"))
+        return wcl_operations.raw_graphql(
+            client,
+            query=query,
+            variables=variables,
+            report_code=parsed.text("--report-code"),
+            allow_unlisted="--allow-unlisted" in parsed.switches,
+            endpoint=endpoint,
+        )
+    raise ProviderError("invalid_argument", f"WCL operation {command!r} is not used by wrapper composites.")
+
+
+def _graphql_fight_variables(query: str, variables: dict[str, Any], fight_ids: list[int] | None) -> dict[str, Any]:
+    declared = set(re.findall(r"\$([A-Za-z_][A-Za-z0-9_]*)\s*:", query))
+    merged = dict(variables)
+    if fight_ids:
+        if "fightIDs" in declared and "fightIDs" not in merged:
+            merged["fightIDs"] = fight_ids
+        elif "fightID" in declared and "fightID" not in merged:
+            merged["fightID"] = fight_ids[0]
+    return merged
+
+
+def _wcl_operation(command: str, args: list[str], *, expansion: str | None, endpoint: str) -> Envelope:
+    try:
+        with WarcraftLogsClient(
+            site=resolve_site_profile(warcraftlogs_site_for_expansion(expansion) if expansion else None), endpoint=endpoint
+        ) as client:
+            return _wcl_report_operation(client, command, args, endpoint=endpoint)
+    except WarcraftLogsClientError as exc:
+        raise ProviderError(exc.code, exc.message, exit_code=client_error_exit_code(exc.code)) from exc
+
+
+def _composite_operation(provider: str, command: str, args: list[str], *, expansion: str | None, warcraftlogs_endpoint: str) -> Envelope:
+    if provider == "lorrgs":
+        return _lorrgs_operation(command, args)
+    if provider == "warcraftlogs":
+        return _wcl_operation(command, args, expansion=expansion, endpoint=warcraftlogs_endpoint)
+    if provider == "raiderio" and command in {"character", "guild"}:
+        parsed = OperationArgs.parse(args, count=3)
+        return (
+            raiderio_operations.character_profile(*parsed.positionals)
+            if command == "character"
+            else raiderio_operations.guild_profile(*parsed.positionals)
+        )
+    if provider == "wowhead" and command == "talent-calc-packet":
+        parsed = OperationArgs.parse(args, count=1, values=frozenset({"--listed-build-limit"}))
+        return wowhead_operations.talent_calc_packet(
+            parsed.positionals[0], listed_build_limit=parsed.integer("--listed-build-limit", 20), expansion=expansion
+        )
+    raise ProviderError("invalid_argument", f"No typed wrapper operation for {provider} {command}; use provider passthrough.")
+
+
+def provider_invoke(
+    provider: str, args: list[str], *, expansion: str | None = None, warcraftlogs_endpoint: str = "client"
+) -> dict[str, Any]:
+    """Adapt the existing composite seam to a finite family of typed, output-free operations.
+
+    Ordinary provider passthrough is handled separately and retains its full CLI flag surface.
+    """
     if len(args) == 4 and args[0] == "guide-export" and args[2] == "--out":
         return provider_guide_export(provider, args[1], out=Path(args[3]), expansion=expansion)
     registration = get_provider(provider)
-    unsupported = _unsupported_expansion_result(registration, expansion, command=" ".join(args[:1]))
+    command = args[0] if args else ""
+    unsupported = _unsupported_expansion_result(registration, expansion, command=command)
     if unsupported is not None:
         return unsupported
-    normalized_args = [*provider_expansion_args(registration, expansion), *args]
-    code, payload = _capture_command(registration.app, normalized_args, prog_name=registration.command)
+    code, payload = _call_surface(
+        provider,
+        command,
+        lambda: _composite_operation(provider, command, args[1:], expansion=expansion, warcraftlogs_endpoint=warcraftlogs_endpoint),
+        query={"args": args},
+    )
     return {"provider": provider, "exit_code": code, "payload": payload}
-
-
-SimcCommand = Literal["identify-build", "decode-build", "describe-build", "validate-talent-transport"]
 
 
 def _simc_payload(command: SimcCommand, build: PacketInput | str, describe: DescribeOptions | None) -> dict[str, Any]:
@@ -806,87 +989,6 @@ def simc_call(command: SimcCommand, build: PacketInput | str, *, describe: Descr
     return {"provider": "simc", "exit_code": code, "payload": payload}
 
 
-class ProviderFetch(Protocol):
-    """Runs one provider command and returns ``{provider, status, payload, error?, exit_code}``."""
-
-    def __call__(self, provider: str, args: list[str], *, expansion: str | None) -> dict[str, Any]: ...
-
-
-class ProviderInvoke(Protocol):
-    """``provider_invoke``: one provider command, as ``{provider, exit_code, payload}``."""
-
-    def __call__(self, provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]: ...
-
-
-class ProviderGuideExport(Protocol):
-    """One provider's complete guide bundle written to an explicit directory."""
-
-    def __call__(self, provider: str, guide_ref: str, *, out: Path, expansion: str | None = None) -> dict[str, Any]: ...
-
-
-class ProviderLookup(Protocol):
-    """``provider_search`` / ``provider_resolve``: one free-text lookup, as ``{provider, exit_code, payload}``."""
-
-    def __call__(
-        self, provider: str, query: str, *, limit: int = 5, expansion: str | None = None, entity_types: tuple[str, ...] = ()
-    ) -> dict[str, Any]: ...
-
-
-class SimcCall(Protocol):
-    """``simc_call``: one in-process simc build command."""
-
-    def __call__(
-        self, command: SimcCommand, build: PacketInput | str, *, describe: DescribeOptions | None = None
-    ) -> dict[str, Any]: ...
-
-
-@dataclass(frozen=True, slots=True)
-class ProviderCalls:
-    """The provider seams a composite command runs through.
-
-    ``warcraft_cli.main`` builds this from its own module globals at call time, so a test that
-    replaces ``warcraft_cli.main.provider_invoke`` (or ``simc_call``) reaches every feature module.
-    """
-
-    invoke: ProviderInvoke
-    resolve: ProviderLookup
-    search: ProviderLookup
-    simc: SimcCall
-
-    def guide_export(self, provider: str, guide_ref: str, *, out: Path, expansion: str | None = None) -> dict[str, Any]:
-        """Typed guide operation; the invoke adapter preserves call-time injection for composite tests."""
-        return self.invoke(provider, ["guide-export", guide_ref, "--out", str(out)], expansion=expansion)
-
-
-def failed_call(result: Mapping[str, Any]) -> tuple[dict[str, Any], int] | None:
-    """The provider's error (always with a ``code`` and ``message``) and exit code; ``None`` on success."""
-    payload = as_dict(result.get("payload"))
-    exit_code = result.get("exit_code")
-    if exit_code == 0 and payload.get("ok") is not False:
-        return None
-    error = as_dict(payload.get("error"))
-    message = error.get("message") or f"{result.get('provider') or 'The provider'} exited {exit_code}."
-    failure = {**error, "code": error.get("code") or "provider_failed", "message": message}
-    return failure, source_exit_code({"exit_code": exit_code, "error": failure})
-
-
-def shared_failure(failed_rows: list[dict[str, Any]]) -> tuple[str, int]:
-    """``(error.code, exit code)`` for a command that failed because every provider it needed failed.
-
-    Agreeing providers lend their own code and exit code. Disagreeing ones that all failed upstream
-    (exit 5) are ``upstream_error``; any other mix is ``providers_failed``, exit 1, because a
-    deterministic crash or a bad argument must not read as "retry later".
-    """
-    codes = {row.get("code") for row in failed_rows}
-    exit_codes = {row.get("exit_code") for row in failed_rows}
-    exit_code = exit_codes.pop() if len(exit_codes) == 1 else EXIT_GENERIC
-    if not isinstance(exit_code, int) or exit_code == 0:
-        exit_code = EXIT_GENERIC
-    if len(codes) == 1 and isinstance(code := next(iter(codes)), str):
-        return code, exit_code
-    return ("upstream_error" if exit_code == EXIT_NETWORK else "providers_failed"), exit_code
-
-
 def _doctor_cache_error(payload: Mapping[str, Any]) -> dict[str, Any] | None:
     """A provider doctor's cache failure as ``{code, message}``, or ``None``.
 
@@ -903,11 +1005,11 @@ def _doctor_cache_error(payload: Mapping[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def provider_doctor(provider: str, *, requested_expansion: str | None = None) -> dict[str, Any]:
+def provider_doctor(provider: str, *, requested_expansion: str | None = None, warcraftlogs_endpoint: str = "client") -> dict[str, Any]:
     registration = get_provider(provider)
-    expansion_options: dict[str, str] = {}
+    expansion_options: dict[str, str] = {"endpoint": warcraftlogs_endpoint} if provider == "warcraftlogs" else {}
     if provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion) is None:
-        expansion_options = provider_expansion_options(registration, requested_expansion)
+        expansion_options.update(provider_expansion_options(registration, requested_expansion))
     code, payload = _call_surface(
         provider, "doctor", lambda: registration.surface.doctor(**registration.doctor_options, **expansion_options)
     )
@@ -929,10 +1031,7 @@ def provider_doctor(provider: str, *, requested_expansion: str | None = None) ->
             "configured": None,
         },
         "expansion_support": provider_expansion_support(registration, requested_expansion=requested_expansion),
-        "wrapper_surfaces": {
-            surface: provider_surface_support(registration, surface)
-            for surface in ("doctor", "search", "resolve")
-        },
+        "wrapper_surfaces": {surface: provider_surface_support(registration, surface) for surface in ("doctor", "search", "resolve")},
         "details": payload,
     }
 
@@ -945,7 +1044,7 @@ def provider_tiers() -> dict[str, list[str]]:
     return tiers
 
 
-def global_doctor_payload(*, requested_expansion: str | None = None) -> dict[str, Any]:
+def global_doctor_payload(*, requested_expansion: str | None = None, warcraftlogs_endpoint: str = "client") -> dict[str, Any]:
     included, excluded = expansion_filtered_providers(requested_expansion=requested_expansion)
     return {
         "wrapper": {
@@ -963,7 +1062,10 @@ def global_doctor_payload(*, requested_expansion: str | None = None) -> dict[str
             "state_root": str(state_root()),
             "worktree_runtime": worktree_runtime_details(),
         },
-        "providers": [provider_doctor(provider.name, requested_expansion=requested_expansion) for provider in PROVIDERS],
+        "providers": [
+            provider_doctor(provider.name, requested_expansion=requested_expansion, warcraftlogs_endpoint=warcraftlogs_endpoint)
+            for provider in PROVIDERS
+        ],
         "included_providers": [provider.name for provider in included],
         "excluded_providers": excluded,
     }

@@ -213,7 +213,7 @@ class ArticleBundleError(ProviderError, ValueError):
 
 
 # Bundle row lists and the manifest ``files`` key naming each one. Article providers list all six; a
-# wowhead guide-export lists every one but pages and build references. A manifest that lists none
+# Older Wowhead guide exports omit pages and build references. A manifest that lists none
 # of them is not a bundle, and a listed file that is missing or corrupt makes the bundle unreadable.
 _CONTENT_FILES: Final = {
     "pages": "pages_jsonl",
@@ -804,8 +804,8 @@ def _build_build_reference_rows(
 def _build_reference_total(bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> int:
     """How many bundles a build reference must be in to count as shared.
 
-    Every bundle that can hold build references: a wowhead guide-export never lists a build
-    references file, so it does not keep the others' builds partial. At least two, so a build only
+    Every bundle whose manifest lists a build references file. Legacy exports without that
+    capability do not keep others' builds partial. At least two, so a build only
     one bundle could hold is never shared.
     """
     holders = 0

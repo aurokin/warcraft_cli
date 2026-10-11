@@ -429,7 +429,7 @@ def test_talent_calc_packet_command_rejects_invalid_transport_packet(monkeypatch
 
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", fake_page_html)
     monkeypatch.setattr(
-        "wowhead_cli.main.build_reference_transport_packet_payload",
+        "wowhead_cli.talent_services.build_reference_transport_packet_payload",
         lambda **kwargs: {
             "kind": "talent_transport_packet",
             "transport_status": "validated",
@@ -571,3 +571,43 @@ def test_profiler_reports_no_canonical_url_when_the_fetched_page_names_none(monk
     page = json.loads(result.stdout)["data"]["page"]
     assert page["canonical_url"] is None
     assert page["note"] == "The fetched page carries no canonical link."
+
+
+def test_pure_talent_packet_keeps_exact_transport_when_page_fetch_fails(monkeypatch, capsys) -> None:
+    from wowhead_cli.provider import talent_calc_packet
+
+    def unavailable(self, page_url: str):
+        raise httpx.ConnectError("synthetic offline page")
+
+    monkeypatch.setattr(WowheadClient, "page_html", unavailable)
+    result = talent_calc_packet("druid/balance/ABC123")
+    assert result["data"]["page"]["fetch_error"]["code"] == "network_error"
+    assert result["data"]["talent_transport_packet"]["transport_forms"]["wowhead_talent_calc_url"] == (
+        "https://www.wowhead.com/talent-calc/druid/balance/ABC123"
+    )
+    assert capsys.readouterr().out == ""
+
+
+def test_pure_talent_packet_rejects_missing_build_before_opening_client(monkeypatch) -> None:
+    import pytest
+    from warcraft_core.provider import ProviderError
+    from wowhead_cli.provider import talent_calc_packet
+
+    monkeypatch.setattr("wowhead_cli.provider.open_client", lambda profile: pytest.fail("invalid ref opened client"))
+    with pytest.raises(ProviderError) as exc:
+        talent_calc_packet("druid/balance")
+    assert exc.value.code == "invalid_tool_ref"
+    assert exc.value.exit_code == 2
+
+
+def test_pure_talent_packet_closes_page_client(monkeypatch) -> None:
+    from wowhead_cli.expansion_profiles import resolve_expansion
+    from wowhead_cli.provider import talent_calc_packet
+
+    closed = []
+    client = WowheadClient(expansion=resolve_expansion(None))
+    monkeypatch.setattr(client, "page_html", lambda url: SAMPLE_TALENT_CALC_HTML)
+    monkeypatch.setattr(client, "close", lambda: closed.append(True))
+    monkeypatch.setattr("wowhead_cli.provider.open_client", lambda profile: client)
+    assert talent_calc_packet("druid/balance/ABC123")["ok"] is True
+    assert closed == [True]

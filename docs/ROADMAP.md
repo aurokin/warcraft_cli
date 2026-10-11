@@ -7,6 +7,8 @@ What the repo treats as core, what is supported, what is experimental, and what 
 - Command behavior lives in `docs/<cli>/README.md` and the generated [reference/](reference/README.md).
 - Repo-wide rules live in [foundation/](README.md#foundations) and [architecture/](architecture/README.md).
 
+Tier criteria apply to the operations a provider actually supports: verified typed reads can be supported without free-text discovery. Unimplemented discovery must fail explicitly, and the registry excludes it from fanout.
+
 Tiers are declared in the wrapper registry (`packages/warcraft-cli/src/warcraft_cli/providers.py`) and reported by `warcraft doctor` as `wrapper.tiers`, so this page and the CLI cannot drift.
 
 ## Core
@@ -31,6 +33,7 @@ Real providers with narrower surfaces. They are expected to work and stay covere
 | `icy-veins` | guide extraction, export, local guide query, and calculator-to-import-string conversion |
 | `method` | guide extraction, export, and local guide query |
 | `lorrgs` | public API, no auth; top-parse cooldown timelines and composition rankings |
+| `blizzard` | verified typed Game Data/Profile reads: realms/items, PvP, collections and dated market snapshots; free-text discovery unsupported |
 
 ## Experimental
 
@@ -39,7 +42,6 @@ Thin or unproven surfaces. Do not build a workflow on them without checking `doc
 | Provider | Status |
 |----------|--------|
 | `raidbots` | public report consumption and SimC input handoff; no discovery surface |
-| `blizzard` | verified live for us/eu/kr/tw; realms/items, profiles, PvP, collections and auction/commodity snapshots; `cn` unreachable, search/resolve deferred |
 | `curseforge` | verified live (2026-09-13); thin command surface, addon metadata is at the edge of scope |
 
 ## Retired
@@ -48,7 +50,8 @@ Thin or unproven surfaces. Do not build a workflow on them without checking `doc
 
 ## Next
 
-- Decide whether Blizzard's expanded typed reads earn the `supported` tier while discovery remains deferred. Decide separately whether CurseForge's narrow addon reads earn that tier or leave the product.
+- Complete and verify core provider handoffs before adding providers or analytics commands.
+- Keep CurseForge experimental for explicit addon lookup. Expansion is paused until a concrete compatible stable-release workflow justifies it; current file/changelog selection remains manual.
 - Define wrapper-level `simc` expansion semantics. Warcraft Logs already isolates cache keys by retail/classic/fresh site; its remaining live verification is separate from that implementation.
 
 ## Deferred Candidates

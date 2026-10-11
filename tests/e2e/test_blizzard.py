@@ -48,7 +48,7 @@ def test_doctor_reports_configured_credentials_and_live_routing(require) -> None
     capabilities = result.data["capabilities"]
     assert capabilities["game_data"] == "ready"
     assert capabilities["profile"] == "ready"
-    assert capabilities["search"] == "coming_soon"
+    assert capabilities["search"] == "not_supported"
     # With credentials every read is usable, so the provider is ready, not "partial".
     assert result.data["status"] == "ready", result.describe()
 
@@ -326,16 +326,12 @@ def test_realm_auctions_read_the_connected_realm_the_realm_record_names(require)
     assert classic.data["realm"] == CLASSIC_CHARACTER[1] and classic.data["item_count"] >= 1, classic.describe()
 
 
-def test_search_and_resolve_are_structured_coming_soon_stubs(require) -> None:
+def test_unsupported_discovery_explains_explicit_lookup_alternatives(require) -> None:
     require("blizzard-api")
     for command in ("search", "resolve"):
-        result = run("blizzard", command, "thunderfury")
-        assert result.payload["kind"] == ("search_results" if command == "search" else "resolve_match")
-        assert result.data["coming_soon"] is True
-        assert result.data["results" if command == "search" else "candidates"] == []
-        assert (result.data["count"], result.data["total_matches"], result.data["truncated"]) == (0, None, False)
-        assert result.data["suggested_command"].startswith("blizzard ")
-        assert f"blizzard {command} is not implemented yet" in result.data["message"]
+        result = run("blizzard", command, "thunderfury", expect=EXIT_USAGE, error_code="unsupported_operation")
+        assert result.payload["error"]["details"]["operation"] == command
+        assert result.payload["error"]["details"]["available_commands"], result.describe()
 
 
 def test_an_unknown_item_is_not_found(require) -> None:

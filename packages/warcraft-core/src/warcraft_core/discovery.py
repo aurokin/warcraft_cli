@@ -20,8 +20,6 @@ import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, Literal
 
-from warcraft_core.envelope import Envelope, success_envelope
-
 SEARCH_KIND: Final = "search_results"
 RESOLVE_KIND: Final = "resolve_match"
 
@@ -182,30 +180,3 @@ def resolve_data(
         "truncated": page["truncated"],
         "candidates": page["results"],
     }
-
-
-def stub_envelope(
-    *,
-    provider: str,
-    surface: Literal["search", "resolve"],
-    flag: Literal["coming_soon", "not_supported"],
-    query: str,
-    message: str,
-    suggested_command: str,
-) -> Envelope:
-    """The ``search``/``resolve`` envelope of a surface a provider does not offer: empty data, flagged as such.
-
-    A caller probing the advertised surface gets this instead of Click's "No such command".
-    ``total_matches`` is null: the provider cannot know how many matches exist.
-    """
-    if surface == "search":
-        data = search_data(search_query=query, ranked=[], limit=0)
-    else:
-        data = resolve_data(search_query=query, ranked=[], limit=0, confidence="none", fallback_search_command=None)
-    return success_envelope(
-        provider=provider,
-        command=surface,
-        kind=SEARCH_KIND if surface == "search" else RESOLVE_KIND,
-        query=query,
-        data={**data, "total_matches": None, flag: True, "message": message, "suggested_command": suggested_command},
-    )

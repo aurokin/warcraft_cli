@@ -19,8 +19,9 @@ because each one is published:
 
 - `tests/test_warcraft_cli_packaging.py` asserts every package declares the runtime distributions
   its `src/` actually imports, so the per-package metadata cannot silently rot.
-- The CI `isolated-install` job installs one provider package plus the shared packages into a clean
-  virtualenv and runs its console script, so "install one provider on its own" stays real.
+- CI independently resolves each provider wheel in a clean virtualenv, without preinstalling shared
+  packages, and verifies its runtime outside the checkout. Modular wrapper wheels and the root
+  wheel are also verified, so declared dependencies and bundled data are exercised.
 - Nothing is published to PyPI. Releases attach the wheel to a GitHub release
   (`.github/workflows/release.yml`).
 
@@ -41,7 +42,7 @@ because each one is published:
 | `packages/method-cli/` | `method-cli` | `method_cli` | `method` | supported |
 | `packages/lorrgs-cli/` | `lorrgs-cli` | `lorrgs_cli` | `lorrgs` | supported |
 | `packages/raidbots-cli/` | `raidbots-cli` | `raidbots_cli` | `raidbots` | experimental |
-| `packages/blizzard-api-cli/` | `blizzard-api-cli` | `blizzard_api_cli` | `blizzard` | experimental |
+| `packages/blizzard-api-cli/` | `blizzard-api-cli` | `blizzard_api_cli` | `blizzard` | supported |
 | `packages/curseforge-cli/` | `curseforge-cli` | `curseforge_cli` | `curseforge` | experimental |
 
 The three shared distributions carry a historical `-cli` suffix even though they ship no command.
@@ -49,8 +50,8 @@ Renaming them would break every existing per-package dependency pin for no user-
 
 Tiers are the support level agents should expect; they are declared on each `ProviderRegistration`
 in `packages/warcraft-cli/src/warcraft_cli/providers.py` and surfaced by `warcraft doctor`.
-`blizzard` and `curseforge` are experimental: their endpoints are confirmed live, but they cover a
-small slice of each API.
+`blizzard` is supported for its verified typed Game Data/Profile reads; discovery is independent
+of that support level. `curseforge` stays experimental for its narrow addon lookup scope.
 
 ## Per-Package Structure
 
@@ -99,6 +100,12 @@ Additional rules the linter cannot express:
 - The wrapper reaches providers in-process through the `PROVIDER` surfaces registered in
   `warcraft_cli.providers`. It does not spawn provider binaries, and no other `warcraft_cli` module
   imports a provider package.
+- Composite workflows call output-free provider services through a bounded operation adapter;
+  ordinary provider passthrough keeps the provider's CLI. Shared call protocols and ranking facts
+  live in lightweight modules so workflow imports do not initialize the provider registry.
+- Provider CLI callbacks own argument parsing, output, and exits. SimC build services, Wowhead
+  entity/talent services, Warcraft Logs report operations, Raider.IO profiles, and Lorrgs
+  operations are also usable directly without capturing console output.
 
 ## Root-Level Responsibilities
 

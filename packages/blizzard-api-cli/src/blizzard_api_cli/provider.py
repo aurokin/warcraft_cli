@@ -14,7 +14,6 @@ from typing import Any, Literal
 import httpx
 from warcraft_api.cache import cache_backend_health, redacted_redis_url
 from warcraft_core.auth import provider_auth_status
-from warcraft_core.discovery import stub_envelope
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE, error_code_for_http_status
 from warcraft_core.paths import provider_state_path
@@ -39,10 +38,10 @@ from blizzard_api_cli.client import (
     verification_note,
 )
 
-# Blizzard ships as an experimental provider: the surface is explicit reads only and search/resolve
-# are stubs. The per-region verification posture lives in client.VERIFIED_REGIONS
+# Blizzard ships as a supported provider: the surface is explicit reads only and search/resolve
+# are unsupported. The per-region verification posture lives in client.VERIFIED_REGIONS
 # and client.verification_note(), which --help, doctor and every payload all quote.
-TIER = "experimental"
+TIER = "supported"
 
 # Exit codes for the client's own error codes, which ERROR_CONTRACT's table does not name (so they
 # would otherwise all exit 1). The routing codes are raised while validating flag values, before any
@@ -140,15 +139,15 @@ def doctor_envelope() -> Envelope:
             "region": _region_payload(auth),
             "capabilities": {
                 "doctor": "ready",
-                "search": "coming_soon",
-                "resolve": "coming_soon",
+                "search": "not_supported",
+                "resolve": "not_supported",
                 "game_data": reads,
                 "profile": reads,
             },
             "cache": cache,
             "notes": [
-                "Experimental tier: the surface is explicit reads (realm, item, character, PvP, "
-                "collections, auctions) and search/resolve are stubs.",
+                "Supported tier: the surface is explicit reads (realm, item, character, PvP, "
+                "collections, auctions) and free-text discovery is unsupported.",
                 "Game Data (realm, item, pvp-season, pvp-leaderboard, auctions, commodities) and Profile "
                 "(character, pvp-character, collections) commands ship with live OAuth "
                 "client-credentials auth and region/namespace routing.",
@@ -158,18 +157,11 @@ def doctor_envelope() -> Envelope:
     )
 
 
-def coming_soon_envelope(command: Literal["search", "resolve"], query: str) -> Envelope:
-    """Structured stub for the surfaces doctor advertises as coming_soon (search, resolve)."""
-    return stub_envelope(
-        provider=PROVIDER_NAME,
-        surface=command,
-        flag="coming_soon",
-        query=query,
-        message=(
-            f"blizzard {command} is not implemented yet; use the explicit Game Data / Profile reads. "
-            "Try `blizzard realm <slug>`, `blizzard item <id>`, or `blizzard character <realm> <name>`."
-        ),
-        suggested_command="blizzard realm illidan",
+def unsupported_discovery(command: Literal["search", "resolve"], query: str) -> Envelope:
+    """Typed reads are supported; free-text discovery is outside this provider's scope."""
+    raise ProviderError(
+        "unsupported_operation", f"Blizzard {command} is unsupported. Use an explicit realm, item, or character lookup.",
+        exit_code=EXIT_USAGE, details={"operation": command, "available_commands": ["realm", "item", "character"]},
     )
 
 
@@ -212,17 +204,17 @@ def fetch(
 
 @dataclass(slots=True)
 class BlizzardProvider:
-    """In-process surface for the Blizzard provider; search and resolve are not implemented yet."""
+    """In-process surface for the Blizzard provider; free-text search and resolve are unsupported."""
 
     name: str = PROVIDER_NAME
 
     def search(self, query: str, *, limit: int = 10, **options: Any) -> Envelope:
         del limit, options
-        return coming_soon_envelope("search", query)
+        return unsupported_discovery("search", query)
 
     def resolve(self, target: str, **options: Any) -> Envelope:
         del options
-        return coming_soon_envelope("resolve", target)
+        return unsupported_discovery("resolve", target)
 
     def doctor(self, **options: Any) -> Envelope:
         del options

@@ -12,7 +12,6 @@ from typing import Any, Final, Literal
 
 import httpx
 from warcraft_api.cache import cache_backend_health, redacted_redis_url
-from warcraft_core.discovery import stub_envelope
 from warcraft_core.envelope import Envelope, success_envelope
 from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.provider import ProviderError, ProviderSurface
@@ -48,12 +47,11 @@ NOTES: Final[list[str]] = [
 ]
 
 # Raidbots publishes no report index and no search API, so the in-process search/resolve surfaces the
-# wrapper protocol requires return a structured stub; doctor and the wrapper registry say the same.
+# wrapper protocol requires fail explicitly; doctor and the wrapper registry say the same.
 # The CLI has no search/resolve commands.
 NOT_SUPPORTED_MESSAGE: Final = (
     "Raidbots exposes no public report index; open a known report with `raidbots inspect-report <url-or-id>`."
 )
-SUGGESTED_COMMAND: Final = "raidbots inspect-report REPORT_URL_OR_ID"
 
 # Raidbots needs no auth, and data.json redirects to a public GCS bucket that answers 403 (not 404)
 # for an object that does not exist or has expired — so a 403 here means "no such report", never
@@ -114,23 +112,19 @@ def _citations(report_id: str) -> dict[str, Any]:
 
 
 def _not_supported(command: Literal["search", "resolve"], query: str) -> Envelope:
-    return stub_envelope(
-        provider=PROVIDER_NAME,
-        surface=command,
-        flag="not_supported",
-        query=query,
-        message=NOT_SUPPORTED_MESSAGE,
-        suggested_command=SUGGESTED_COMMAND,
+    raise ProviderError(
+        "unsupported_operation", NOT_SUPPORTED_MESSAGE, exit_code=EXIT_USAGE,
+        details={"operation": command, "available_commands": ["inspect-report", "input", "explain-input"]},
     )
 
 
 def search(query: str, *, limit: int = 10, **options: Any) -> Envelope:
-    """Return the structured not-supported stub: Raidbots has no searchable report index."""
+    """Reject unsupported discovery: Raidbots has no searchable report index."""
     return _not_supported("search", query)
 
 
 def resolve(target: str, **options: Any) -> Envelope:
-    """Return the structured not-supported stub: Raidbots resolves nothing but a known report ID."""
+    """Reject unsupported discovery: Raidbots resolves nothing but a known report ID."""
     return _not_supported("resolve", target)
 
 

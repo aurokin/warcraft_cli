@@ -355,7 +355,7 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     boss_slug = _guild_boss_slug()
 
     result = run(
-        "warcraft",
+        "warcraft", "--warcraftlogs-endpoint", "user",
         "cooldown-packet",
         found.url,
         "--actor-id",
@@ -434,7 +434,7 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
 
     # Without --boss-slug the boss is the Lorrgs boss whose id is the fight's encounter id.
     unnamed = run(
-        "warcraft", "cooldown-packet", found.url, "--actor-id", str(actor["id"]), "--spec-slug", spec_slug,
+        "warcraft", "--warcraftlogs-endpoint", "user", "cooldown-packet", found.url, "--actor-id", str(actor["id"]), "--spec-slug", spec_slug,
         "--phase", "1", "--sample-limit", "1",
     )
     assert unnamed.payload["query"]["boss_slug"] == boss_slug, unnamed.describe()
@@ -445,7 +445,7 @@ def test_cooldown_packet_degrades_when_lorrgs_has_not_cached_the_report(require)
     pressed = max(casts["tracked_casts_by_spell"], key=lambda row: row["count"])
     spell_id = int(pressed["spell"]["spell_id"])
     narrowed = run(
-        "warcraft",
+        "warcraft", "--warcraftlogs-endpoint", "user",
         "cooldown-packet",
         found.url,
         "--actor-id",
@@ -557,13 +557,13 @@ def test_cooldown_packet_without_lorrgs_takes_the_actor_and_spec_from_the_fight_
     found = guild_anchor()
     actor, spec_slug = _lorrgs_capable_actor()
     result = run(
-        "warcraft", "cooldown-packet", found.url, "--actor-name", str(actor["name"]), "--phase", "1", "--sample-limit", "1",
+        "warcraft", "--warcraftlogs-endpoint", "user", "cooldown-packet", found.url, "--actor-name", str(actor["name"]), "--phase", "1", "--sample-limit", "1",
     )
     assert result.data["lorrgs"]["status"] == "unavailable", result.describe()
     assert (result.payload["query"]["actor_id"], result.payload["query"]["spec_slug"]) == (actor["id"], spec_slug), result.describe()
     assert result.payload["query"]["boss_slug"] == _guild_boss_slug(), result.describe()
 
-    missing = run("warcraft", "cooldown-packet", found.url, "--phase", "1", expect=EXIT_USAGE, error_code="missing_actor")
+    missing = run("warcraft", "--warcraftlogs-endpoint", "user", "cooldown-packet", found.url, "--phase", "1", expect=EXIT_USAGE, error_code="missing_actor")
     roster = missing.payload["error"]["details"]["available_players"]
     assert {"id": actor["id"], "name": actor["name"], "type": actor["type"]} in roster, missing.describe()
     assert "--actor-name" in missing.payload["error"]["message"], missing.describe()
@@ -582,15 +582,15 @@ def test_cooldown_packet_without_lorrgs_checks_the_flags_against_the_fight_roste
     base = ("cooldown-packet", found.url, "--phase", "1", "--sample-limit", "0")
 
     unknown = run(
-        "warcraft", *base, "--actor-id", "999999", "--spec-slug", spec_slug,
+        "warcraft", "--warcraftlogs-endpoint", "user", *base, "--actor-id", "999999", "--spec-slug", spec_slug,
         expect=EXIT_NOT_FOUND, error_code="actor_id_not_found",
     )
     offered = {row["id"] for row in unknown.payload["error"]["details"]["available_players"]}
-    assert offered == {player["id"] for player in _fight_roster(found.code, found.fight_id)}, unknown.describe()
+    assert offered == {player["id"] for player in _fight_roster(found.code, found.fight_id, endpoint="user")}, unknown.describe()
 
     other_class = next(slug for slug in sorted(lorrgs_spec_slugs()) if not slug.startswith(f"{str(actor['type']).lower()}-"))
     run(
-        "warcraft", *base, "--actor-id", str(actor["id"]), "--spec-slug", other_class,
+        "warcraft", "--warcraftlogs-endpoint", "user", *base, "--actor-id", str(actor["id"]), "--spec-slug", other_class,
         expect=EXIT_USAGE, error_code="invalid_query",
     )
 
@@ -699,19 +699,19 @@ def test_wrapper_composites_answer_a_missing_actor_or_fight_with_exit_4(require)
     actor, spec_slug = _lorrgs_capable_actor()
 
     fight = run(
-        "warcraft", "cooldown-packet", _report_url(found.code, 9999), "--actor-id", str(actor["id"]), "--spec-slug", spec_slug,
+        "warcraft", "--warcraftlogs-endpoint", "user", "cooldown-packet", _report_url(found.code, 9999), "--actor-id", str(actor["id"]), "--spec-slug", spec_slug,
         "--phase", "1", expect=EXIT_NOT_FOUND, error_code="fight_not_found",
     )
     assert found.fight_id in fight.payload["error"]["details"]["available_fight_ids"], fight.describe()
 
     profile = run(
-        "warcraft", "actor-profile", found.code, "Zzqxnoactorzz", "--fight-id", str(found.fight_id),
+        "warcraft", "--warcraftlogs-endpoint", "user", "actor-profile", found.code, "Zzqxnoactorzz", "--fight-id", str(found.fight_id),
         expect=EXIT_NOT_FOUND, error_code="actor_not_found",
     )
     assert actor["name"] in profile.payload["error"]["details"]["available_actors"], profile.describe()
 
     run(
-        "warcraft", "talent-packet", found.url, "--actor-id", "999999", "--fight-id", str(found.fight_id),
+        "warcraft", "--warcraftlogs-endpoint", "user", "talent-packet", found.url, "--actor-id", "999999", "--fight-id", str(found.fight_id),
         expect=EXIT_NOT_FOUND, error_code="not_found",
     )
 

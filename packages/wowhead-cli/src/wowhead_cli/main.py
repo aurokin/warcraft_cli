@@ -40,27 +40,14 @@ from warcraft_core.cli import (
     shaped_envelope,
 )
 from warcraft_core.envelope import ENVELOPE_KEYS, SCHEMA_VERSION, Envelope
-from warcraft_core.identity import (
-    RETAIL_TALENT_CALCULATORS,
-    TIERED_TALENT_CALCULATORS,
-    WowheadTalentCalcRef,
-    WowheadTalentCalcRefError,
-    build_identity_payload,
-    build_reference_transport_packet_payload,
-    normalize_actor_class,
-    parse_wowhead_talent_calc,
-    validate_talent_transport_packet,
-)
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS, to_json
 from warcraft_core.output import emit as emit_json
 from warcraft_core.provider import ProviderError
 from warcraft_core.timestamps import iso_now_utc, parse_iso8601_utc
 from warcraft_core.wow_normalization import normalize_region
-from warcraft_core.wow_specs import WOW_SPECS
 
-from wowhead_cli import provider
+from wowhead_cli import entity_services, provider
 from wowhead_cli.citation_pack import citation_pack_from_compare, citation_pack_from_entity
-from wowhead_cli.classic_talents import CLASSIC_CALCULATORS, decode_build, talent_data_url, undecodable_reason
 from wowhead_cli.comments_intelligence import build_comments_intelligence, filter_raw_comments
 from wowhead_cli.compare_presets import ResolvedCompareOptions, resolve_compare_options
 from wowhead_cli.entities import (
@@ -70,16 +57,13 @@ from wowhead_cli.entities import (
     comparison_field_diffs,
     comparison_linked_entities_summary,
     dedupe_links,
-    entity_comments_payload,
     entity_linked_entities_payload,
     entity_page_links,
-    entity_page_needs_fetch,
     truncate_text,
     truncated_link_block,
 )
 from wowhead_cli.entity_types import (
     DEFAULT_HYDRATE_ENTITY_TYPES,
-    ENTITY_TYPE_KEYS,
     HYDRATABLE_ENTITY_TYPES,
     PARSER_ENTITY_TYPES,
 )
@@ -88,7 +72,6 @@ from wowhead_cli.expansion_profiles import (
     ExpansionProfile,
     detect_expansion_from_ref,
     detect_expansion_from_url,
-    expansion_url_policy_issues,
     is_wowhead_host,
     list_profiles,
     parse_entity_from_wowhead_url,
@@ -135,7 +118,7 @@ from wowhead_cli.listing_filters import (
     parse_listing_timestamp,
     text_filter_match,
 )
-from wowhead_cli.normalization import attach_entity_normalization, attach_entity_page_normalization
+from wowhead_cli.normalization import attach_entity_page_normalization
 from wowhead_cli.page_parser import (
     clean_markup_text,
     entity_names,
@@ -189,16 +172,6 @@ class WowheadConfig(RuntimeConfig):
     citation_pack: bool = False
 
 
-@dataclass(slots=True)
-class EntityAccessPlan:
-    requested_type: str
-    requested_id: int
-    page_entity_type: str
-    page_entity_id: int
-    tooltip_entity_type: str | None
-    tooltip_entity_id: int | None
-    tooltip_from_page_metadata: bool = False
-    page_from_tooltip_redirect: bool = False
 
 
 def _cfg(ctx: typer.Context) -> WowheadConfig:
@@ -212,13 +185,6 @@ def _client(ctx: typer.Context) -> WowheadClient:
         return WowheadClient(expansion=cfg.expansion)
     except ValueError as exc:
         fail(ctx, "invalid_cache_config", str(exc))
-
-
-def _validated_transport_packet(ctx: typer.Context, packet: Any, *, command_name: str) -> dict[str, Any]:
-    try:
-        return validate_talent_transport_packet(packet)
-    except ValueError as exc:
-        fail(ctx, "invalid_transport_packet", f"{command_name} produced an invalid talent transport packet: {exc}")
 
 
 def _load_cache_settings_or_fail(ctx: typer.Context) -> CacheSettings:
@@ -313,92 +279,10 @@ def _cache_stats_payload(stats: dict[str, Any], *, summary: bool, namespace_limi
     return payload
 
 
-def _build_entity_access_plan(entity_type: str, entity_id: int) -> EntityAccessPlan:
-    normalized_type = entity_type.strip().lower()
-    if normalized_type == "faction":
-        return EntityAccessPlan(
-            requested_type=normalized_type,
-            requested_id=entity_id,
-            page_entity_type="faction",
-            page_entity_id=entity_id,
-            tooltip_entity_type=None,
-            tooltip_entity_id=None,
-            tooltip_from_page_metadata=True,
-        )
-    if normalized_type == "pet":
-        return EntityAccessPlan(
-            requested_type=normalized_type,
-            requested_id=entity_id,
-            page_entity_type="pet",
-            page_entity_id=entity_id,
-            tooltip_entity_type=None,
-            tooltip_entity_id=None,
-            tooltip_from_page_metadata=True,
-        )
-    if normalized_type == "recipe":
-        return EntityAccessPlan(
-            requested_type=normalized_type,
-            requested_id=entity_id,
-            page_entity_type="spell",
-            page_entity_id=entity_id,
-            tooltip_entity_type="spell",
-            tooltip_entity_id=entity_id,
-        )
-    if normalized_type == "mount":
-        return EntityAccessPlan(
-            requested_type=normalized_type,
-            requested_id=entity_id,
-            page_entity_type=normalized_type,
-            page_entity_id=entity_id,
-            tooltip_entity_type="mount",
-            tooltip_entity_id=entity_id,
-            page_from_tooltip_redirect=True,
-        )
-    if normalized_type == "battle-pet":
-        return EntityAccessPlan(
-            requested_type=normalized_type,
-            requested_id=entity_id,
-            page_entity_type=normalized_type,
-            page_entity_id=entity_id,
-            tooltip_entity_type="battle-pet",
-            tooltip_entity_id=entity_id,
-            page_from_tooltip_redirect=True,
-        )
-    return EntityAccessPlan(
-        requested_type=normalized_type,
-        requested_id=entity_id,
-        page_entity_type=normalized_type,
-        page_entity_id=entity_id,
-        tooltip_entity_type=normalized_type,
-        tooltip_entity_id=entity_id,
-    )
 
 
-def _parse_tooltip_final_ref(final_url: str) -> tuple[str, int] | None:
-    parsed = urlparse(final_url)
-    parts = [part for part in parsed.path.split("/") if part]
-    if len(parts) < 3 or parts[0] != "tooltip":
-        return None
-    entity_type = parts[1]
-    raw_id = parts[2]
-    if not raw_id.isdigit():
-        return None
-    return entity_type, int(raw_id)
 
 
-def _build_tooltip_from_page_metadata(metadata: dict[str, str | None]) -> tuple[str | None, dict[str, Any]]:
-    title = metadata.get("title")
-    description = metadata.get("description")
-    parts = [part.strip() for part in (title, description) if isinstance(part, str) and part.strip()]
-    payload: dict[str, Any] = {}
-    if parts:
-        entity_name = title if isinstance(title, str) and title.strip() else None
-        tooltip_text = _clean_tooltip_text(" ".join(parts))
-        payload["text"] = tooltip_text
-        tooltip_summary = _build_tooltip_summary(tooltip_text, entity_name=entity_name)
-        if tooltip_summary:
-            payload["summary"] = tooltip_summary
-    return title if isinstance(title, str) and title.strip() else None, payload
 
 
 def _apply_url_expansion(ctx: typer.Context, url_hint: str | None) -> WowheadConfig:
@@ -426,11 +310,6 @@ def _adopt_expansion(ctx: typer.Context, detected: ExpansionProfile | None, *, s
     return updated
 
 
-def _expansion_policy_notes(cfg: WowheadConfig, *urls: str | None) -> list[str]:
-    notes: list[str] = []
-    for url in urls:
-        notes.extend(expansion_url_policy_issues(url, profile=cfg.expansion))
-    return notes
 
 
 def _parse_entity_ref_token(token: str) -> tuple[str, int]:
@@ -595,181 +474,24 @@ def _hydrate_missing_comment_replies(
     return hydrated
 
 
-BRACKET_FRAGMENT_RE = re.compile(r"""\[[^\]]*\]""")
-ADJACENT_SENTENCE_RE = re.compile(r"""(?P<sentence>[A-Z][^.?!]{8,}?)(?:[.?!])\s+(?P=sentence)(?:[.?!])""")
-FLAVOR_QUOTE_RE = re.compile(r'''\s*"[^"]{20,}"''')
-PAREN_OPEN_SPACE_RE = re.compile(r"""\(\s+""")
-PAREN_CLOSE_SPACE_RE = re.compile(r"""\s+\)""")
-PLUS_STAT_RE = re.compile(r"""(?<!\S)\+\s+(\d)""")
-MONEY_SPAN_RE = re.compile(r"""<span class="money(?P<unit>gold|silver|copper)">(?P<amount>[^<]*)</span>""")
-CURRENCY_LINK_RE = re.compile(
-    r"""<a\b[^>]*\bhref="[^"]*/currency=\d+[^"]*"[^>]*\baria-label="(?P<name>[^"]+)"[^>]*>.*?</a>""",
-    re.DOTALL,
-)
-TOOLTIP_SUMMARY_MARKERS = (
-    "Use:",
-    "Chance on hit:",
-    "Equip:",
-    "Chance on strike:",
-    "Chance on melee hit:",
-)
-TOOLTIP_DESCRIPTION_MARKERS = (
-    "A ",
-    "An ",
-    "Calls forth",
-    "Blasts",
-    "Deals",
-    "Heals",
-    "Summons",
-    "Teleport",
-    "Help ",
-)
-TOOLTIP_METADATA_TERMS = (
-    "Talent",
-    "Passive",
-    "Instant",
-    "Requires",
-    "Range",
-    "Melee",
-    "Cooldown",
-    "Cast",
-    "Runes",
-)
-SENTENCE_END_RE = re.compile(r"""[.?!](?:\s|$)""")
 
 
-def _label_tooltip_money(html: str) -> str:
-    """Spell out the units Wowhead marks only in markup: money spans and currency icon links.
-
-    Flattening the HTML drops both, so ``87 50`` silver/copper or a ``180`` ticket cost would read as bare numbers.
-    """
-    html = MONEY_SPAN_RE.sub(lambda match: f"{match.group('amount')}{match.group('unit')[0]}", html)
-    return CURRENCY_LINK_RE.sub(lambda match: f" {match.group('name')}", html)
 
 
-def _clean_tooltip_text(text: str) -> str:
-    cleaned = BRACKET_FRAGMENT_RE.sub(" ", text)
-    cleaned = FLAVOR_QUOTE_RE.sub(" ", cleaned)
-    cleaned = cleaned.replace("[", " ").replace("]", " ")
-    cleaned = PAREN_OPEN_SPACE_RE.sub("(", cleaned)
-    cleaned = PAREN_CLOSE_SPACE_RE.sub(")", cleaned)
-    cleaned = PLUS_STAT_RE.sub(r"+\1", cleaned)
-    cleaned = cleaned.replace(" .", ".").replace(" ,", ",")
-    cleaned = " ".join(cleaned.split())
-    while True:
-        collapsed = ADJACENT_SENTENCE_RE.sub(r"\g<sentence>.", cleaned)
-        if collapsed == cleaned:
-            break
-        cleaned = collapsed
-    return cleaned.strip()
 
 
-def _strip_leading_entity_name(text: str, *, entity_name: str | None) -> str:
-    if not entity_name:
-        return text
-    if not text.startswith(entity_name):
-        return text
-    remainder = text[len(entity_name):].lstrip(" :-")
-    return remainder.strip() or text
 
 
-def _prefer_tooltip_summary_span(text: str) -> str:
-    best_index: int | None = None
-    for marker in TOOLTIP_SUMMARY_MARKERS:
-        index = text.find(marker)
-        if index <= 0:
-            continue
-        if best_index is None or index < best_index:
-            best_index = index
-    if best_index is None:
-        return text
-    prefix = text[:best_index].strip()
-    if len(prefix) < 24:
-        return text
-    return text[best_index:].strip()
 
 
-def _prefer_first_summary_sentence(text: str) -> str:
-    match = SENTENCE_END_RE.search(text)
-    if match is None:
-        return text
-    sentence = text[: match.end()].strip()
-    if len(sentence) < 24:
-        return text
-    return sentence
 
 
-def _prefer_descriptive_summary_span(text: str) -> str:
-    if any(text.startswith(marker) for marker in TOOLTIP_SUMMARY_MARKERS):
-        return text
-    prefix_lower = text.lower()
-    if not any(term.lower() in prefix_lower for term in TOOLTIP_METADATA_TERMS):
-        return text
-
-    best_index: int | None = None
-    for marker in TOOLTIP_DESCRIPTION_MARKERS:
-        index = text.find(marker)
-        if index < 12:
-            continue
-        if best_index is None or index < best_index:
-            best_index = index
-
-    if best_index is None:
-        return text
-    return text[best_index:].strip()
 
 
-def _build_tooltip_summary(text: str, *, entity_name: str | None, max_chars: int = 220) -> str | None:
-    if not text:
-        return None
-    summary = _strip_leading_entity_name(text, entity_name=entity_name)
-    summary = _prefer_tooltip_summary_span(summary)
-    summary = _prefer_descriptive_summary_span(summary)
-    summary = _prefer_first_summary_sentence(summary)
-    if len(summary) <= max_chars:
-        return summary
-    clipped = summary[: max_chars - 3]
-    if " " in clipped:
-        clipped = clipped.rsplit(" ", 1)[0]
-    return clipped.rstrip(" ,;:-") + "..."
 
 
-def _normalize_tooltip_payload(tooltip: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
-    entity_name = tooltip.get("name")
-    name = entity_name if isinstance(entity_name, str) and entity_name.strip() else None
-
-    tooltip_payload = dict(tooltip)
-    tooltip_html = tooltip_payload.pop("tooltip", None)
-    tooltip_payload.pop("name", None)
-
-    if isinstance(tooltip_html, str):
-        tooltip_payload["html"] = tooltip_html
-        tooltip_text = _clean_tooltip_text(clean_markup_text(_label_tooltip_money(tooltip_html)))
-        tooltip_payload["text"] = tooltip_text
-        tooltip_summary = _build_tooltip_summary(tooltip_text, entity_name=name)
-        if tooltip_summary:
-            tooltip_payload["summary"] = tooltip_summary
-    elif isinstance(tooltip_payload.get("text"), str):
-        tooltip_text = _clean_tooltip_text(str(tooltip_payload["text"]))
-        tooltip_payload["text"] = tooltip_text
-        tooltip_summary = _build_tooltip_summary(tooltip_text, entity_name=name)
-        if tooltip_summary:
-            tooltip_payload["summary"] = tooltip_summary
-
-    return name, tooltip_payload
 
 
-def _entity_page(client: WowheadClient, entity_type: str, entity_id: int) -> tuple[str, dict[str, str | None]]:
-    """Fetch an entity page and its metadata; a failed request raises ``ProviderError``."""
-    with provider.transport_errors():
-        html = client.entity_page_html(entity_type, entity_id)
-    metadata = parse_page_metadata(html, fallback_url=entity_url(entity_type, entity_id, expansion=client.expansion))
-    canonical_url = metadata.get("canonical_url") or ""
-    # Wowhead sends `/items=19019` to its item listing rather than answering 404; a real page of a
-    # type the table lacks keeps the id in its canonical URL (`/title/private-1`).
-    if entity_type not in ENTITY_TYPE_KEYS and re.search(rf"(?<!\d){entity_id}(?!\d)", urlparse(canonical_url).path) is None:
-        raise provider.unknown_entity_type_error(entity_type, details={"canonical_url": canonical_url})
-    return html, metadata
 
 
 def _fetch_entity_page(
@@ -779,7 +501,7 @@ def _fetch_entity_page(
     entity_id: int,
 ) -> tuple[str, dict[str, str | None]]:
     with _upstream(ctx):
-        return _entity_page(client, entity_type, entity_id)
+        return entity_services._entity_page(client, entity_type, entity_id)
 
 
 def _resolve_page_fetch_target(
@@ -789,8 +511,8 @@ def _resolve_page_fetch_target(
     entity_type: str,
     entity_id: int,
     data_env: int | None = None,
-) -> EntityAccessPlan:
-    plan = _build_entity_access_plan(entity_type, entity_id)
+) -> entity_services.EntityAccessPlan:
+    plan = entity_services._build_entity_access_plan(entity_type, entity_id)
     if not plan.page_from_tooltip_redirect:
         return plan
     if plan.tooltip_entity_type is None or plan.tooltip_entity_id is None:
@@ -805,7 +527,7 @@ def _resolve_page_fetch_target(
     except ValueError as exc:
         fail(ctx, "parse_failed", str(exc))
 
-    resolved = _parse_tooltip_final_ref(final_url)
+    resolved = entity_services._parse_tooltip_final_ref(final_url)
     if resolved is None:
         fail(ctx, "invalid_response", f"Could not resolve a page target for {entity_type} {entity_id}.")
     page_entity_type, page_entity_id = resolved
@@ -841,57 +563,10 @@ GUIDE_QUERY_KINDS = ("sections", "analysis_surfaces", "navigation", "linked_enti
 LINK_SOURCE_FILTERS = ("href", "gatherer", "multi")
 
 
-def _entity_tooltip(client: WowheadClient, plan: EntityAccessPlan, *, data_env: int | None) -> tuple[dict[str, Any], str | None]:
-    """Fetch the tooltip the access plan points at; a failed or unreadable response raises ``ProviderError``."""
-    if plan.tooltip_entity_type is None or plan.tooltip_entity_id is None:
-        return {}, None
-    try:
-        with provider.transport_errors():
-            if plan.page_from_tooltip_redirect:
-                return client.tooltip_with_metadata(plan.tooltip_entity_type, plan.tooltip_entity_id, data_env=data_env)
-            return client.tooltip(plan.tooltip_entity_type, plan.tooltip_entity_id, data_env=data_env), None
-    except ValueError as exc:
-        raise ProviderError("parse_failed", str(exc)) from exc
 
 
-def _tooltip_and_page_plan(
-    client: WowheadClient, entity_type: str, entity_id: int, *, data_env: int | None = None
-) -> tuple[EntityAccessPlan, dict[str, Any]]:
-    """The entity's tooltip and access plan, with the page target a mount or battle-pet tooltip redirects to.
-
-    A failed or unreadable response raises ``ProviderError``.
-    """
-    plan = _build_entity_access_plan(entity_type, entity_id)
-    tooltip, tooltip_final_url = _entity_tooltip(client, plan, data_env=data_env)
-    if plan.page_from_tooltip_redirect and tooltip_final_url is not None:
-        resolved = _parse_tooltip_final_ref(tooltip_final_url)
-        if resolved is None:
-            raise ProviderError("invalid_response", f"Could not resolve a page target for {entity_type} {entity_id}.")
-        plan.page_entity_type, plan.page_entity_id = resolved
-    return plan, tooltip
 
 
-def _entity_payload_blocks(
-    payload: dict[str, Any],
-    *,
-    policy_notes: list[str],
-    tooltip_payload: dict[str, Any],
-    comments_citations: dict[str, Any] | None,
-    linked_entities_payload: dict[str, Any] | None,
-    comments_payload: dict[str, Any] | None,
-    facts: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Attach the optional entity blocks, omitting the ones this request did not produce."""
-    optional = {
-        "notes": policy_notes or None,
-        "tooltip": tooltip_payload or None,
-        "facts": facts,
-        "citations": comments_citations,
-        "linked_entities": linked_entities_payload,
-        "comments": comments_payload,
-    }
-    payload.update({key: value for key, value in optional.items() if value is not None})
-    return payload
 
 
 def _build_entity_payload(
@@ -905,92 +580,14 @@ def _build_entity_payload(
     include_all_comments: bool,
     linked_entity_preview_limit: int,
 ) -> dict[str, Any]:
-    """Build the ``entity`` payload; a failed Wowhead request raises ``ProviderError`` for the caller to report."""
+    """Adapt CLI configuration to the output-free entity service."""
     cfg = _cfg(ctx)
-    cached_payload = client.get_cached_entity_response(
-        requested_type=entity_type,
-        requested_id=entity_id,
-        data_env=data_env,
-        include_comments=include_comments,
-        include_all_comments=include_all_comments,
+    return entity_services.build_entity_payload(
+        entity_services.EntityConfig(cfg.expansion, cfg.expansion_source), client,
+        entity_type=entity_type, entity_id=entity_id, data_env=data_env,
+        include_comments=include_comments, include_all_comments=include_all_comments,
         linked_entity_preview_limit=linked_entity_preview_limit,
     )
-    if cached_payload is not None:
-        # The cache key leaves out how this run picked its expansion, so report this run's.
-        return {**cached_payload, "expansion_source": cfg.expansion_source}
-
-    plan, tooltip = _tooltip_and_page_plan(client, entity_type, entity_id, data_env=data_env)
-    canonical = entity_url(plan.page_entity_type, plan.page_entity_id, expansion=cfg.expansion)
-    page_url = canonical
-    entity_name, tooltip_payload = _normalize_tooltip_payload(tooltip)
-    html: str | None = None
-    metadata: dict[str, str | None] | None = None
-
-    if entity_page_needs_fetch(
-        include_comments=include_comments,
-        linked_entity_preview_limit=linked_entity_preview_limit,
-        tooltip_from_page_metadata=plan.tooltip_from_page_metadata,
-    ):
-        html, metadata = _entity_page(client, plan.page_entity_type, plan.page_entity_id)
-        page_url = metadata["canonical_url"] or canonical
-
-    if plan.tooltip_from_page_metadata and metadata is not None:
-        entity_name, tooltip_payload = _build_tooltip_from_page_metadata(metadata)
-    comments_payload, comments_citations = entity_comments_payload(
-        html=html,
-        page_url=page_url,
-        include_comments=include_comments,
-        include_all_comments=include_all_comments,
-    )
-
-    payload = _entity_payload_blocks(
-        {
-            "expansion": cfg.expansion.key,
-            "expansion_source": cfg.expansion_source,
-            "entity": {
-                "type": entity_type,
-                "id": entity_id,
-                "name": entity_name,
-                "page_url": page_url,
-            },
-        },
-        policy_notes=_expansion_policy_notes(cfg, page_url, canonical),
-        tooltip_payload=tooltip_payload,
-        comments_citations=comments_citations,
-        linked_entities_payload=entity_linked_entities_payload(
-            html=html,
-            page_url=page_url,
-            page_entity_type=plan.page_entity_type,
-            page_entity_id=plan.page_entity_id,
-            requested_entity_type=entity_type,
-            requested_entity_id=entity_id,
-            linked_entity_preview_limit=linked_entity_preview_limit,
-            expansion=cfg.expansion,
-        ),
-        comments_payload=comments_payload,
-        # The compact summary gives each location's spawn count; entity-page lists the coordinates.
-        facts=extract_page_facts(
-            html,
-            page_url=page_url,
-            page_entity_type=plan.page_entity_type,
-            page_entity_id=plan.page_entity_id,
-            coords=False,
-        )
-        if html is not None
-        else None,
-    )
-
-    payload = attach_entity_normalization(payload, entity_type=entity_type, tooltip=tooltip, page=metadata)
-    client.set_cached_entity_response(
-        payload,
-        requested_type=entity_type,
-        requested_id=entity_id,
-        data_env=data_env,
-        include_comments=include_comments,
-        include_all_comments=include_all_comments,
-        linked_entity_preview_limit=linked_entity_preview_limit,
-    )
-    return payload
 
 
 def _load_or_build_cached_entity_payload(
@@ -1076,6 +673,7 @@ def _load_guide_export(export_dir: Path) -> dict[str, Any]:
         "gatherer_entities": load_jsonl_from_manifest("gatherer_entities_jsonl"),
         "comments": load_jsonl_from_manifest("comments_jsonl"),
         "analysis_surfaces": load_jsonl_from_manifest("analysis_surfaces_jsonl"),
+        "build_references": load_jsonl_from_manifest("build_references_jsonl"),
     }
 
 
@@ -1316,19 +914,6 @@ def _normalize_blue_tracker_row(row: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-# Retail build codes are Blizzard loadout strings (base64 letters, digits, ``+``); classic ones are digits and ``-``.
-_TALENT_CALC_BUILD_CODE_RE = re.compile(r"[A-Za-z0-9+_-]+")
-# After a classic build code: its selection order (TalentCalcClassic's two rank alphabets); after a MoP one, glyphs.
-_TALENT_CALC_EXTRA_SEGMENT_RE = re.compile(r"[A-Za-z0-9.!_~^-]+")
-# Blizzard specialization ids by class and spec key. Wowhead's listed builds carry one as ``spec``, and
-# a retail build code's loadout header encodes one.
-_WOW_SPEC_IDS: dict[tuple[str, str], int] = {(spec.class_key, spec.key): spec.spec_id for spec in WOW_SPECS}
-_WOW_SPEC_BY_ID = {spec_id: class_spec for class_spec, spec_id in _WOW_SPEC_IDS.items()}
-_LOADOUT_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-_RETAIL_BUILD_CODE_REASON = (
-    "Retail build codes are Blizzard loadout strings; `warcraft talent-describe` or `simc describe-build` decodes them."
-)
-
 
 def _absolute_tool_url(raw: str, *, tool_slug: str) -> str | None:
     """Return the absolute Wowhead URL for ``raw`` when it already is one, else None."""
@@ -1356,220 +941,20 @@ def _normalize_tool_ref(ref: str, *, tool_slug: str, expansion: ExpansionProfile
     return tool_url(normalized, expansion=expansion)
 
 
-def _talent_calc_state(ref: str, *, default_expansion: str) -> dict[str, Any]:
-    """Split a talent-calc ref into its URL, calculator, class, spec and build code; raises ValueError.
-
-    The shared parser reads the path; Wowhead adds the build code checks: the characters a code uses
-    and, on a retail calculator, that the loadout header names the path's spec.
-    """
-    parsed = parse_wowhead_talent_calc(ref, default_expansion=default_expansion)
-    if isinstance(parsed, WowheadTalentCalcRefError):
-        raise ValueError(parsed.message)
-    build_code = parsed.build_code
-    spec_id: int | None = None
-    if parsed.spec is not None and parsed.expansion in RETAIL_TALENT_CALCULATORS:
-        spec_id = _talent_calc_spec_id(parsed, build_code)
-    if build_code is not None and _TALENT_CALC_BUILD_CODE_RE.fullmatch(build_code) is None:
-        raise ValueError(f"Talent calculator build code {build_code!r} holds characters no build code uses.")
-    extra = parsed.extra_segment
-    if extra is not None and _TALENT_CALC_EXTRA_SEGMENT_RE.fullmatch(extra) is None:
-        raise ValueError(f"Talent calculator segment {extra!r} after the build code holds characters no calculator uses.")
-    return {
-        "state_url": parsed.reference_url,
-        "expansion": parsed.expansion,
-        "actor_class": parsed.actor_class,
-        "class_slug": parsed.class_slug,
-        "spec_slug": parsed.spec_slug,
-        "spec_id": spec_id,
-        "build_code": build_code,
-        "extra_segment": extra,
-        "path_segments": list(parsed.path_segments),
-        "has_build_code": build_code is not None,
-    }
 
 
-def _loadout_spec_id(build_code: str) -> int | None:
-    """The spec id in a Blizzard loadout string's header, an 8-bit version then a 16-bit spec id.
-
-    The string packs 6 bits per character, least significant first, so the first four characters
-    hold the header. Returns None for a code that is not a known spec's loadout string.
-    """
-    header = build_code[:4]
-    if len(header) < 4 or any(char not in _LOADOUT_ALPHABET for char in header):
-        return None
-    bits = sum(_LOADOUT_ALPHABET.index(char) << (6 * index) for index, char in enumerate(header))
-    spec_id = bits >> 8
-    return spec_id if spec_id in _WOW_SPEC_BY_ID else None
 
 
-def _talent_calc_spec_id(parsed: WowheadTalentCalcRef, build_code: str | None) -> int:
-    """The spec id a retail talent-calc path names; raises when the build code is another spec's loadout."""
-    spec_id = _WOW_SPEC_IDS[(parsed.actor_class, parsed.spec or "")]
-    encoded = _loadout_spec_id(build_code) if build_code else None
-    if encoded is not None and encoded != spec_id:
-        encoded_class, encoded_spec = _WOW_SPEC_BY_ID[encoded]
-        raise ValueError(f"Build code is a {encoded_class}/{encoded_spec} loadout, not {parsed.class_slug}/{parsed.spec_slug}.")
-    return spec_id
 
 
-def _extract_talent_calc_listed_builds(html: str, *, spec_id: int, limit: int) -> dict[str, Any] | None:
-    """The builds Wowhead lists for ``spec_id``; the page embeds every spec's builds in one block."""
-    try:
-        payload = extract_json_script(html, "data.wow.talentCalcDragonflight.live.talentBuilds")
-    except (ValueError, json.JSONDecodeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    rows: list[dict[str, Any]] = []
-    for raw_id, raw_row in payload.items():
-        if not isinstance(raw_row, dict) or raw_row.get("spec") != spec_id:
-            continue
-        row_id = raw_row.get("id")
-        if not isinstance(row_id, int):
-            try:
-                row_id = int(raw_id)
-            except ValueError:
-                row_id = None
-        row = {
-            "id": row_id,
-            "name": raw_row.get("name"),
-            "hash": raw_row.get("hash"),
-            "spec_id": raw_row.get("spec"),
-            "listed": raw_row.get("isListed"),
-        }
-        rows.append(row)
-    rows.sort(key=lambda row: (row.get("name") or "", row.get("id") or 0))
-    return {
-        "count": len(rows),
-        "items": rows[:limit],
-    }
 
 
-def _base_talent_calc_payload(
-    ctx: typer.Context,
-    *,
-    ref: str,
-) -> dict[str, Any]:
-    cfg = _cfg(ctx)
-    try:
-        state = _talent_calc_state(ref, default_expansion=cfg.expansion.key)
-    except ValueError as exc:
-        fail(ctx, "invalid_tool_ref", str(exc))
-    state_url = state.pop("state_url")
-    actor_class = state.pop("actor_class")
-    named = bool(state.get("spec_slug"))
-    return {
-        "expansion": state["expansion"],
-        "tool": {
-            "kind": "talent-calc",
-            "input": ref,
-            "state_url": state_url,
-            "page_url": state_url,
-            **state,
-        },
-        "build_identity": build_identity_payload(
-            actor_class=actor_class,
-            spec=state.get("spec_slug"),
-            confidence="high" if named else "none",
-            source="wowhead_talent_calc_url",
-            candidates=[(actor_class, state.get("spec_slug"))] if named else None,
-            source_notes=["class/spec came from the explicit Wowhead talent-calc URL path"],
-        ),
-        "page": {
-            "title": None,
-            "description": None,
-            "canonical_url": None,
-        },
-        "citations": {
-            "page": state_url,
-        },
-    }
 
 
-def _talents_block(client: WowheadClient, html: str, tool: dict[str, Any]) -> dict[str, Any]:
-    """The decoded ``talents`` of a classic calculator build, or ``decoded: false`` with the reason it is not decoded."""
-    calculator = str(tool["expansion"])
-    if calculator not in CLASSIC_CALCULATORS:
-        return {"decoded": False, "reason": _RETAIL_BUILD_CODE_REASON}
-    extra_key = "glyphs_code" if calculator in TIERED_TALENT_CALCULATORS else "selection_order"
-    extra = {extra_key: tool["extra_segment"]} if tool["extra_segment"] else {}
-    reason = undecodable_reason(calculator, spec_named=tool["spec_slug"] is not None)
-    if reason is not None:
-        return {"decoded": False, "reason": reason, **extra}
-    data_url = talent_data_url(html)
-    if data_url is None:
-        return {"decoded": False, "reason": "The calculator page names no talent data file.", **extra}
-    try:
-        with provider.transport_errors():
-            data = client.talent_calc_data(data_url)
-    except ProviderError as exc:
-        return {
-            "decoded": False,
-            "reason": "The talent data file could not be fetched.",
-            "fetch_error": {"code": exc.code, "message": exc.message},
-            "data_url": data_url,
-            **extra,
-        }
-    except ValueError as exc:
-        return {"decoded": False, "reason": f"The talent data file did not parse: {exc}", "data_url": data_url, **extra}
-    actor_class = normalize_actor_class(tool["class_slug"]) or ""
-    decoded = decode_build(data, calculator=calculator, actor_class=actor_class, build_code=str(tool["build_code"]))
-    return {**decoded, **extra, "data_url": data_url}
 
 
-def _enrich_talent_calc_payload_with_page_data(
-    ctx: typer.Context,
-    payload: dict[str, Any],
-    *,
-    listed_build_limit: int,
-    fail_on_fetch_error: bool,
-    decode_talents: bool = False,
-) -> dict[str, Any]:
-    state_url = str(payload["tool"]["state_url"])
-    # A broken cache config has already written its error envelope, so it fails the command.
-    client = _client(ctx)
-    try:
-        with provider.transport_errors():
-            html = client.page_html(state_url)
-    except ProviderError as exc:
-        if fail_on_fetch_error:
-            fail(ctx, exc.code, exc.message, exit_code=exc.exit_code, details=exc.details)
-        # The build code in the URL still answers; the page metadata and listed builds are what is missing.
-        return {**payload, "page": {**payload["page"], "fetch_error": {"code": exc.code, "message": exc.message}}}
-    metadata = parse_page_metadata(html, fallback_url=state_url)
-    page_url = absolute_wowhead_url(metadata.get("canonical_url"), fallback=state_url) or state_url
-    enriched_payload = dict(payload)
-    enriched_tool = dict(payload["tool"])
-    enriched_tool["page_url"] = page_url
-    enriched_payload["tool"] = enriched_tool
-    enriched_payload["page"] = {
-        "title": metadata.get("title"),
-        "description": metadata.get("description"),
-        "canonical_url": page_url,
-    }
-    spec_id = payload["tool"]["spec_id"]
-    listed_builds = None if spec_id is None else _extract_talent_calc_listed_builds(html, spec_id=spec_id, limit=listed_build_limit)
-    if listed_builds is not None:
-        enriched_payload["listed_builds"] = listed_builds
-    if decode_talents and enriched_tool["build_code"] is not None:
-        enriched_payload["talents"] = _talents_block(client, html, enriched_tool)
-    return enriched_payload
 
 
-def _talent_calc_payload(
-    ctx: typer.Context,
-    *,
-    ref: str,
-    listed_build_limit: int,
-) -> dict[str, Any]:
-    payload = _base_talent_calc_payload(ctx, ref=ref)
-    return _enrich_talent_calc_payload_with_page_data(
-        ctx,
-        payload,
-        listed_build_limit=listed_build_limit,
-        fail_on_fetch_error=True,
-        decode_talents=True,
-    )
 
 
 def _parse_profession_tree_state(state_url: str) -> dict[str, Any]:
@@ -2033,6 +1418,8 @@ def _bundle_observed_counts(corpus: dict[str, Any], entities_manifest: dict[str,
     return {
         "sections": len(corpus.get("sections") or []),
         "analysis_surfaces": len(corpus.get("analysis_surfaces") or []),
+        **({"build_references": len(corpus.get("build_references") or [])}
+           if "build_references_jsonl" in (corpus.get("manifest", {}).get("files") or {}) else {}),
         "navigation_links": len(corpus.get("navigation_links") or []),
         "linked_entities": len(corpus.get("linked_entities") or []),
         "gatherer_entities": len(corpus.get("gatherer_entities") or []),
@@ -3076,7 +2463,7 @@ def news_post(
     if recent_posts is not None:
         payload["related"] = recent_posts
     # A WoW Forever post has no expansion profile here, so `expansion` is only the default.
-    policy_notes = _expansion_policy_notes(cfg, page_url)
+    policy_notes = entity_services._expansion_policy_notes(cfg.expansion, page_url)
     if policy_notes:
         payload["notes"] = policy_notes
     _emit(ctx, payload)
@@ -3281,7 +2668,9 @@ def talent_calc(
     ),
 ) -> None:
     """Parse a Wowhead talent calculator ref into class, spec, and build code, decoding a classic build into its talents."""
-    _emit(ctx, _talent_calc_payload(ctx, ref=ref, listed_build_limit=listed_build_limit))
+    with _upstream(ctx):
+        result = provider.talent_calc(ref, listed_build_limit=listed_build_limit, expansion=_cfg(ctx).expansion.key)
+    emit(ctx, result)
 
 
 @app.command("talent-calc-packet")
@@ -3301,48 +2690,18 @@ def talent_calc_packet(
     out: str | None = typer.Option(None, "--out", help="Optional path to write just the exact talent transport packet JSON."),
 ) -> None:
     """Emit an exact talent transport packet from a Wowhead talent calculator ref."""
-    payload = _base_talent_calc_payload(ctx, ref=ref)
-    if not payload["tool"].get("has_build_code"):
-        fail(ctx, "invalid_tool_ref", "talent-calc packet refs must include an explicit build code.")
-    if payload["tool"].get("spec_slug") is None:
-        fail(ctx, "invalid_tool_ref", "talent-calc packet refs must name a spec: /talent-calc/<class>/<spec>/<build-code>.")
-    payload = _enrich_talent_calc_payload_with_page_data(
-        ctx,
-        payload,
-        listed_build_limit=listed_build_limit,
-        fail_on_fetch_error=False,
-    )
-    packet = _validated_transport_packet(
-        ctx,
-        build_reference_transport_packet_payload(
-            ref=str(payload["tool"]["state_url"]),
-            provider="wowhead",
-            source="wowhead_talent_calc_url",
-            source_url=str(payload["page"]["canonical_url"] or payload["tool"]["state_url"]),
-            notes=["exact transport packet came from an explicit Wowhead talent-calc ref"],
-            scope={"type": "wowhead_talent_calc", "expansion": str(payload["tool"]["expansion"])},
-        ),
-        command_name="wowhead talent-calc-packet",
-    )
-    written_packet_path: str | None = None
+    with _upstream(ctx):
+        result = provider.talent_calc_packet(ref, listed_build_limit=listed_build_limit, expansion=_cfg(ctx).expansion.key)
+    packet = result["data"]["talent_transport_packet"]
     if isinstance(out, str) and out.strip():
         try:
             output_path = Path(out).expanduser().resolve()
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
-            written_packet_path = str(output_path)
+            result["data"]["written_packet_path"] = str(output_path)
         except OSError as exc:
             fail(ctx, "transport_packet_write_failed", f"Failed to write talent transport packet: {exc}")
-    _emit(
-        ctx,
-        {
-            "provider": "wowhead",
-            "kind": "talent_calc_packet",
-            **payload,
-            "talent_transport_packet": packet,
-            "written_packet_path": written_packet_path,
-        },
-    )
+    emit(ctx, result)
 
 
 @app.command("profession-tree")
@@ -3616,7 +2975,7 @@ def _guide_summary_payload(
         },
     }
     # Wowhead serves the retail guide for a /classic/guide=<id> lookup; say so instead of labelling it classic.
-    policy_notes = _expansion_policy_notes(cfg, canonical_url)
+    policy_notes = entity_services._expansion_policy_notes(cfg.expansion, canonical_url)
     if policy_notes:
         payload["notes"] = policy_notes
     page_meta = _page_meta_block(parse_page_meta_json(html))
@@ -4409,7 +3768,7 @@ def _entity_page_payload(
             "comments": f"{canonical_url}#comments",
         },
     }
-    policy_notes = _expansion_policy_notes(cfg, canonical_url, raw_canonical)
+    policy_notes = entity_services._expansion_policy_notes(cfg.expansion, canonical_url, raw_canonical)
     if policy_notes:
         payload["notes"] = policy_notes
     page_meta = _page_meta_block(parse_page_meta_json(html))
@@ -4780,10 +4139,10 @@ def _compare_entity_record(
     # The same access plan `entity` uses: recipe reads the spell, mount and battle-pet follow the
     # tooltip redirect, and faction and pet have no tooltip route, so their name comes from the page.
     with _upstream(ctx, context=token):
-        plan, tooltip = _tooltip_and_page_plan(client, entity_type, entity_id)
+        plan, tooltip = entity_services._tooltip_and_page_plan(client, entity_type, entity_id)
     html, metadata = _fetch_entity_page(ctx, client, plan.page_entity_type, plan.page_entity_id)
     if plan.tooltip_from_page_metadata:
-        tooltip = {"name": _build_tooltip_from_page_metadata(metadata)[0]}
+        tooltip = {"name": entity_services._build_tooltip_from_page_metadata(metadata)[0]}
     page_type, page_id = plan.page_entity_type, plan.page_entity_id
     raw_canonical = metadata["canonical_url"] or entity_url(page_type, page_id, expansion=cfg.expansion)
     canonical_url = (

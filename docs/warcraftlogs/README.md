@@ -12,7 +12,11 @@ Companion docs:
 ## Auth
 
 Public commands use the OAuth client-credentials flow. `auth whoami` and other user-scoped
-endpoints need a saved user token from the authorization-code or PKCE flow.
+endpoints need a saved user token from the authorization-code or PKCE flow. Typed reads default
+to `--endpoint client`, even when a saved user token exists. Use `warcraftlogs --endpoint user
+report <private-code>` for private data, or `--endpoint auto` to deliberately prefer a locally valid
+saved user token. Rejected user requests never silently fall back to public data. Raw `graphql`
+retains its command-local `--endpoint` option (default `auto`); `auth whoami` always uses user auth.
 
 Credentials:
 - `WARCRAFTLOGS_CLIENT_ID`
@@ -35,8 +39,10 @@ from the callback. `--scope` (repeatable) selects the OAuth scopes: `view-user-p
 
 `doctor` and `auth status` probe live access by default (`rate_limit()` for public access,
 `current_user()` for user access). Pass `--no-live` for local readiness only. `doctor`'s `status` is
-`ready` when public API access is, and `degraded` otherwise (no client credentials, or a failed
-probe): every data command needs that access, and each capability then names the reason. `doctor` also reports
+`ready` when the selected command endpoint is ready, and `degraded` otherwise.
+`auth.command_endpoint_policy`, `auth.command_endpoint`, and `auth.command_access` distinguish
+public readiness from saved user access. A rejected saved token does not block public commands;
+`warcraftlogs --endpoint user doctor` reports its failure. Each capability names its access reason. `doctor` also reports
 `installed`, `language`, and the resolved `cache` configuration (backend, directory, TTLs); a Redis
 backend that does not answer, or a cache config that does not parse (`cache.error.code:
 "invalid_cache_config"`), is `cache.available: false` with the reason in `cache.error`, and makes

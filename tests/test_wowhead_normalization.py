@@ -51,7 +51,7 @@ def test_entity_command_emits_schema_version_for_items(monkeypatch) -> None:
             "inventoryType": 17,
         },
     )
-    monkeypatch.setattr("wowhead_cli.main.entity_page_needs_fetch", lambda **kwargs: False)
+    monkeypatch.setattr("wowhead_cli.entity_services.entity_page_needs_fetch", lambda **kwargs: False)
 
     result = runner.invoke(app, ["entity", "item", "19019", "--no-include-comments"])
     assert result.exit_code == 0, result.output

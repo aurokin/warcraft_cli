@@ -26,6 +26,7 @@ from warcraft_core.cli import (
 )
 from warcraft_core.exit_codes import EXIT_GENERIC, EXIT_USAGE
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
+from warcraft_core.provider import ProviderError
 from warcraft_core.shapes import as_dict, as_list
 
 from warcraft_cli.actor_profile import actor_profile_payload
@@ -41,6 +42,7 @@ from warcraft_cli.guide_compare import (
     simc_handoff_failure,
 )
 from warcraft_cli.guild import guild_merge_payload, normalized_identity, raiderio_guild_summary
+from warcraft_cli.provider_calls import ProviderFetch, ProviderInvoke
 from warcraft_cli.provider_contract import (
     compact_resolve_match,
     compact_wrapper_candidate,
@@ -56,6 +58,7 @@ from warcraft_cli.providers import (
     DescribeOptions,
     ProviderCalls,
     ProviderRegistration,
+    discovery_filtered_providers,
     expansion_filtered_providers,
     expansion_support_snapshot,
     failed_call,
@@ -63,6 +66,7 @@ from warcraft_cli.providers import (
     global_doctor_payload,
     invoke_provider_command,
     list_providers,
+    normalize_discovery_scope,
     parse_json_object,
     provider_expansion_args,
     provider_expansion_exclusion_reason,
@@ -88,6 +92,8 @@ app = typer.Typer(add_completion=False, help="Warcraft wrapper CLI for routing t
 
 def _emit(ctx: typer.Context, payload: Mapping[str, Any], *, err: bool = False) -> None:
     emit(ctx, wrapper_envelope(ctx.info_name or "", payload), err=err)
+
+
 GUIDE_COMPARE_BUNDLES_ARGUMENT = typer.Argument(
     ...,
     help="Two or more exported guide bundle directories from wowhead, method, or icy-veins.",
@@ -99,6 +105,7 @@ class WrapperConfig(RuntimeConfig):
     """Shared runtime config plus the wrapper's one extra global flag."""
 
     requested_expansion: str | None = None
+    warcraftlogs_endpoint: str = "client"
 
 
 @app.callback()
@@ -110,12 +117,19 @@ def main_callback(
     fields_strict: FieldsStrictOption = False,
     profile: ProfileOption = None,
     compact_max_chars: CompactMaxCharsOption = DEFAULT_COMPACT_MAX_CHARS,
+    warcraftlogs_endpoint: str = typer.Option(
+        "client",
+        "--warcraftlogs-endpoint",
+        help="WCL endpoint for composites and wrapper doctor: client, user, auto. Passthrough uses native --endpoint.",
+    ),
     expansion: str | None = typer.Option(
         None,
         "--expansion",
         help="Filter wrapper search/resolve to a specific expansion profile. Passed through to expansion-aware providers like wowhead.",
     ),
 ) -> None:
+    if warcraftlogs_endpoint not in {"client", "user", "auto"}:
+        raise typer.BadParameter("Choose client, user, or auto.", param_hint="--warcraftlogs-endpoint")
     requested_expansion: str | None = None
     if expansion is not None:
         try:
@@ -131,7 +145,7 @@ def main_callback(
         fields_strict=fields_strict,
         profile=profile,
         compact_max_chars=compact_max_chars,
-        config=WrapperConfig(requested_expansion=requested_expansion),
+        config=WrapperConfig(requested_expansion=requested_expansion, warcraftlogs_endpoint=warcraftlogs_endpoint),
     )
 
 
@@ -302,8 +316,13 @@ def _provider_payload_result(
     args: list[str],
     *,
     expansion: str | None,
+    warcraftlogs_endpoint: str = "client",
 ) -> dict[str, Any]:
-    result = provider_invoke(provider, args, expansion=expansion)
+    result = (
+        provider_invoke(provider, args, expansion=expansion, warcraftlogs_endpoint=warcraftlogs_endpoint)
+        if provider == "warcraftlogs" and warcraftlogs_endpoint != "client"
+        else provider_invoke(provider, args, expansion=expansion)
+    )
     payload = result.get("payload") if isinstance(result.get("payload"), dict) else None
     failure = failed_call(result)
     if failure is not None:
@@ -311,9 +330,35 @@ def _provider_payload_result(
     return {"provider": provider, "status": "ok", "payload": payload, "exit_code": 0}
 
 
-def _provider_calls() -> ProviderCalls:
-    """The provider seams, read from this module at call time so a test can replace any one of them."""
-    return ProviderCalls(invoke=provider_invoke, resolve=provider_resolve, search=provider_search, simc=simc_call)
+def _selected_invoke(ctx: typer.Context | None = None) -> ProviderInvoke:
+    endpoint = cfg_as(ctx, WrapperConfig).warcraftlogs_endpoint if ctx is not None else "client"
+    if endpoint == "client":
+        return provider_invoke
+
+    def invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, Any]:
+        if provider == "warcraftlogs":
+            return provider_invoke(provider, args, expansion=expansion, warcraftlogs_endpoint=endpoint)
+        return provider_invoke(provider, args, expansion=expansion)
+
+    return invoke
+
+
+def _provider_fetch(ctx: typer.Context) -> ProviderFetch:
+    endpoint = cfg_as(ctx, WrapperConfig).warcraftlogs_endpoint
+    if endpoint == "client":
+        return _provider_payload_result
+
+    def fetch(provider: str, args: list[str], *, expansion: str | None) -> dict[str, Any]:
+        if provider == "warcraftlogs":
+            return _provider_payload_result(provider, args, expansion=expansion, warcraftlogs_endpoint=endpoint)
+        return _provider_payload_result(provider, args, expansion=expansion)
+
+    return fetch
+
+
+def _provider_calls(ctx: typer.Context | None = None) -> ProviderCalls:
+    """Read injected provider seams at call time, with the selected WCL auth policy explicit."""
+    return ProviderCalls(invoke=_selected_invoke(ctx), resolve=provider_resolve, search=provider_search, simc=simc_call)
 
 
 def _provider_outcome(result: Mapping[str, Any]) -> dict[str, Any]:
@@ -426,9 +471,7 @@ def _provider_warnings(providers: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-def _fan_out(
-    registrations: list[ProviderRegistration], call: Callable[[ProviderRegistration], dict[str, Any]]
-) -> list[dict[str, Any]]:
+def _fan_out(registrations: list[ProviderRegistration], call: Callable[[ProviderRegistration], dict[str, Any]]) -> list[dict[str, Any]]:
     """``call`` for every provider at once, so a query waits for the slowest provider rather than all of
     them in turn; the results come back in ``registrations`` order.
 
@@ -462,10 +505,7 @@ def _emit_fanout(ctx: typer.Context, payload: dict[str, Any]) -> None:
     failed_rows = payload["failed_providers"]
     if failed_rows and not payload["answered_provider_count"]:
         code, exit_code = shared_failure(failed_rows)
-        message = (
-            f"No provider answered: {len(failed_rows)} providers failed and no other included provider "
-            "searched this query."
-        )
+        message = f"No provider answered: {len(failed_rows)} providers failed and no other included provider searched this query."
         error = {"code": code, "message": message, "details": {"failed_providers": failed_rows}}
         _emit(ctx, {"ok": False, "query": payload["query"], "error": error}, err=True)
         raise typer.Exit(exit_code)
@@ -499,7 +539,12 @@ def _raiderio_source(identity: dict[str, str], *, expansion: str | None) -> dict
 @app.command("doctor")
 def doctor(ctx: typer.Context) -> None:
     """Report wrapper and per-provider readiness: tiers, auth, expansion support, and runtime paths."""
-    _emit(ctx, global_doctor_payload(requested_expansion=_requested_expansion(ctx)))
+    _emit(
+        ctx,
+        global_doctor_payload(
+            requested_expansion=_requested_expansion(ctx), warcraftlogs_endpoint=cfg_as(ctx, WrapperConfig).warcraftlogs_endpoint
+        ),
+    )
 
 
 @app.command("schema")
@@ -529,7 +574,14 @@ def search(
         help="Return a smaller wrapper payload: compact candidate rows and no per-provider payloads.",
     ),
     ranking_debug: bool = typer.Option(
-        False, "--ranking-debug", help="Include compact wrapper ranking summaries for the returned candidates."),
+        False, "--ranking-debug", help="Include compact wrapper ranking summaries for the returned candidates."
+    ),
+    provider: list[str] | None = typer.Option(
+        None, "--provider", help="Provider to query; repeat for a subset. Use registry names such as blizzard-api."
+    ),
+    entity_type: list[str] | None = typer.Option(
+        None, "--entity-type", help="Entity kind to return; repeat for multiple kinds. Some providers filter bounded candidates."
+    ),
     expansion_debug: bool = typer.Option(
         False,
         "--expansion-debug",
@@ -538,19 +590,32 @@ def search(
 ) -> None:
     """Fan out a free-text query to every search-ready provider and rank the merged candidates."""
     _require_query(ctx, query)
+    try:
+        selected_providers, selected_types = normalize_discovery_scope(provider, entity_type)
+    except ProviderError as exc:
+        fail(ctx, exc.code, exc.message, details=exc.details, exit_code=exc.exit_code)
     requested_expansion = _requested_expansion(ctx)
     expansion_included, excluded_providers = expansion_filtered_providers(requested_expansion=requested_expansion)
+    scope_included, scope_excluded = discovery_filtered_providers(
+        expansion_included, providers=selected_providers, entity_types=selected_types
+    )
     included_registrations, surface_excluded = surface_filtered_providers(
-        expansion_included,
+        scope_included,
         surface="search",
         requested_expansion=requested_expansion,
     )
-    excluded_providers = [*excluded_providers, *surface_excluded]
+    excluded_providers = [*excluded_providers, *scope_excluded, *surface_excluded]
     providers: list[dict[str, Any]] = []
     flattened: list[dict[str, Any]] = []
     results = _fan_out(
         included_registrations,
-        lambda registration: provider_search(registration.name, query, limit=limit, expansion=requested_expansion),
+        lambda registration: provider_search(
+            registration.name,
+            query,
+            limit=limit,
+            expansion=requested_expansion,
+            **({"entity_types": selected_types} if selected_types else {}),
+        ),
     )
     for registration, result in zip(included_registrations, results, strict=True):
         provider_payload = result.get("payload")
@@ -595,6 +660,7 @@ def search(
     payload: dict[str, Any] = {
         "query": query,
         "provider_count": len(list_providers()),
+        "filters": {"providers": list(selected_providers), "entity_types": list(selected_types)},
         "requested_expansion": requested_expansion,
         "expansion_filter_active": requested_expansion is not None,
         "included_providers": [registration.name for registration in included_registrations],
@@ -628,6 +694,12 @@ def resolve(
     ranking_debug: bool = typer.Option(
         False, "--ranking-debug", help="Include the first --limit providers' matches in ranking order, each with its resolved flag."
     ),
+    provider: list[str] | None = typer.Option(
+        None, "--provider", help="Provider to query; repeat for a subset. Use registry names such as blizzard-api."
+    ),
+    entity_type: list[str] | None = typer.Option(
+        None, "--entity-type", help="Entity kind to return; repeat for multiple kinds. Some providers filter bounded candidates."
+    ),
     expansion_debug: bool = typer.Option(
         False,
         "--expansion-debug",
@@ -642,18 +714,30 @@ def resolve(
     any lower match a provider resolved under `provider_resolved_candidates`.
     """
     _require_query(ctx, query)
+    try:
+        selected_providers, selected_types = normalize_discovery_scope(provider, entity_type)
+    except ProviderError as exc:
+        fail(ctx, exc.code, exc.message, details=exc.details, exit_code=exc.exit_code)
     requested_expansion = _requested_expansion(ctx)
     expansion_included, excluded_providers = expansion_filtered_providers(requested_expansion=requested_expansion)
+    scope_included, scope_excluded = discovery_filtered_providers(
+        expansion_included, providers=selected_providers, entity_types=selected_types
+    )
     included_registrations, surface_excluded = surface_filtered_providers(
-        expansion_included,
+        scope_included,
         surface="resolve",
         requested_expansion=requested_expansion,
     )
-    excluded_providers = [*excluded_providers, *surface_excluded]
+    excluded_providers = [*excluded_providers, *scope_excluded, *surface_excluded]
     providers: list[dict[str, Any]] = []
     ranked: list[dict[str, Any]] = []
     results = _fan_out(
-        included_registrations, lambda registration: provider_resolve(registration.name, query, expansion=requested_expansion)
+        included_registrations,
+        lambda registration: (
+            provider_resolve(registration.name, query, expansion=requested_expansion, entity_types=selected_types)
+            if selected_types
+            else provider_resolve(registration.name, query, expansion=requested_expansion)
+        ),
     )
     for registration, result in zip(included_registrations, results, strict=True):
         provider_payload = result.get("payload")
@@ -682,6 +766,7 @@ def resolve(
     payload: dict[str, Any] = {
         "query": query,
         "provider_count": len(list_providers()),
+        "filters": {"providers": list(selected_providers), "entity_types": list(selected_types)},
         "requested_expansion": requested_expansion,
         "expansion_filter_active": requested_expansion is not None,
         "included_providers": [registration.name for registration in included_registrations],
@@ -747,7 +832,7 @@ def actor_profile(
         region=region,
         allow_unlisted=allow_unlisted,
         expansion=_requested_expansion(ctx),
-        fetch=_provider_payload_result,
+        fetch=_provider_fetch(ctx),
     )
     _emit(ctx, payload)
 
@@ -803,7 +888,7 @@ def cooldown_packet(
         allow_unlisted=allow_unlisted,
         expansion=_requested_expansion(ctx),
     )
-    emit_cooldown_packet(ctx, request, fetch=_provider_payload_result)
+    emit_cooldown_packet(ctx, request, fetch=_provider_fetch(ctx))
 
 
 @app.command("guide-compare")
@@ -898,7 +983,7 @@ def guide_compare_query(
             simc_decode=simc_decode,
             simc_build_limit=simc_build_limit,
         ),
-        _provider_calls(),
+        _provider_calls(ctx),
     )
     _emit(ctx, payload, err=exit_code != 0)
     if exit_code != 0:
@@ -942,7 +1027,7 @@ def talent_packet(
         validate=validate,
         expansion=_requested_expansion(ctx),
     )
-    _emit(ctx, talent_packet_payload(ctx, request, out=out, calls=_provider_calls()))
+    _emit(ctx, talent_packet_payload(ctx, request, out=out, calls=_provider_calls(ctx)))
 
 
 @app.command("talent-describe")
@@ -1017,7 +1102,7 @@ def talent_describe(
         priority_limit=priority_limit,
         inactive_limit=inactive_limit,
     )
-    _emit(ctx, talent_describe_payload(ctx, request, packet_out=packet_out, describe=describe, calls=_provider_calls()))
+    _emit(ctx, talent_describe_payload(ctx, request, packet_out=packet_out, describe=describe, calls=_provider_calls(ctx)))
 
 
 @app.command("guide-builds-simc")
@@ -1082,10 +1167,7 @@ def _register_passthrough(registration: ProviderRegistration) -> None:
 
     app.command(
         registration.command,
-        help=(
-            f"Proxy to the {registration.command} CLI ({registration.tier} tier). "
-            "Remaining arguments are passed through unchanged."
-        ),
+        help=(f"Proxy to the {registration.command} CLI ({registration.tier} tier). Remaining arguments are passed through unchanged."),
         context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
     )(passthrough)
 

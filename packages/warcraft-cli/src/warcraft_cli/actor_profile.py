@@ -24,7 +24,8 @@ from warcraft_cli.crosswalk import (
     reconcile_class_spec,
     report_actor_names,
 )
-from warcraft_cli.providers import ProviderFetch, parse_lorrgs_report_reference, provider_payload_data, source_exit_code
+from warcraft_cli.provider_calls import ProviderFetch, provider_payload_data, source_exit_code
+from warcraft_cli.providers import parse_lorrgs_report_reference
 
 _ACTOR_PROFILE_JOIN_RULE = "soft match on region + realm + character name; not a canonical cross-provider actor id"
 

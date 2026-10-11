@@ -40,7 +40,8 @@ These flags exist on every binary — the `warcraft` wrapper and all eleven prov
 
 Some binaries add their own global flags: `warcraft` and `wowhead` take `--expansion` (a version
 profile; the wrapper passes it through to expansion-aware providers), `warcraftlogs` takes
-`--site retail|classic|fresh`, and `simc` takes `--repo-root`. The per-binary lists are in
+`--site retail|classic|fresh`, `--endpoint client|user|auto` (public client by default), and
+`--refresh` to refetch queried cache entries; `simc` takes `--repo-root`. The per-binary lists are in
 [reference/](reference/README.md).
 
 ```bash

@@ -1,6 +1,6 @@
 # Blizzard API CLI (`blizzard`)
 
-**Tier: experimental — verified live.** The endpoint hosts, OAuth token URL, and namespace
+**Tier: supported — verified live.** The endpoint hosts, OAuth token URL, and namespace
 strings were confirmed against the live API on 2026-09-13 for the `us`, `eu`, `kr`, and `tw`
 regions (retail and classic Game Data, retail Profile), and on 2026-10-03 for the progression Classic,
 Classic Era and Anniversary Profile and Game Data namespaces, so every read carries
@@ -8,8 +8,7 @@ Classic Era and Anniversary Profile and Game Data namespaces, so every read carr
 2026-10-03; which game versions answer them is in
 [Game versions](#game-versions-for-pvp-collections-and-auctions). `cn` stays `verified: false`
 because its host is unreachable from where this repo is tested. `doctor` reports
-`data.tier: "experimental"`, `live_confirmed`, and the verified and unverified regions. The tier
-stays experimental because search and resolve are stubs, not because the data is suspect. Re-verify with:
+`data.tier: "supported"`, `live_confirmed`, and the verified and unverified regions. The tier covers verified typed reads; free-text discovery is independently unsupported. Re-verify with:
 
 ```bash
 make test-e2e E2E_PATHS="tests/e2e/test_blizzard.py"
@@ -22,7 +21,7 @@ client credentials and emits the shared JSON envelope.
 
 | Command | Behavior |
 |---------|----------|
-| `blizzard doctor` | Reports install state, auth posture, region routing, capability metadata, cache configuration, and the experimental tier. `status` is `ready` with client credentials and `degraded` without them, when `game_data` and `profile` read `requires_client_credentials`, or when the cache config does not parse or a Redis cache backend does not answer (`cache.available: false`; an unparsable config also carries `cache.error.code: "invalid_cache_config"`). |
+| `blizzard doctor` | Reports install state, auth posture, region routing, capability metadata, cache configuration, and the supported tier. `status` is `ready` with client credentials and `degraded` without them, when `game_data` and `profile` read `requires_client_credentials`, or when the cache config does not parse or a Redis cache backend does not answer (`cache.available: false`; an unparsable config also carries `cache.error.code: "invalid_cache_config"`). |
 | `blizzard realm <slug>` | Reads `/data/wow/realm/{slug}` from the dynamic Game Data namespace. |
 | `blizzard item <item-id>` | Reads `/data/wow/item/{id}` from the static Game Data namespace. |
 | `blizzard character <realm-slug> <name>` | Reads `/profile/wow/character/{realm}/{name}` from the profile namespace, for every game version. Also takes `<region> <realm-slug> <name>`, the order `raiderio` and `warcraftlogs` use; a positional region that differs from `--region` is `invalid_query` (exit 2). |
@@ -32,8 +31,8 @@ client credentials and emits the shared JSON envelope.
 | `blizzard collections <realm-slug> <name>` | A character's mounts, pets, toys, heirlooms and transmog appearances: counts plus a filtered, limited list. See [Collections](#collections). |
 | `blizzard auctions <realm-slug>` | The realm's connected-realm auction house, summarized per item id. See [Auctions and commodities](#auctions-and-commodities). |
 | `blizzard commodities` | The region-wide retail commodity market, summarized per item id. See [Auctions and commodities](#auctions-and-commodities). |
-| `blizzard search <query>` | Coming soon. Returns a `kind: "search_results"` envelope with `coming_soon: true`, no rows and exit 0, not an error. |
-| `blizzard resolve <query>` | Coming soon. Returns a `kind: "resolve_match"` envelope with `coming_soon: true`, `confidence: "none"`, no candidates and exit 0, not an error. |
+| `blizzard search <query>` | Unsupported. Returns `unsupported_operation` on stderr and exits 2; use explicit typed reads. |
+| `blizzard resolve <query>` | Unsupported. Returns `unsupported_operation` on stderr and exits 2; use explicit typed reads. |
 
 `realm` and `character` also take a realm display name or the other slug spelling (`Mal'Ganis`,
 `mal-ganis`, `Tarren Mill`). Blizzard's slug drops apostrophes, keeps word breaks and keeps accented letters (`malganis`,
@@ -58,7 +57,7 @@ played is `not_found` (exit 4).
 `pvp-character` and `collections` take the same `<realm> <name>` / `<region> <realm> <name>`
 arguments and realm spellings as `character`; `auctions` takes the same realm spellings as `realm`.
 
-`search` and `resolve` accept `--limit` (1-50, default 5); it is ignored until those surfaces ship.
+`search` and `resolve` retain `--limit` for compatibility, but always fail explicitly. The wrapper excludes them from discovery.
 
 ## PvP
 

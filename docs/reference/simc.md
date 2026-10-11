@@ -39,7 +39,7 @@ Clone or update the managed SimulationCraft checkout.
 
 ## simc search
 
-Return the structured coming-soon stub for free-text search.
+Fail explicitly for unsupported free-text discovery.
 
 **Arguments**
 
@@ -51,11 +51,11 @@ Return the structured coming-soon stub for free-text search.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 5 | Unused until simc search ships. |
+| `--limit` | int range [1<=x<=50] | 5 | Compatibility limit; free-text discovery is unsupported. |
 
 ## simc resolve
 
-Return the structured coming-soon stub for free-text resolution.
+Fail explicitly for unsupported free-text resolution.
 
 **Arguments**
 
@@ -67,7 +67,7 @@ Return the structured coming-soon stub for free-text resolution.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 5 | Unused until simc resolve ships. |
+| `--limit` | int range [1<=x<=50] | 5 | Compatibility limit; free-text resolution is unsupported. |
 
 ## simc version
 
@@ -138,6 +138,25 @@ Resolve class/spec identity for a build without decoding its talents.
 | `--hero-talents` | str |  | Split hero talents string. |
 | `--actor-class` | str |  | Actor class such as monk or evoker. |
 | `--spec` | str |  | Spec name such as mistweaver. |
+
+## simc apply-build
+
+Validate an explicit build and apply its talents to a supplied profile without changing gear.
+
+**Arguments**
+
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `profile_path` | path | required | Standalone single-actor profile supplying gear and simulation settings. |
+
+**Options**
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--out` | path | required | Destination profile; must differ from the source. |
+| `--build-packet` | str |  | Path to a talent transport packet JSON file. |
+| `--build-text` | str |  | Inline build text, talent hash, or Wowhead talent-calc URL with build code. |
+| `--overwrite` | boolean | false | Replace an existing destination profile. |
 
 ## simc validate-talent-transport
 

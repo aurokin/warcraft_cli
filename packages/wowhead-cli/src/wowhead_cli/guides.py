@@ -303,6 +303,7 @@ class GuideExportAssets:
     gatherer_items: list[Any]
     comment_items: list[Any]
     analysis_surfaces: list[Any]
+    build_references: list[Any] = field(default_factory=list)
 
 
 
@@ -380,6 +381,10 @@ def write_guide_export_assets(
         "analysis-surfaces.jsonl",
         (payload.get("analysis_surfaces") or {}).get("items") if isinstance(payload.get("analysis_surfaces"), dict) else [],
     )
+    build_reference_items = write_jsonl_asset(
+        "build_references_jsonl", "build-references.jsonl",
+        (payload.get("build_references") or {}).get("items") if isinstance(payload.get("build_references"), dict) else [],
+    )
 
     structured_data = payload.get("structured_data")
     if structured_data is not None:
@@ -394,6 +399,7 @@ def write_guide_export_assets(
         gatherer_items=gatherer_items,
         comment_items=comment_items,
         analysis_surfaces=analysis_surface_items,
+        build_references=build_reference_items,
     )
 
 
@@ -432,7 +438,9 @@ def guide_export_manifest(
             "hydrated_entities": len(hydration.items),
             "comments": len(assets.comment_items),
             "analysis_surfaces": len(assets.analysis_surfaces),
+            "build_references": len(assets.build_references),
         },
+        "build_reference_exclusions": (payload.get("build_references") or {}).get("excluded_references", []),
         "hydration": {
             "enabled": options.hydrate_linked_entities,
             "types": list(options.hydrate_types),

@@ -9,6 +9,7 @@ from warcraft_core.envelope import Envelope
 from warcraft_core.exit_codes import EXIT_USAGE
 from warcraft_core.provider import ProviderError
 
+from lorrgs_cli import operations
 from lorrgs_cli.client import PROVIDER_NAME, LorrgsClient
 from lorrgs_cli.provider import (
     call_api,
@@ -119,12 +120,7 @@ def spec_spells(
     spec_slug: str = typer.Argument(..., help=_SPEC_HELP),
 ) -> None:
     """Fetch the tracked cooldown spells for one spec."""
-    _emit_surface(
-        ctx,
-        lambda: call_spec_api(
-            "spec-spells", "spec_spells", spec_slug, {"spec_slug": spec_slug}, lambda client, slug: client.spec_spells(slug)
-        ),
-    )
+    _emit_surface(ctx, lambda: operations.spec_spells(spec_slug))
 
 
 @app.command("zones")
@@ -173,7 +169,7 @@ def zone_bosses(
 @app.command("bosses")
 def bosses(ctx: typer.Context) -> None:
     """List every boss Lorrgs tracks."""
-    _run_command(ctx, "bosses", "bosses", {}, lambda client: client.bosses())
+    _emit_surface(ctx, operations.bosses)
 
 
 @app.command("boss")
@@ -192,8 +188,7 @@ def boss_spells(
     boss_slug: str = typer.Argument(..., help="Lorrgs boss slug, e.g. chimaerus-the-undreamt-god."),
 ) -> None:
     """Fetch the tracked boss abilities for one encounter."""
-    query = {"boss_slug": boss_slug}
-    _run_command(ctx, "boss-spells", "boss_spells", query, lambda client: client.boss_spells(boss_slug))
+    _emit_surface(ctx, lambda: operations.boss_spells(boss_slug))
 
 
 @app.command("spell")
@@ -221,22 +216,7 @@ def spec_ranking(
     metric: str | None = typer.Option(None, "--metric", help="Metric override, e.g. dps or hps. Defaults by spec role."),
 ) -> None:
     """Fetch top-parse cooldown timelines for one spec on one encounter."""
-    query = {"spec_slug": spec_slug, "boss_slug": boss_slug, "difficulty": difficulty, "metric": metric}
-    _emit_surface(
-        ctx,
-        lambda: call_spec_api(
-            "spec-ranking",
-            "spec_ranking",
-            spec_slug,
-            query,
-            lambda client, slug: note_empty_ranking(
-                client.spec_ranking(
-                    spec_slug=slug, boss_slug=boss_slug, difficulty=validated_difficulty(difficulty), metric=metric
-                ),
-                f"{slug} reports for {boss_slug} on {difficulty}",
-            ),
-        ),
-    )
+    _emit_surface(ctx, lambda: operations.spec_ranking(spec_slug, boss_slug, difficulty=difficulty, metric=metric))
 
 
 @app.command("spec-ranking-info")
@@ -349,20 +329,8 @@ def user_report_fights(
     data_type: str | None = typer.Option(None, "--type", help="Optional report view type, e.g. damage-done. Defaults to type from URL."),
 ) -> None:
     """Fetch selected fights from an already-cached Lorrgs user report."""
-    report_id, parsed_fight_id, parsed_report_type = _report_reference_or_fail(ctx, report_ref)
-    if fight and fight_id:
-        fail(ctx, "invalid_query", "Pass --fight or --fight-id, not both.", exit_code=EXIT_USAGE)
-    resolved_fight = fight or ".".join(map(str, fight_id or [])) or (str(parsed_fight_id) if parsed_fight_id is not None else None)
-    resolved_type = data_type or parsed_report_type
-    if not resolved_fight:
-        fail(ctx, "missing_fight", "Pass --fight (or --fight-id) or provide a report URL containing fight=<id>.", exit_code=EXIT_USAGE)
-    query = {"report_ref": report_ref, "report_id": report_id, "fight": resolved_fight, "player": player, "type": resolved_type}
-    _run_command(
-        ctx,
-        "user-report-fights",
-        "user_report_fights",
-        query,
-        lambda client: client.user_report_fights(report_id=report_id, fight=resolved_fight, player=player, data_type=resolved_type),
+    _emit_surface(
+        ctx, lambda: operations.user_report_fights(report_ref, fight=fight, fight_ids=fight_id, player=player, data_type=data_type)
     )
 
 

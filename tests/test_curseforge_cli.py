@@ -49,8 +49,8 @@ def test_doctor_reports_auth_and_capabilities() -> None:
     assert auth["lookup_order"][-1] == "environment"
     capabilities = payload["data"]["capabilities"]
     assert capabilities["doctor"] == "ready"
-    assert capabilities["search"] == "coming_soon"
-    assert capabilities["resolve"] == "coming_soon"
+    assert capabilities["search"] == "not_supported"
+    assert capabilities["resolve"] == "not_supported"
     assert capabilities["addon"] == "requires_api_key"
     assert payload["data"]["cache"]["ttls"] == {"addon": 3600}
     # curseforge stays experimental for its small surface, but the endpoints it uses are confirmed.

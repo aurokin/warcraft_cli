@@ -118,6 +118,11 @@
 
 ## Boundaries
 
+- Guide exports include `build-references.jsonl` for explicit calculator links and published
+  loadout codes in the guide body. Keep their source URLs and citations when handing them to
+  SimC or `warcraft guide-compare`. Native `/talent-calc/blizzard/<loadout>` references keep
+  unknown class/spec identity until decoded; never assign identity from the guide title.
+  `manifest.build_reference_exclusions` explains rejected calculator references.
 - database-family browse/filter pages are intentionally deferred
 - `dressing-room` and `profiler` are state inspectors, not full decoders; `profiler` fails with
   `not_found` when Wowhead says the list does not exist

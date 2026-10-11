@@ -1,7 +1,7 @@
 """One search/resolve data shape, every provider.
 
-Every ``PROVIDER`` surface's ``search`` and ``resolve`` answer with the shape ``warcraft_core.discovery``
-builds, checked here on populated offline answers called with ``limit=1`` so ``truncated`` is exercised.
+Supported ``PROVIDER`` discovery surfaces use ``warcraft_core.discovery`` shapes. Unsupported
+operations fail explicitly; populated offline answers exercise truncation with ``limit=1``.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 from warcraft_cli.main import app as warcraft_app
 from warcraft_cli.providers import PROVIDERS
 from warcraft_core.discovery import RESOLVE_KIND, SEARCH_KIND
+from warcraft_core.provider import ProviderError
 
 from tests.cli_testkit import DISCOVERY_STUBS
 from tests.discovery_contract import resolve_data_violations, row_violations, search_data_violations
@@ -33,10 +34,18 @@ def test_discovery_surface_returns_the_shared_shape(registration: Any, surface: 
     for target, replacement in stub.seams:
         monkeypatch.setattr(target, replacement)
     call = registration.surface.search if surface == "search" else registration.surface.resolve
+    capability = registration.wrapper_capabilities[surface]
+    if capability == "not_supported":
+        with pytest.raises(ProviderError) as failure:
+            call(stub.query, limit=1)
+        assert failure.value.code == "unsupported_operation"
+        assert failure.value.exit_code == 2
+        assert failure.value.details["operation"] == surface
+        assert failure.value.details["available_commands"]
+        return
     payload = call(stub.query, limit=1)
 
     data = payload["data"]
-    capability = registration.wrapper_capabilities[surface]
     assert payload["kind"] == (SEARCH_KIND if surface == "search" else RESOLVE_KIND)
     violations = search_data_violations if surface == "search" else resolve_data_violations
     assert violations(data, provider=registration.name) == []

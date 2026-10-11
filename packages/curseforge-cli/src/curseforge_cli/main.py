@@ -4,6 +4,7 @@ import httpx
 import typer
 from warcraft_core.cli import emit, fail, guarded_run, install_common_callback
 from warcraft_core.exit_codes import EXIT_AUTH, EXIT_NOT_FOUND, exit_code_for
+from warcraft_core.provider import ProviderError
 
 from curseforge_cli.client import CurseForgeClientError, transport_error_code, verification_note
 from curseforge_cli.provider import PROVIDER, PROVIDER_NAME, addon_envelope
@@ -14,7 +15,7 @@ app = typer.Typer(
     # disagree about whether the endpoints are confirmed.
     help=(
         "Public CurseForge addon API CLI (World of Warcraft). Experimental tier: the surface is one "
-        "addon lookup plus doctor and search/resolve are stubs. " + verification_note()
+        "addon lookup plus doctor and free-text discovery is unsupported. " + verification_note()
     ),
 )
 install_common_callback(app, provider=PROVIDER_NAME)
@@ -60,20 +61,26 @@ def addon(
 def search(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Free-text query. Addon discovery search is not implemented yet."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused until curseforge search ships."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Compatibility limit; free-text discovery is unsupported."),
 ) -> None:
-    """Coming soon: structured addon discovery search is not implemented yet."""
-    emit(ctx, PROVIDER.search(query, limit=limit))
+    """Fail explicitly for unsupported free-text addon discovery."""
+    try:
+        emit(ctx, PROVIDER.search(query, limit=limit))
+    except ProviderError as exc:
+        fail(ctx, exc.code, exc.message, exit_code=exc.exit_code, details=exc.details)
 
 
 @app.command("resolve")
 def resolve(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Free-text query. Conservative resolution is not implemented yet."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused until curseforge resolve ships."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Compatibility limit; free-text discovery is unsupported."),
 ) -> None:
-    """Coming soon: conservative single-addon resolution is not implemented yet."""
-    emit(ctx, PROVIDER.resolve(query, limit=limit))
+    """Fail explicitly for unsupported free-text addon resolution."""
+    try:
+        emit(ctx, PROVIDER.resolve(query, limit=limit))
+    except ProviderError as exc:
+        fail(ctx, exc.code, exc.message, exit_code=exc.exit_code, details=exc.details)
 
 
 def run() -> None:

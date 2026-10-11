@@ -161,10 +161,10 @@ def current_raid_zone() -> dict[str, Any]:
     return zone
 
 
-def _fight_roster(code: str, fight_id: int, *, required: bool = True) -> tuple[dict[str, Any], ...]:
+def _fight_roster(code: str, fight_id: int, *, required: bool = True, endpoint: str = "client") -> tuple[dict[str, Any], ...]:
     """The fight's players by role. Warcraft Logs keeps no player details for some reports; such a
     roster fails the journey unless ``required`` is false, when it comes back empty."""
-    result = run("warcraftlogs", "report-encounter-players", code, "--fight-id", str(fight_id))
+    result = run("warcraftlogs", "--endpoint", endpoint, "report-encounter-players", code, "--fight-id", str(fight_id))
     roles = (result.data["player_details"] or {}).get("roles") or {}
     roster = [{**row, "role": role} for role, rows in roles.items() for row in rows if isinstance(row, dict)]
     if not roster and required:
@@ -182,9 +182,9 @@ class FightWindow:
     end_ms: float
 
 
-def _absolute_fight_window(code: str, fight_id: int) -> FightWindow:
-    report = run("warcraftlogs", "report", code).data["report"]
-    fights = run("warcraftlogs", "report-fights", code).data["fights"]
+def _absolute_fight_window(code: str, fight_id: int, *, endpoint: str = "client") -> FightWindow:
+    report = run("warcraftlogs", "--endpoint", endpoint, "report", code).data["report"]
+    fights = run("warcraftlogs", "--endpoint", endpoint, "report-fights", code).data["fights"]
     fight = next((row for row in fights if row.get("id") == fight_id), None)
     if fight is None:
         raise JourneyFailure(f"report {code} has no fight {fight_id}")
@@ -200,7 +200,7 @@ def _absolute_fight_window(code: str, fight_id: int) -> FightWindow:
 @cache
 def guild_reports(zone_id: int) -> tuple[dict[str, Any], ...]:
     """The pinned guild's most recent reports in one zone; the guild anchor and the wide cohort share them."""
-    result = run("warcraftlogs", "guild-reports", *GUILD, "--zone-id", str(zone_id), "--limit", str(DISCOVERY_REPORT_LIMIT))
+    result = run("warcraftlogs", "--endpoint", "user", "guild-reports", *GUILD, "--zone-id", str(zone_id), "--limit", str(DISCOVERY_REPORT_LIMIT))
     return tuple(result.data["reports"])
 
 
@@ -215,7 +215,7 @@ def guild_anchor() -> Anchor:
         if report.get("visibility") != "private":
             continue
         code = str(report["code"])
-        fights = run("warcraftlogs", "report-fights", code).data["fights"]
+        fights = run("warcraftlogs", "--endpoint", "user", "report-fights", code).data["fights"]
         # Only the tier's own bosses: a raid-zone report can also hold a Mythic+ run (difficulty 10),
         # whose dungeon "encounter" would otherwise win the difficulty tie-break below.
         raid_bosses = {int(boss["id"]) for boss in zone["encounters"]}
@@ -225,7 +225,7 @@ def guild_anchor() -> Anchor:
         # Prefer the hardest difficulty in the report; ties go to the latest pull.
         fight = max(kills, key=lambda row: (row.get("difficulty") or 0, row.get("id") or 0))
         # Some of the guild's reports carry no player details at all (Lf1hGgRZcXzM9nN6); the next one does.
-        roster = _fight_roster(code, int(fight["id"]), required=False)
+        roster = _fight_roster(code, int(fight["id"]), required=False, endpoint="user")
         if not roster:
             continue
         return Anchor(
@@ -281,7 +281,7 @@ def anchor() -> Anchor:
             fight = next((row for row in fights if row.get("id") == fight_id and row.get("kill")), None)
             if fight is None:
                 continue
-            roster = _fight_roster(code, fight_id)
+            roster = _fight_roster(code, fight_id, endpoint="client")
             return Anchor(
                 zone=zone,
                 code=code,
@@ -331,7 +331,7 @@ def _guild_boss_cohorts(zone: dict[str, Any], scanned: list[str]) -> Iterator[Wi
             "--report-pages", SAMPLE_REPORT_PAGES,
             "--reports-per-page", str(DISCOVERY_REPORT_LIMIT),
         )
-        result = run("warcraftlogs", "boss-kills", *args, "--top", str(WIDE_COHORT_TOP))
+        result = run("warcraftlogs", "--endpoint", "user", "boss-kills", *args, "--top", str(WIDE_COHORT_TOP))
         kills = tuple(result.data["kills"])
         sample = result.data["sample"]
         scanned.append(
@@ -759,7 +759,7 @@ def test_guild_family_reports_the_pinned_guild(require):
     assert all(isinstance(rank, int) for rank in (world, region, server)), rankings.describe()
     assert 0 < server <= region <= world, rankings.describe()
 
-    attendance = run("warcraftlogs", "guild-attendance", *GUILD, "--limit", "3")
+    attendance = run("warcraftlogs", "--endpoint", "user", "guild-attendance", *GUILD, "--limit", "3")
     rows = attendance.data["guild_attendance"]
     assert rows["count"] > 0, attendance.describe()
     night = rows["attendance"][0]
@@ -903,7 +903,7 @@ def test_reports_and_guild_reports_list_the_current_tier(require):
     assert len(rows) == 3, public.describe()
     assert all(row["zone"]["id"] == zone["id"] for row in rows), public.describe()
 
-    listing = run("warcraftlogs", "guild-reports", *GUILD, "--zone-id", str(zone["id"]), "--limit", "3")
+    listing = run("warcraftlogs", "--endpoint", "user", "guild-reports", *GUILD, "--zone-id", str(zone["id"]), "--limit", "3")
     guild_rows = _rows(listing, "reports")
     assert all(row["guild"]["name"].lower() == pins.GUILD_NAME for row in guild_rows), listing.describe()
     assert listing.data["pagination"]["total"] > 0, listing.describe()
@@ -918,8 +918,8 @@ def test_report_listings_page_forward(require):
     Warcraft Logs' own pagination block can witness its page.
     """
     require("warcraftlogs")
-    wide = run("warcraftlogs", "guild-reports", *GUILD, "--limit", "4")
-    paged = run("warcraftlogs", "guild-reports", *GUILD, "--limit", "2", "--page", "2")
+    wide = run("warcraftlogs", "--endpoint", "user", "guild-reports", *GUILD, "--limit", "4")
+    paged = run("warcraftlogs", "--endpoint", "user", "guild-reports", *GUILD, "--limit", "2", "--page", "2")
     codes = [row["code"] for row in _rows(wide, "reports")]
     assert len(codes) == 4, wide.describe()
     assert [row["code"] for row in _rows(paged, "reports")] == codes[2:], paged.describe()
@@ -972,7 +972,7 @@ def test_report_visibility_decides_which_token_can_read_it(require):
     )
 
     # The normal report command reads the private one too; it names the pinned guild.
-    detail = run("warcraftlogs", "report", private.code).data["report"]
+    detail = run("warcraftlogs", "--endpoint", "user", "report", private.code).data["report"]
     assert detail["guild"]["name"].lower() == pins.GUILD_NAME, detail
 
 
@@ -1677,7 +1677,7 @@ def test_top_kills_orders_a_multi_kill_cohort_by_duration(require):
     cohort = wide_cohort()
     assert len({row["duration_ms"] for row in cohort.kills}) >= 2, cohort.kills
 
-    result = run("warcraftlogs", "top-kills", *cohort.args, "--top", WIDE_COHORT_TOP)
+    result = run("warcraftlogs", "--endpoint", "user", "top-kills", *cohort.args, "--top", WIDE_COHORT_TOP)
     ranked = assert_sampling_metadata(result, expect_rows=True, wide=cohort)["kills"]
     assert {_kill_key(row) for row in ranked} == {_kill_key(row) for row in cohort.kills}, result.describe()
     expected = sorted(cohort.kills, key=lambda row: (row["duration_ms"], _kill_key(row)))
@@ -1700,7 +1700,7 @@ def test_sampled_kills_collapse_one_pull_logged_in_two_reports(require):
     assert len(folded) == removed, f"{removed} collapsed, {len(folded)} named on rows: {cohort.kills}"
     assert cohort.sample["matched_boss_kill_count"] == len(cohort.kills), cohort.sample
 
-    citations = run("warcraftlogs", "boss-kills", *cohort.args, "--top", WIDE_COHORT_TOP)
+    citations = run("warcraftlogs", "--endpoint", "user", "boss-kills", *cohort.args, "--top", WIDE_COHORT_TOP)
     cited = {
         (row["report_code"], row["fight_id"]) for row in citations.data["citations"]["sample_reports"]
     }
@@ -1715,8 +1715,8 @@ def test_sampled_kills_collapse_one_pull_logged_in_two_reports(require):
 
 def _assert_same_pull(kept: dict[str, Any], folded: dict[str, Any]) -> None:
     """Re-derive both fights' wall-clock windows from their own reports and require them to agree."""
-    kept_window = _absolute_fight_window(str(kept["report"]["code"]), int(kept["fight"]["id"]))
-    folded_window = _absolute_fight_window(str(folded["report_code"]), int(folded["fight_id"]))
+    kept_window = _absolute_fight_window(str(kept["report"]["code"]), int(kept["fight"]["id"]), endpoint="user")
+    folded_window = _absolute_fight_window(str(folded["report_code"]), int(folded["fight_id"]), endpoint="user")
     assert kept_window.encounter_id == folded_window.encounter_id, (kept_window, folded_window)
     assert kept_window.difficulty == folded_window.difficulty, (kept_window, folded_window)
     drift = max(
@@ -1728,7 +1728,7 @@ def _assert_same_pull(kept: dict[str, Any], folded: dict[str, Any]) -> None:
     # Past the guild timing bound only the same players make it one pull.
     if drift > DUPLICATE_PULL_TOLERANCE_MS:
         def players(code: str, fight_id: int) -> set[str]:
-            return {f"{row['name']}-{row['server']}" for row in _fight_roster(code, fight_id)}
+            return {f"{row['name']}-{row['server']}" for row in _fight_roster(code, fight_id, endpoint="user")}
 
         kept_roster = players(str(kept["report"]["code"]), int(kept["fight"]["id"]))
         assert kept_roster == players(str(folded["report_code"]), int(folded["fight_id"])), (
@@ -1773,7 +1773,7 @@ def _shared_spec_name_cohort() -> tuple[WideCohort, set[tuple[str, str]]]:
         for cohort in _guild_boss_cohorts(zone, scanned):
             for kill in cohort.kills:
                 code, fight_id = _kill_key(kill)
-                roster = _fight_roster(code, fight_id)
+                roster = _fight_roster(code, fight_id, endpoint="user")
                 fielded = {(str(player["type"]), str(entry["spec"])) for player in roster for entry in player.get("specs") or []}
                 if any(count > 1 for count in Counter(spec for _, spec in fielded).values()):
                     return cohort, fielded
@@ -1790,7 +1790,7 @@ def test_boss_spec_usage_counts_a_spec_with_its_class(require):
     """
     require("warcraftlogs")
     cohort, fielded = _shared_spec_name_cohort()
-    usage = run("warcraftlogs", "boss-spec-usage", *cohort.args, "--top", "40")
+    usage = run("warcraftlogs", "--endpoint", "user", "boss-spec-usage", *cohort.args, "--top", "40")
     rows = assert_sampling_metadata(usage, expect_rows=True, wide=cohort)["spec_usage"]
     assert fielded <= {(row["class_name"], row["spec_name"]) for row in rows}, usage.describe()
 
@@ -2023,7 +2023,7 @@ def test_graphql_introspect_and_a_typed_query_reach_the_api(require):
     require("warcraftlogs")
     found = anchor()
 
-    introspect = run("warcraftlogs", "graphql", "--introspect")
+    introspect = run("warcraftlogs", "graphql", "--endpoint", "client", "--introspect")
     # graphql's data is the GraphQL result itself, so introspection sits under its own __schema.
     schema = introspect.data["__schema"]
     assert schema["queryType"]["name"] == "Query", introspect.describe()
@@ -2032,6 +2032,7 @@ def test_graphql_introspect_and_a_typed_query_reach_the_api(require):
     query = run(
         "warcraftlogs",
         "graphql",
+        "--endpoint", "client",
         "--query",
         "query R($code: String!) { reportData { report(code: $code) { code title } } }",
         "--report-code",

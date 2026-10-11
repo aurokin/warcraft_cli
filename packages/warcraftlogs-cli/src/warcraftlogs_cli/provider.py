@@ -59,7 +59,7 @@ def doctor(**options: Any) -> Envelope:
     """Report auth, site-profile, and per-command readiness. Pass ``live=False`` to skip auth probes."""
     site = site_profile(options)
     live = bool(options.get("live", True))
-    payload = doctor_payload(live=live, site=site)
+    payload = doctor_payload(live=live, site=site, endpoint=str(options.get("endpoint", "client")))
     return success_envelope(provider=PROVIDER_NAME, command="doctor", kind="doctor", data=payload_body(payload))
 
 

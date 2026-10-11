@@ -11,6 +11,8 @@ Pass these before the subcommand: `warcraftlogs --pretty <command> ...`.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--site` | str | retail | Warcraft Logs site profile: retail, classic, or fresh. |
+| `--endpoint` | str | client | Typed read endpoint: client (public default), user (private), or auto (prefer saved user token). |
+| `--refresh` | boolean | false | Bypass cached responses and refresh only the queried cache entries. |
 | `--pretty` | boolean | false | Pretty-print JSON for human reading. Default output is compact JSON. |
 | `--compact` | boolean | false | Truncate long prose strings to reduce payload size. URLs, talent strings and commands stay whole. |
 | `--fields` | str (repeatable) |  | Return only selected fields (dot paths). Repeat or pass comma-separated values. |
@@ -795,6 +797,11 @@ Return raw report events for one fight (--fight-id) or one explicit --start-time
 | `--target-id` | int |  | Optional target actor ID filter. |
 | `--translate / --no-translate` | boolean |  | Optional translation toggle. |
 | `--allow-unlisted` | boolean | false | Allow lookup of unlisted reports. |
+| `--all-pages` | boolean | false | Collect the complete scoped slice, stopping at explicit page/event bounds. |
+| `--max-pages` | int range [1<=x<=1000] | 20 | Maximum event-page requests with --all-pages. |
+| `--max-events` | int range [1<=x<=1000000] | 100000 | Maximum retained events with --all-pages. |
+| `--out` | str |  | Create a reusable evidence artifact with --all-pages; existing files are preserved. |
+| `--artifact-format` | str | json | Evidence artifact format: json or jsonl. |
 
 ## warcraftlogs report-table
 

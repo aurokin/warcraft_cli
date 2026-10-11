@@ -10,6 +10,10 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Added
 
+- Wrapper discovery accepts provider and entity-type scopes, discloses filtering limits, and avoids querying excluded providers.
+- `simc apply-build` writes an explicitly selected talent build into an existing single-actor geared profile, validates identity through SimC, and preserves gear and run settings.
+- Wowhead guide bundles include explicit published build references, original calculator links, citations, and rejected-reference reasons for offline querying and SimC handoffs.
+- Warcraft Logs `report-events --all-pages` collects within explicit page/event bounds, reports completeness and continuation, and can publish exclusive JSON or JSONL artifacts. Report reads include revision metadata; `--refresh` bypasses and updates the selected cache entries.
 - CI and release checks install the root wheel outside the checkout and verify all console scripts, schema output, package origins, and bundled Icy Veins discovery data.
 - Installed-wheel checks exercise offline doctor, usage errors, strict field selection, missing authentication, and provider passthrough under a subprocess network guard. CI verifies Python 3.12–3.14 and independently installed provider and modular wrapper wheels.
 - Real Redis verification covers expiry, namespace isolation, cached provider replay, outage handling, and reconnection by a fresh invocation.
@@ -17,11 +21,18 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Changed
 
+- Warcraft Logs typed reads default to the public client endpoint. Select `--endpoint user` for private access or `--endpoint auto` for the earlier credential-preference policy. Doctor readiness follows the selected endpoint. Wrapper composites expose the same choice through `--warcraftlogs-endpoint`.
+- Warcraft Logs report stability describes cache policy rather than claiming immutability. Consumers of `stability.cache_safe` must use the disclosed cache policy and revision metadata; `immutable` is false even for finished reports.
+- Blizzard is supported for verified typed reads; general discovery remains unavailable. CurseForge remains experimental with explicit lookup and readiness as its bounded scope.
+- SimC, Blizzard, CurseForge, and the internal Raidbots discovery surfaces return explicit `unsupported_operation` failures instead of successful placeholder results. SimC's placeholder Monk, constants, and example-APL commands are removed.
+- SimC build analysis, Wowhead entity/talent reads, Warcraft Logs report operations, Raider.IO profiles, and Lorrgs reads share output-free services with CLI callbacks. Wrapper composites use bounded service adapters and lightweight call protocols.
 - Guide comparisons write new exports under `bundles/<generation>/<provider>` and publish their relative paths atomically in the root manifest. Follow `manifest.providers[].bundle_path`; earlier exports remain available after a refresh.
 - Composed guide exports call provider services directly, without capturing console output. Warcraft Logs discovery and readiness also use services independent of the CLI module.
 
 ### Fixed
 
+- A rejected saved Warcraft Logs user token no longer blocks public typed reads authenticated with valid client credentials. Explicit private reads still surface the user authentication failure without falling back to public access.
+- Applying a build removes default-talent loading that would override the selected talents while preserving unrelated profile configuration.
 - A failed guide comparison refresh cannot overwrite bundles from a previous completed comparison. Reuse verifies the saved bundle identity and refreshes altered or corrupt bundles.
 - SimC APL comparison and validation reject output paths that collide with any input or another output before writing, including JSON reports, symlinks, hardlinks, and case aliases.
 - Static SimC APL analysis honors `actions=` replacement, empty resets, inline `/` action separators, and dispatch options in any order. Branch filtering distinguishes actions sharing a source line.

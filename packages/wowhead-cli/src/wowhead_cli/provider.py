@@ -411,3 +411,29 @@ def guide_export(guide_ref: str, *, out: Path | None = None, expansion: str | No
     with open_client(selection.profile) as client:
         data = export_guide_bundle(client, guide_ref=guide_ref, out=out, max_links=max_links, include_replies=include_replies)
     return envelope("guide-export", "guide_export", data)
+
+
+def talent_calc(reference: str, *, listed_build_limit: int = 20, expansion: str | None = None) -> Envelope:
+    """Parse and enrich one calculator reference, including provider-backed classic decoding."""
+    from wowhead_cli.talent_services import base_talent_calc_payload, enrich_talent_calc_payload
+    selection = select_expansion(expansion, url_hint=reference)
+    payload = base_talent_calc_payload(selection.profile, ref=reference)
+    if not 1 <= listed_build_limit <= 100:
+        raise ProviderError("invalid_argument", "listed_build_limit must be between 1 and 100.")
+    with open_client(selection.profile) as client:
+        payload = enrich_talent_calc_payload(client, payload, listed_build_limit=listed_build_limit,
+                                             fail_on_fetch_error=True, decode_talents=True)
+    return envelope("talent-calc", "talent_calc", payload)
+
+
+def talent_calc_packet(reference: str, *, listed_build_limit: int = 20, expansion: str | None = None) -> Envelope:
+    """Build an exact transport packet; page metadata is optional evidence, never a requirement."""
+    from wowhead_cli.talent_services import base_talent_calc_payload, require_packet_reference, talent_packet_payload
+    selection = select_expansion(expansion, url_hint=reference)
+    payload = base_talent_calc_payload(selection.profile, ref=reference)
+    require_packet_reference(payload)
+    if not 1 <= listed_build_limit <= 100:
+        raise ProviderError("invalid_argument", "listed_build_limit must be between 1 and 100.")
+    with open_client(selection.profile) as client:
+        payload = talent_packet_payload(client, payload, listed_build_limit=listed_build_limit)
+    return envelope("talent-calc-packet", "talent_calc_packet", payload)

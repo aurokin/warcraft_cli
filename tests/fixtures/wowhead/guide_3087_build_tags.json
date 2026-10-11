@@ -1,0 +1,9 @@
+{
+  "source_fixture": "guide_3087_page.html",
+  "source_url": "https://www.wowhead.com/guide/classes/warrior/fury/overview-pve-dps",
+  "build_opening_tags": [
+    "[build class=\"Warrior\" spec=\"Fury\" hero=\"Slayer\" title=\"Fury Warrior Raid Build\" tab=\"Raid\" \r\ntalents=blizzard/CgEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgGDzMmZ2MzMzMDjZmZGzMzsMzMmZmZzYmBAAixy2ALgJYGmAzwGwMDjNAAYmhxYYMYM\r\nstat-guide=5530\r\nstats=str>>mastery>haste>crit>versatility]",
+    "[build class=\"Warrior\" spec=\"Fury\" hero=\"Mountain Thane\" title=\"Fury Warrior Mythic+ Build\" tab=\"Mythic+\" \r\ntalents=blizzard/CgEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgGDjZMz2yMzMjZmxMzMzMjZWmZmZmxsYmZGAAIMwGssY0YGQmFMjFAzgBAMzAwwiZAGD\r\nstat-guide=5530\r\nstats=str>>mastery>haste>crit>versatility]",
+    "[build class=\"Warrior\" spec=\"Fury\" hero=\"Mountain Thane\" title=\"Fury Warrior Delves Build\" tab=\"Delves\" \r\ntalents=blizzard/CgEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgGDjZMz2yMzMjZmxMzMzMjZWmZmZmxsYmZGAAIMwGssY0YGQmFMjFAzgBAMzAwwiZAGD \r\nstat-guide=5530\r\nstats=str>>mastery>haste>crit>versatility]"
+  ]
+}
