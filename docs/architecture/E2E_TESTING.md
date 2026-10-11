@@ -142,7 +142,7 @@ What a green run does **not** prove:
   Coverage.
 - **Wowhead's PTR and beta datasets are untested.** Whether a PTR dataset is live is upstream
   state no command can discover, so `--normalize-canonical-to-expansion` and the `ptr` expansion
-  profile have no journey; the five classic-era profiles cover expansion routing instead.
+  profile have no journey; classic-era and Forever profiles cover game-specific routing instead.
 - **Many documented flags have no journey on the command that owns them.** Flag coverage is not
   counted: a flag string that some journey passes can still be missing from every other command
   that documents it, so a count of strings found anywhere in `tests/e2e/` overstates coverage.

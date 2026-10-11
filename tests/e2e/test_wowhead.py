@@ -51,7 +51,7 @@ PROFILER_REF = "97060220/us/illidan/Roguecane"
 FOREVER_NEWS_URL = "https://www.wowhead.com/forever/news/ghost-wolf-appearance-temporary-until-fixes-are-in-for-wow-forever-383241"
 
 # `wowhead expansions` lists these; every one routes real Wowhead paths for a classic-era item.
-CLASSIC_EXPANSIONS = ("classic", "tbc", "wotlk", "cata", "mop-classic")
+CLASSIC_EXPANSIONS = ("classic", "tbc", "wotlk", "cata", "mop-classic", "forever")
 
 # Wowhead updates each class guide in place every expansion, so the main Fury Warrior guide keeps
 # one id; the retired guides that share its words (Legion Remix, Dragonflight seasons) have their own.
@@ -1348,6 +1348,8 @@ CLASSIC_CALCULATOR_BUILDS: tuple[tuple[str, str, list[str | None]], ...] = (
         ["Dancing Rune Weapon", "Runic Power Mastery", "Morbidity"],
     ),
     ("https://www.wowhead.com/forever/talent-calc/warrior/v2252202-5321011-2541230211002001_t0", "13/13/24", ["Improved Overpower", "Blood Craze", "Focused Rage"]),
+    ("https://www.wowhead.com/forever/talent-calc/warlock/v21-1-1_t0", "1/1/1", ["Improved Life Tap", "Improved Health Funnel", "Destructive Reach"]),
+    ("https://www.wowhead.com/forever/talent-calc/druid/v21-1-1_t0", "1/1/1", ["Improved Wrath", "Ferocity", "Nature's Focus"]),
     ("https://www.wowhead.com/classic-ptr/talent-calc/warrior/30305001302-05050005525010051", "17/34/0", ["Impale", "Bloodthirst", None]),
 )
 MOP_CLASSIC_BUILD_URL = "https://www.wowhead.com/mop-classic/talent-calc/druid/balance/323222/AA4FGtB4TpcC4ToOD4F3gE4TpX"
@@ -1527,23 +1529,44 @@ def test_cache_inspect_counts_entries_and_cache_clear_empties_a_namespace(requir
     assert cleared.data["remaining"]["totals"]["active"] > 0, "clearing one namespace emptied the cache"
 
 
-def test_a_wow_forever_url_is_not_read_as_retail(require) -> None:
-    """Wowhead's /forever/ section is another game; its item page was answered with retail data."""
+def test_a_wow_forever_search_entity_and_news_journey_keeps_its_profile(require) -> None:
+    """Search follow-ups and URL inference must keep the selected Forever dataset."""
     require("wowhead")
     forever_item = f"https://www.wowhead.com/forever/item={pins.ITEM_ID}"
     detected = run(BINARY, "expansion-detect", forever_item)
-    assert detected.data["detected_expansion"] is None, detected.describe()
-    run(
-        BINARY, "entity", "--url", forever_item,
-        expect=EXIT_USAGE, error_code="invalid_argument", env={**dead_proxy_env(), **no_cache_env()},
-    )
+    assert detected.data["detected_expansion"] == "forever", detected.describe()
+    found = run(BINARY, "--expansion", "forever", "search", pins.ITEM_SEARCH_QUERY, "--entity-type", "item", "--limit", "1")
+    assert found.data["expansion"] == "forever", found.describe()
+    row = found.data["results"][0]
+    assert row["url"] == forever_item, found.describe()
+    followed = run_follow_up(row["follow_up"]["command"])
+    assert followed.data["expansion"] == "forever", followed.describe()
+    assert followed.data["entity"]["name"] == pins.ITEM_NAME, followed.describe()
+    inferred = run(BINARY, "entity", "--url", forever_item, "--no-include-comments", "--linked-entity-preview-limit", "0")
+    assert inferred.data["expansion"] == "forever", inferred.describe()
+    assert inferred.data["expansion_source"] == "url", inferred.describe()
 
-    # The Forever news rows `news` emits route to news-post, which says it could not infer an expansion.
+    # A news URL is a direct discovery ref; its follow-up retains Forever.
     searched = run(BINARY, "search", FOREVER_NEWS_URL)
-    assert searched.data["results"][0]["follow_up"]["command"] == f"wowhead news-post {FOREVER_NEWS_URL}", searched.describe()
+    assert searched.data["results"][0]["follow_up"]["command"] == f"wowhead --expansion forever news-post {FOREVER_NEWS_URL}", searched.describe()
     post = run(BINARY, "news-post", FOREVER_NEWS_URL)
     assert "ghost wolf" in (post.data["page"]["title"] or "").lower(), post.describe()
-    assert post.data["notes"] == [f"Could not infer expansion from URL {FOREVER_NEWS_URL!r}."], post.describe()
+    assert post.data["expansion"] == "forever", post.describe()
+    assert not post.data.get("notes"), post.describe()
+
+
+def test_a_forever_guide_listing_hands_off_to_its_published_guide(require) -> None:
+    require("wowhead")
+    listed = run(BINARY, "--expansion", "forever", "guides", "classes", "--limit", "1")
+    assert listed.data["expansion"] == "forever", listed.describe()
+    row = listed.data["results"][0]
+    assert row["url"].startswith("https://www.wowhead.com/forever/guide/"), listed.describe()
+    guide = run(BINARY, "guide", row["url"])
+    assert guide.data["expansion"] == "forever", guide.describe()
+    assert guide.data["page"]["canonical_url"] == row["url"], guide.describe()
+    assert guide.data["page_meta"]["data_env"]["env"] == 16, guide.describe()
+    assert guide.data["page_meta"]["data_env"]["versions"]["16"], guide.describe()
+    assert guide.data["page_meta"]["active_db_changed"]["16"], guide.describe()
 
 
 def test_an_unknown_guide_category_is_not_found(require) -> None:

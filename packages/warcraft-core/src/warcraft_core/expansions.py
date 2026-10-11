@@ -1,4 +1,4 @@
-"""Shared expansion vocabulary: keys, aliases, and per-site mappings used by every binary."""
+"""Shared game-profile vocabulary, retaining ``--expansion`` as the public selector."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ EXPANSIONS: Final[tuple[Expansion, ...]] = (
     Expansion("ptr", "Retail PTR", (), "ptr", None),
     Expansion("beta", "Retail Beta", (), "beta", None),
     Expansion("classic-ptr", "Classic PTR", ("classicptr",), "classic-ptr", None),
+    Expansion("forever", "World of Warcraft: Forever", ("wow-forever", "warcraft-forever"), "forever", None),
     Expansion(
         "fresh",
         "Classic Fresh / Anniversary",

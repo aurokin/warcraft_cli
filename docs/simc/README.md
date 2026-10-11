@@ -26,6 +26,32 @@ Generic `search` and `resolve` are unsupported: this local tool has no provider 
 
 `simc doctor` reports which of these are present.
 
+## Forever engine readiness
+
+An explicitly selected checkout of the upstream [`forever` branch](https://github.com/simulationcraft/simc/tree/forever)
+is experimental. `doctor`, `repo`, and `version` report the binary's `wow_version` and `game_variant`;
+Forever is identified by its actual `1.60.x` client data, not its SimulationCraft version or checkout
+branch name. The tested Forever binary still reports SimulationCraft `1210-01`, like retail.
+An older banner without a client version is reported as `unknown` and keeps its existing behavior.
+
+For a Forever binary, `doctor` marks retail build transport and derived build/APL analyses
+`not_supported`, and `run`/`sim` `experimental`. The unsupported workflows fail with
+`unsupported_game_variant` (exit 2). Raw runs accept a caller-supplied profile; a successful run proves
+execution, not model accuracy. Select a separate checkout with `--repo-root` for each invocation.
+
+Research on 2026-10-11 built upstream commit `fcfe72f62bba554dcb7b5b6c7804a6cd799ec71f`, whose client
+data is `1.60.1.70334`. A direct engine `spell_query=spell.id=133` returned Forever rank-one Fireball.
+A synthetic level-10 shaman profile with explicit `actions=earth_shock` and `optimal_raid=0` produced
+a JSON report. Several class modules remain skeletal; an unequipped default shaman profile and an
+explicit warlock profile aborted upstream assertions. No complete live-character import or combat
+accuracy was verified. These checks do not establish support for every class or a guide-to-simulation
+handoff. The addon exporter's experimental Forever support alone also does not establish engine
+readiness.
+
+The alternative [WoWSims-based Forever fork](https://github.com/ElliotWood/Forever) has a headless
+CLI, but it requires its own `RaidSimRequest` CLI export, not addon JSON, ordinary settings JSON, or
+SimC text. It is not integrated here. Keep those formats and engines separate.
+
 ## Repo resolution
 
 The checkout is resolved in this order:

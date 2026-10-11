@@ -19,7 +19,6 @@ from warcraft_core.discovery import ResolveConfidence, discovery_row, single_wor
 from wowhead_cli.entity_types import PARSER_ENTITY_TYPES, RESOLVE_ENTITY_TYPES, SEARCH_TYPE_HINTS
 from wowhead_cli.expansion_profiles import (
     EXPANSION_PREFIXES,
-    UNPROFILED_PATH_PREFIXES,
     ExpansionProfile,
     is_wowhead_host,
     normalize_wowhead_url,
@@ -564,7 +563,7 @@ _LOCALE_SEGMENT_RE = re.compile(r"[a-z]{2}(?:-[A-Z]{2})?")
 def page_path_parts(path: str) -> list[str]:
     """The segments of a Wowhead path after any leading expansion and locale prefixes (`classic/de/guide=3143`)."""
     parts = [part for part in path.split("/") if part]
-    while parts and (parts[0] in EXPANSION_PREFIXES | UNPROFILED_PATH_PREFIXES or _LOCALE_SEGMENT_RE.fullmatch(parts[0])):
+    while parts and (parts[0] in EXPANSION_PREFIXES or _LOCALE_SEGMENT_RE.fullmatch(parts[0])):
         parts = parts[1:]
     return parts
 

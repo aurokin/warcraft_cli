@@ -351,14 +351,16 @@ def test_news_post_fails_when_the_page_has_no_article_body(monkeypatch) -> None:
     assert (result.exit_code, json.loads(result.stderr)["error"]["code"]) == (1, "parse_failed")
 
 
-def test_news_post_notes_that_a_wow_forever_post_has_no_expansion_profile(monkeypatch) -> None:
+def test_news_post_infers_the_forever_profile(monkeypatch) -> None:
     monkeypatch.setattr("wowhead_cli.main.WowheadClient.page_html", lambda self, url: SAMPLE_NEWS_POST_HTML)
     url = "https://www.wowhead.com/forever/news/ghost-wolf-383241"
 
     result = runner.invoke(app, ["news-post", url])
 
     assert result.exit_code == 0, result.output
-    assert json.loads(result.stdout)["data"]["notes"] == [f"Could not infer expansion from URL {url!r}."]
+    data = json.loads(result.stdout)["data"]
+    assert data["expansion"] == "forever"
+    assert data.get("notes", []) == []
 
 
 def _news_html(*posts: dict[str, Any]) -> str:

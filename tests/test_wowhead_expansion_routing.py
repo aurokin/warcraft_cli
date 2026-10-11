@@ -37,14 +37,23 @@ def test_detect_expansion_rejects_non_wowhead_hosts() -> None:
     assert detect_expansion_from_url("https://evilwowhead.com/item=19019") is None
 
 
-def test_a_wow_forever_url_names_no_expansion_or_entity() -> None:
-    """Wowhead's /forever/ section is another game; its pages used to be read as retail."""
-    assert detect_expansion_from_url("https://www.wowhead.com/forever/item=19019") is None
-    assert parse_entity_from_wowhead_url("https://www.wowhead.com/forever/item=19019") is None
+def test_a_wow_forever_entity_url_routes_to_its_own_profile(monkeypatch) -> None:
+    url = "https://www.wowhead.com/forever/item=19019"
+    assert detect_expansion_from_url(url).key == "forever"
+    assert parse_entity_from_wowhead_url(url) == ("item", 19019)
+    expansions: list[str] = []
 
-    result = runner.invoke(app, ["entity", "--url", "https://www.wowhead.com/forever/item=19019"])
-    assert result.exit_code == 2
-    assert json.loads(result.stderr)["error"]["code"] == "invalid_argument"
+    def tooltip(self, entity_type, entity_id, data_env=None):
+        expansions.append(self.expansion.key)
+        return {"name": "Thunderfury"}
+
+    monkeypatch.setattr(WowheadClient, "tooltip", tooltip)
+    monkeypatch.setattr(WowheadClient, "entity_page_html", lambda *args, **kwargs: f'<html><link rel="canonical" href="{url}"></html>')
+    result = runner.invoke(app, ["entity", "--url", url])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["expansion"] == "forever"
+    assert expansions == ["forever"]
 
 
 def test_compare_rejects_mixed_expansion_urls(monkeypatch) -> None:
@@ -144,7 +153,7 @@ def test_search_answers_the_entity_a_url_names_without_searching_upstream(monkey
         ("https://www.wowhead.com/news?page=2", "wowhead news"),
         (
             "https://www.wowhead.com/forever/news/ghost-wolf-383241",
-            "wowhead news-post https://www.wowhead.com/forever/news/ghost-wolf-383241",
+            "wowhead --expansion forever news-post https://www.wowhead.com/forever/news/ghost-wolf-383241",
         ),
     ],
 )

@@ -363,6 +363,21 @@ class TalentSource:
 def _resolve_talent_transport(ctx: typer.Context, request: TalentSource, calls: ProviderCalls) -> dict[str, Any]:
     source = request.source
     requested_expansion = request.expansion
+    parsed_source = parse_wowhead_talent_calc(source, default_expansion=requested_expansion or "retail")
+    if requested_expansion == "forever" or (
+        isinstance(parsed_source, WowheadTalentCalcRef) and parsed_source.expansion == "forever"
+    ):
+        _fail_talent_route(
+            ctx,
+            code="unsupported_game_variant",
+            message=(
+                "Forever talents are not verified for the retail SimC transport consumer. "
+                "Use wowhead talent-calc to inspect the Forever calculator without a simulation handoff."
+            ),
+            source=source,
+            route={"game_variant": "forever", "consumer": "simc"},
+            exit_code=EXIT_USAGE,
+        )
     route: dict[str, Any]
     producer_result: dict[str, Any] | None = None
     try:
@@ -433,6 +448,16 @@ def _resolve_talent_transport(ctx: typer.Context, request: TalentSource, calls: 
                 "or a local talent transport packet JSON path."
             ),
             source=source,
+            exit_code=EXIT_USAGE,
+        )
+
+    if as_dict(packet.get("scope")).get("expansion") == "forever":
+        _fail_talent_route(
+            ctx,
+            code="unsupported_game_variant",
+            message="Forever talent packets are not verified for the retail SimC transport consumer.",
+            source=source,
+            route=route,
             exit_code=EXIT_USAGE,
         )
 

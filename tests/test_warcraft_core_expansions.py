@@ -12,7 +12,7 @@ from warcraft_core.expansions import (
 
 
 def test_expansion_keys_keep_wowhead_order_then_fresh() -> None:
-    assert expansion_keys() == ("retail", "classic", "tbc", "wotlk", "cata", "mop-classic", "ptr", "beta", "classic-ptr", "fresh")
+    assert expansion_keys() == ("retail", "classic", "tbc", "wotlk", "cata", "mop-classic", "ptr", "beta", "classic-ptr", "forever", "fresh")
 
 
 def test_resolve_expansion_accepts_aliases_and_defaults_to_retail() -> None:
@@ -21,6 +21,8 @@ def test_resolve_expansion_accepts_aliases_and_defaults_to_retail() -> None:
     assert resolve_expansion("mop_classic").key == "mop-classic"
     assert resolve_expansion("anniversary").key == "fresh"
     assert resolve_expansion("classic-fresh").key == "fresh"
+    assert resolve_expansion("wow-forever").key == "forever"
+    assert resolve_expansion("warcraft_forever").key == "forever"
     assert normalize_expansion_key(" Classic_PTR ") == "classic-ptr"
 
 
@@ -36,9 +38,11 @@ def test_warcraftlogs_site_mapping() -> None:
     assert warcraftlogs_site_for_expansion("fresh") == "fresh"
     with pytest.raises(ValueError, match="does not map to a Warcraft Logs site profile"):
         warcraftlogs_site_for_expansion("ptr")
+    with pytest.raises(ValueError, match="does not map to a Warcraft Logs site profile"):
+        warcraftlogs_site_for_expansion("forever")
 
 
 def test_wowhead_path_prefixes_exclude_retail_and_fresh() -> None:
-    assert wowhead_path_prefixes() == frozenset({"classic", "tbc", "wotlk", "cata", "mop-classic", "ptr", "beta", "classic-ptr"})
+    assert wowhead_path_prefixes() == frozenset({"classic", "tbc", "wotlk", "cata", "mop-classic", "ptr", "beta", "classic-ptr", "forever"})
     fresh = next(expansion for expansion in list_expansions() if expansion.key == "fresh")
     assert fresh.wowhead_path_prefix is None

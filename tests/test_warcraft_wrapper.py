@@ -15,6 +15,7 @@ from method_cli.main import app as method_app
 from raiderio_cli.client import FetchedJson
 from simc_cli.build_input import BuildIdentity, BuildResolution, BuildSpec
 from simc_cli.prune import PruneContext
+from simc_cli.run import BinaryVersion
 from typer.testing import CliRunner
 from warcraft_cli.actor_profile import ACTOR_PROFILE_MAX_SCOPED_FIGHTS
 from warcraft_cli.cooldown_packet import normalize_warcraftlogs_actor_casts
@@ -3672,9 +3673,7 @@ def test_warcraft_passthrough_to_simc(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(
         "simc_cli.main.binary_version",
-        lambda paths: type(
-            "VersionInfo", (), {"binary_path": paths.build_simc, "available": True, "version_line": "SimulationCraft 1201", "returncode": 1}
-        )(),
+        lambda paths: BinaryVersion(binary_path=paths.build_simc, available=True, version_line="SimulationCraft 1201", returncode=1),
     )
 
     result = runner.invoke(warcraft_app, ["simc", "--repo-root", str(repo_root), "run", str(profile)])
@@ -4401,8 +4400,8 @@ def test_warcraft_talent_packet_accepts_hyphenated_wowhead_class_slug(monkeypatc
     assert payload["data"]["talent_transport_packet"]["transport_status"] == "exact"
 
 
-def test_warcraft_talent_packet_routes_a_wow_forever_calculator_ref_to_wowhead(monkeypatch) -> None:
-    """``forever/<class>/<code>`` used to read as a missing packet file; WoW Forever has its own calculator."""
+def test_warcraft_talent_packet_reports_the_forever_consumer_boundary_for_shorthand(monkeypatch) -> None:
+    """Forever shorthand identifies a calculator, but cannot establish retail transport compatibility."""
     calls: list[list[str]] = []
 
     def fake_provider_invoke(provider: str, args: list[str], *, expansion: str | None = None) -> dict[str, object]:
@@ -4417,8 +4416,11 @@ def test_warcraft_talent_packet_routes_a_wow_forever_calculator_ref_to_wowhead(m
 
     result = runner.invoke(warcraft_app, ["talent-packet", "forever/warrior/v205_t0", "--no-validate"])
 
-    assert calls == [["wowhead", "talent-calc-packet", "forever/warrior/v205_t0", "--listed-build-limit", "10"]]
-    assert json.loads(result.stderr)["error"]["details"]["route"] == {"kind": "wowhead_talent_calc", "provider": "wowhead"}
+    assert calls == []
+    assert result.exit_code == 2
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "unsupported_game_variant"
+    assert error["details"]["route"] == {"game_variant": "forever", "consumer": "simc"}
 
 
 def test_warcraft_talent_packet_rejects_invalid_packet_file(tmp_path: Path) -> None:

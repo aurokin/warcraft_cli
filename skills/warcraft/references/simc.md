@@ -27,6 +27,9 @@
 
 ## Effective Use
 
+- inspect `doctor` before choosing an engine: `repo.binary.wow_version` and `game_variant` name the actual client data. A Forever engine reports `forever` from `1.60.x`, even when its SimC version resembles retail. `unknown` means the banner did not establish a supported game family
+- Forever checkouts support only experimental caller-supplied `run`/`sim` profiles; retail build decoding, transport, and derived build/APL workflows fail with `unsupported_game_variant`. Use a separate explicitly selected `--repo-root` for retail workflows. A successful Forever run verifies execution, not combat accuracy or all-class support
+- a WoWSims Forever CLI export is a different engine's request format. Do not pass addon JSON, WoWSims settings JSON, or a WoWSims CLI request to `simc`
 - prefer `describe-build` for an explicit build and `analysis-packet` for a complete bounded APL evidence view before using focused expert commands or running a simulation
 - SimC has no generic discovery index; use typed inspection/build commands instead of `search` or `resolve`
 - use `apply-build` to apply a guide's explicit packet (or `--build-text`) to a supplied standalone profile whose single actor and explicit spec match the verified build. It preserves gear and other settings, replaces talent forms, append overrides and default/all-talent loading, and does not infer gear or simulate the result. Profiles with includes, copies, profilesets, player imports or explicit actor controls must first be made standalone. Enemy settings and independently scoped expansion talents are retained. Output must differ from the source; existing output requires `--overwrite`. Then run `simc sim` on the resulting profile

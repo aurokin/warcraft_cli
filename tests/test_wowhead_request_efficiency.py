@@ -46,6 +46,23 @@ def test_wowhead_disabled_cache_does_not_access_an_attached_store() -> None:
         client._write_cache("k", {"a": 1}, ttl_seconds=60)
 
 
+def test_forever_and_classic_or_retail_caches_do_not_share_entity_or_tooltip_keys() -> None:
+    options = {
+        "requested_type": "item", "requested_id": 19019, "data_env": None,
+        "include_comments": False, "include_all_comments": False, "linked_entity_preview_limit": 0,
+    }
+    entity_keys: set[str] = set()
+    tooltip_keys: set[str] = set()
+    for expansion in ("retail", "classic", "forever"):
+        with WowheadClient(expansion=expansion) as client:
+            entity_keys.add(client._entity_response_cache_key(**options))
+            tooltip_keys.add(client._cache_key(
+                "tooltip_meta", f"{client.expansion.nether_base}/tooltip/item/19019",
+                {"dataEnv": client.expansion.data_env},
+            ))
+    assert len(entity_keys) == len(tooltip_keys) == 3
+
+
 def test_wowhead_partial_construction_can_be_cleaned_up(monkeypatch) -> None:
     def invalid_settings():
         raise ValueError("invalid cache configuration")

@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import typer
@@ -322,6 +323,8 @@ def load_guide_build_source(source_path: Path) -> tuple[str, list[tuple[Path, di
 
 def _collect_build_reference_handoff_rows(
     bundle_inputs: list[tuple[Path, dict[str, Any]]],
+    *,
+    requested_expansion: str | None = None,
 ) -> list[dict[str, Any]]:
     grouped: dict[str, dict[str, Any]] = {}
     for bundle_path, bundle in bundle_inputs:
@@ -336,6 +339,8 @@ def _collect_build_reference_handoff_rows(
             record = grouped.get(ref_url)
             source_entry = {
                 "provider": provider,
+                "expansion": manifest.get("expansion"),
+                "requested_expansion": requested_expansion,
                 "bundle_path": str(bundle_path),
                 "label": row.get("label"),
                 "source_urls": unique_strings(as_list(row.get("source_urls")) or [row.get("source_url")]),
@@ -485,6 +490,8 @@ def _handoff_build_input(
     build_url = reference.get("url")
     if not isinstance(build_url, str) or not build_url.strip():
         return None, reference, "missing_reference_url"
+    if _forever_handoff_source(build_url, sources):
+        return None, reference, "unsupported_game_variant:forever"
     build_code = _resolve_handoff_build_code(reference, build_url)
     if build_code is None:
         return None, reference, "missing_build_code"
@@ -496,6 +503,22 @@ def _handoff_build_input(
     if isinstance(transport_packet, dict):
         return PacketInput(transport_packet), normalized_reference, None
     return None, normalized_reference, f"unsupported_reference_type:{reference_type or 'unknown'}"
+
+
+def _forever_handoff_source(build_url: str, sources: list[Any]) -> bool:
+    """An exported Forever bundle cannot establish retail engine compatibility, even for a retail-shaped code."""
+    source_rows = [source for source in sources if isinstance(source, dict)]
+    if any("forever" in (source.get("expansion"), source.get("requested_expansion")) for source in source_rows):
+        return True
+    urls = [build_url, *[url for source in source_rows for url in as_list(source.get("source_urls"))]]
+    for url in urls:
+        if not isinstance(url, str):
+            continue
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if (host == "wowhead.com" or host.endswith(".wowhead.com")) and parsed.path.split("/")[1:2] == ["forever"]:
+            return True
+    return False
 
 
 def _build_simc_handoff_row(
@@ -643,7 +666,9 @@ def guide_builds_simc_payload(
     simc: SimcCall,
 ) -> dict[str, Any]:
     """The guide-build-to-simc evidence packet for the explicit build references in ``bundle_inputs``."""
-    handoff_rows = _collect_build_reference_handoff_rows(bundle_inputs)
+    handoff_rows = _collect_build_reference_handoff_rows(
+        bundle_inputs, requested_expansion=as_dict(source_manifest).get("requested_expansion"),
+    )
     selected_rows = handoff_rows[:limit]
     bundle_health = _bundle_health(bundle_inputs)
     source_reference_exclusions = _source_reference_exclusions(bundle_inputs)

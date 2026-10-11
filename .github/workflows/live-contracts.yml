@@ -68,6 +68,7 @@ jobs:
           make test-e2e E2E_ARGS="-rs" E2E_PATHS="tests/e2e/test_wowhead.py tests/e2e/test_method.py
           tests/e2e/test_raiderio.py tests/e2e/test_warcraft_wiki.py tests/e2e/test_lorrgs.py
           tests/e2e/test_raidbots.py tests/e2e/test_wrapper_discovery_scope.py
+          tests/e2e/test_forever.py
           tests/e2e/test_wowhead_guide_build_handoff.py::test_guide_bundle_preserves_published_codes_and_original_urls"
 
   report-failure:

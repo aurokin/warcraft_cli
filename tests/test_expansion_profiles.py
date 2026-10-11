@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from wowhead_cli.expansion_profiles import (
     build_entity_url,
@@ -69,5 +72,19 @@ def test_parse_entity_from_wowhead_url_rejects_other_hosts() -> None:
 
 
 def test_resolve_expansion_rejects_shared_keys_without_a_wowhead_site() -> None:
-    with pytest.raises(ValueError, match=r"Unknown expansion 'fresh'\. Supported: retail, classic, .*, classic-ptr$"):
+    with pytest.raises(ValueError, match=r"Unknown expansion 'fresh'\. Supported: retail, classic, .*, forever$"):
         resolve_expansion("fresh")
+
+
+def test_forever_profile_matches_wowheads_captured_routing_metadata() -> None:
+    # Captured from /forever/item=19019 on 2026-10-11; preserved without changing fields.
+    page_meta = json.loads((Path(__file__).parent / "fixtures/wowhead/forever_page_meta.json").read_text())
+    profile = resolve_expansion("wow-forever")
+    assert profile.key == "forever"
+    assert profile.data_env == page_meta["dataEnv"]["env"] == 16
+    assert profile.path_prefix == "forever"
+    assert profile.wowhead_base == "https://www.wowhead.com/forever"
+    assert profile.nether_base == "https://nether.wowhead.com/forever"
+    assert detect_expansion_from_url(build_entity_url(profile, "item", 19019)) == profile
+    assert not url_matches_expansion_profile("https://www.wowhead.com/item=19019", profile)
+    assert not url_matches_expansion_profile("https://www.wowhead.com/classic/item=19019", profile)

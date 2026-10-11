@@ -278,6 +278,26 @@ def test_parse_wowhead_talent_calc_ref_keeps_to_retail_spec_paths() -> None:
         assert parse_wowhead_talent_calc_ref(ref) is None, ref
 
 
+def test_forever_calculator_profile_does_not_establish_retail_transport_compatibility() -> None:
+    reference = "https://www.wowhead.com/forever/talent-calc/warrior/fury/ABC123"
+    parsed = parse_wowhead_talent_calc(reference)
+    assert isinstance(parsed, WowheadTalentCalcRef)
+    assert parsed.expansion == "forever"
+    assert build_reference_transport_packet_payload(ref=reference) is None
+
+
+def test_report_actor_identity_preserves_full_names_and_local_provider_ids() -> None:
+    identities = [
+        report_actor_identity_payload(
+            report_code="ABC123", fight_id=7, actor_id=actor_id, name=name,
+        )["identity"]
+        for actor_id, name in ((101, "Asha Brightvale"), (202, "Asha Moonvale"), (303, "Élodie Лунная"))
+    ]
+    assert [identity["name"] for identity in identities] == ["Asha Brightvale", "Asha Moonvale", "Élodie Лунная"]
+    assert [identity["actor_id"] for identity in identities] == [101, 202, 303]
+    assert [identity["local_key"] for identity in identities] == ["ABC123:7:101", "ABC123:7:202", "ABC123:7:303"]
+
+
 def test_build_reference_payload_only_accepts_explicit_wowhead_talent_calc_urls() -> None:
     payload = build_reference_payload(
         ref="https://www.wowhead.com/talent-calc/druid/balance/ABC123",

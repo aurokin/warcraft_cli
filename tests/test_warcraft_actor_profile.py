@@ -222,6 +222,31 @@ def test_actor_lookup_identity_reports_missing_field_and_honors_override() -> No
     assert actor_lookup_identity({"name": "X", "server": "Illidan", "region": "us"}, region_override="") == {"ok": False, "missing": "region"}
 
 
+def test_report_actor_lookup_matches_the_complete_name_without_first_name_fallback() -> None:
+    payload = _wcl_payload({"dps": [
+        _wcl_actor("Asha Brightvale", None, "us", "Mage", "Frost"),
+        _wcl_actor("Asha Moonvale", None, "us", "Mage", "Frost"),
+        _wcl_actor("Élodie Лунная", None, "eu", "Priest", "Holy"),
+    ]})
+    assert find_report_actors(payload, "Asha") == []
+    assert [actor["name"] for actor in find_report_actors(payload, "asha moonvale")] == ["Asha Moonvale"]
+    assert [actor["name"] for actor in find_report_actors(payload, "ÉLODIE ЛУННАЯ")] == ["Élodie Лунная"]
+    assert actor_lookup_identity(find_report_actors(payload, "asha moonvale")[0]) == {"ok": False, "missing": "realm"}
+
+
+def test_actor_profile_preserves_actor_full_name_and_id_when_realm_is_missing(monkeypatch) -> None:
+    actor = _wcl_actor("Élodie Лунная", None, "eu", "Priest", "Holy")
+    actor["id"] = 303
+    wcl = _wcl_payload({"healers": [actor]})
+    monkeypatch.setattr("warcraft_cli.main.provider_invoke", _invoke(wcl, None))
+    result = runner.invoke(warcraft_app, ["actor-profile", "ABC123", "Élodie Лунная"])
+    assert result.exit_code == 1
+    error = json.loads(result.stderr)["error"]
+    assert error["code"] == "actor_realm_unknown"
+    log_side = error["details"]["sources"]["warcraftlogs"]
+    assert (log_side["name"], log_side["id"]) == ("Élodie Лунная", 303)
+
+
 # --- command integration tests ----------------------------------------------
 
 

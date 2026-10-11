@@ -47,6 +47,7 @@ _DATA_ENV_BY_KEY: dict[str, int] = {
     "ptr": 2,
     "beta": 3,
     "classic-ptr": 14,
+    "forever": 16,
 }
 _LEGACY_SUBDOMAINS_BY_KEY: dict[str, tuple[str, ...]] = {
     "retail": ("wowhead.com", "www.wowhead.com"),
@@ -58,6 +59,7 @@ _LEGACY_SUBDOMAINS_BY_KEY: dict[str, tuple[str, ...]] = {
     "ptr": ("ptr.wowhead.com",),
     "beta": ("beta.wowhead.com",),
     "classic-ptr": ("classicptr.wowhead.com",),
+    "forever": (),
 }
 
 _PROFILES: tuple[ExpansionProfile, ...] = tuple(
@@ -77,9 +79,6 @@ _BY_KEY = {profile.key: profile for profile in _PROFILES}
 _BY_PATH_PREFIX = {profile.path_prefix: profile for profile in _PROFILES if profile.path_prefix}
 # The first path segment that routes a Wowhead URL to a non-retail site (classic, tbc, ...).
 EXPANSION_PREFIXES = wowhead_path_prefixes()
-# Wowhead sections for another game with no expansion profile here (WoW Forever): a URL under one
-# names no expansion this CLI reads, rather than retail.
-UNPROFILED_PATH_PREFIXES = frozenset({"forever"})
 
 _LEGACY_HOST_TO_PROFILE: dict[str, ExpansionProfile] = {}
 for _profile in _PROFILES:
@@ -179,8 +178,6 @@ def _profile_for_hostname(hostname: str) -> ExpansionProfile | None:
 
 def _profile_for_path_prefix(path: str) -> ExpansionProfile | None:
     head = next((part for part in path.split("/") if part), "")
-    if head in UNPROFILED_PATH_PREFIXES:
-        return None
     return _BY_PATH_PREFIX.get(head, _BY_KEY["retail"])
 
 

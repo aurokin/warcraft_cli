@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 from wowhead_cli.entity_types import SUGGESTION_TYPE_TO_ENTITY, suggestion_entity_type_from_type_id
 from wowhead_cli.expansion_profiles import resolve_expansion
+from wowhead_cli.guide_services import _page_meta_block
 from wowhead_cli.main import app
 from wowhead_cli.ranking import STALE_GUIDE_REASON, merge_suggestion_lists, search_result_url
 from wowhead_cli.wowhead_client import suggestion_entity_type
@@ -37,6 +38,7 @@ CAPTURED_BLUE_TRACKER_LISTING = captured_page("blue_tracker_listing.html")
 CAPTURED_SUGGESTION_FILES = (
     "search_suggestions_thunderfury.json",
     "search_suggestions_classic_thunderfury.json",
+    "search_suggestions_forever_thunderfury.json",
     "search_suggestions_wotlk_thunderfury.json",
     "search_suggestions_ungoro.json",
     "search_suggestions_valorstones.json",
@@ -46,6 +48,43 @@ CAPTURED_SUGGESTION_FILES = (
     "search_suggestions_spirit_beast.json",
     "search_suggestions_battlegear_of_wrath.json",
 )
+
+
+def test_forever_search_uses_captured_database_rows_and_scoped_follow_ups(monkeypatch) -> None:
+    payload = captured_json("search_suggestions_forever_thunderfury.json")
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.search_suggestions", lambda self, query: payload)
+    result = runner.invoke(app, ["--expansion", "forever", "search", "Thunderfury", "--entity-type", "item"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["expansion"] == "forever"
+    assert data["search_url"].startswith("https://www.wowhead.com/forever/search?")
+    item = data["results"][0]
+    assert item["id"] == 19019
+    assert item["url"] == "https://www.wowhead.com/forever/item=19019"
+    assert item["follow_up"]["command"] == "wowhead --expansion forever entity item 19019"
+
+
+def test_forever_class_guide_listing_preserves_published_patch_and_urls(monkeypatch) -> None:
+    # Captured Listview script from /forever/guides/classes on 2026-10-11, unedited.
+    listing = captured_page("guides_forever_classes.js")
+    monkeypatch.setattr("wowhead_cli.main.WowheadClient.guide_category_page_html", lambda self, category: listing)
+    result = runner.invoke(app, ["--expansion", "forever", "guides", "classes", "frost mage", "--limit", "1"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)["data"]
+    assert data["expansion"] == "forever"
+    guide = data["results"][0]
+    assert guide["id"] == 35012
+    assert guide["patch"] == 16001
+    assert guide["url"] == "https://www.wowhead.com/forever/guide/classes/mage/frost/level-30-dps-overview"
+
+
+def test_guide_source_metadata_retains_forever_version_and_database_revision() -> None:
+    raw = captured_json("forever_page_meta.json")
+    metadata = _page_meta_block(raw)
+    assert metadata["data_env"] == raw["dataEnv"]
+    assert metadata["data_env"]["env"] == 16
+    assert metadata["data_env"]["versions"]["16"] == "1.60.1"
+    assert metadata["active_db_changed"] == raw["activeDbChanged"]
 
 
 def _stub_news(monkeypatch) -> None:

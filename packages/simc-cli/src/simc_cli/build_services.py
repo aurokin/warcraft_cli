@@ -53,6 +53,7 @@ from simc_cli.repo import (
 )
 from simc_cli.run import (
     binary_provenance,
+    require_retail_engine,
 )
 from simc_cli.talent_transport import validate_talent_tree_transport
 from simc_cli.trait_data import (
@@ -470,6 +471,8 @@ def _build_error(
             "git_revision": provenance.git_revision,
             "checkout_head": provenance.checkout_head,
             "matches_checkout": provenance.matches_checkout,
+            "wow_version": provenance.wow_version,
+            "game_variant": provenance.game_variant,
         }
         hint = provenance.stale_hint
         return ProviderError("invalid_build", f"{prefix}{exc}{f' {hint}' if hint else ''}", details=extra or None)
@@ -608,6 +611,7 @@ def _refreshed_transport_packet(
 
 def _validate_talent_transport_payload(resolved: _TransportInput, *, repo_root: str | None) -> dict[str, Any]:
     """Round-trip the input's talent rows through SimC; ``written_packet_path`` is left for ``--out`` to fill."""
+    require_retail_engine(discover_repo(repo_root))
     result = validate_talent_tree_transport(
         actor_class=resolved.actor_class,
         spec=resolved.spec,

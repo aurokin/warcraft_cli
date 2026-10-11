@@ -10,6 +10,9 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Added
 
+- World of Warcraft: Forever has a dedicated Wowhead profile and wrapper routing through `--expansion forever`, with isolated data environment 16 and source/cache scope.
+- Wowhead guide source metadata preserves upstream `dataEnv` as `data_env` and `activeDbChanged` as `active_db_changed`, including beta client versions and database revisions.
+- SimC reports the binary's WoW client version and game variant. Forever engines expose experimental raw runs and reject retail-specific build transport and analysis; doctor reports those capability limits.
 - Wrapper discovery accepts provider and entity-type scopes, discloses filtering limits, and avoids querying excluded providers.
 - `simc apply-build` writes an explicitly selected talent build into an existing single-actor geared profile, validates identity through SimC, and preserves gear and run settings.
 - Wowhead guide bundles include explicit published build references, original calculator links, citations, and rejected-reference reasons for offline querying and SimC handoffs.
@@ -31,6 +34,7 @@ Add user-visible changes to `[Unreleased]` in the same PR that ships them. See [
 
 ### Fixed
 
+- Forever requests cannot silently use unverified SimC, Blizzard, or CurseForge passthroughs, retail talent transport, or realm-based log actor/profile joins. Exclusions disclose the unsupported or unverified contract.
 - A rejected saved Warcraft Logs user token no longer blocks public typed reads authenticated with valid client credentials. Explicit private reads still surface the user authentication failure without falling back to public access.
 - Applying a build removes default-talent loading that would override the selected talents while preserving unrelated profile configuration.
 - A failed guide comparison refresh cannot overwrite bundles from a previous completed comparison. Reuse verifies the saved bundle identity and refreshes altered or corrupt bundles.

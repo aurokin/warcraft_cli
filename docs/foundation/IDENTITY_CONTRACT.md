@@ -103,6 +103,26 @@ Safe shared contract:
 Report actor identity is only canonical inside its declared local scope.
 Do not treat report actors as globally canonical across multiple reports by default.
 
+#### Forever character names and realmless identity
+
+Forever uses a complete two-part name unique within a region, rather than a single name unique
+within a realm. Blizzard describes this in
+[Create a Name of Your Own in WoW: Forever](https://news.blizzard.com/en-us/article/24304161/create-a-name-of-your-own-in-wow-forever).
+Preserve the full provider-supplied name, including its second part and non-English characters,
+alongside native actor ids. Report lookup matches the complete name; it does not fall back to a
+first name. Case-insensitive lookup is an input convenience, not a canonical identity claim.
+
+Do not synthesize a realm, truncate a name, or reinterpret a ruleset as a realm to satisfy an older
+provider lookup. A region override cannot supply a missing realm. `warcraft actor-profile` rejects
+an explicit Forever profile before provider calls because its Warcraft Logs → Raider.IO join
+requires a realm and the Forever provider identity contracts have not been verified. A report actor
+without a realm still retains its full name, native actor id, and local report/fight identity in the
+failed join's source evidence.
+
+The shared module does not define a global Forever character id or an API-specific split between
+name parts. Those must follow verified provider contracts; regional name uniqueness alone does
+not establish a cross-provider canonical id.
+
 ### Build
 
 There is no repo-wide canonical build id.
@@ -129,6 +149,15 @@ SimC read the narrower `parse_wowhead_talent_calc_ref`: a path that names `/tale
 and one of that class's retail specs, on retail or an expansion site, with no trailing segment.
 It preserves normalized spec aliases accepted by build references, such as `Balance`,
 `BeastMastery` and `beast_mastery`; the Wowhead tool parser keeps its lowercase slug grammar.
+
+Forever remains excluded from that narrow transport parser even when its Wowhead content profile
+is registered. A supported content or calculator profile does not prove retail SimulationCraft
+compatibility. `warcraft talent-packet` and `talent-describe` reject explicit Forever requests,
+Forever calculator URLs, and packet files whose scope names Forever. Offline guide-to-SimC
+handoffs exclude Forever bundle or orchestration sources and Forever Wowhead reference/source URLs before engine
+calls, including evidence that contains a retail-shaped export code. Excluded rows retain their
+original references and source evidence. Use `wowhead talent-calc` for calculator inspection until
+a matching simulation consumer and data contract are verified.
 
 Build identity should usually be `inferred`, `ambiguous`, or `unknown`.
 Do not emit a canonical build id unless a future source contract proves one exists.

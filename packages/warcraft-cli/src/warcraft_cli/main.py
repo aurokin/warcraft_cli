@@ -158,8 +158,8 @@ def _expansion_passthrough_advisory(ctx: typer.Context, *, provider_name: str) -
 
     Returns ``None`` for a normal passthrough (no expansion requested, or the provider
     supports it). For a provider with ``expansion_mode == "none"`` requested with an
-    expansion it returns an advisory dict (relax-to-passthrough): the provider has no
-    expansion semantics to honor, so the command runs unchanged with the note attached.
+    expansion it returns an advisory dict (relax-to-passthrough), unless the registry
+    explicitly marks that profile unverified. Those profiles fail before an unscoped read.
     For a ``fixed``/``profiled`` provider asked for an unsupported expansion this is a
     genuine mismatch — it emits ``unsupported_provider_expansion`` and exits 2 (a usage error).
     """
@@ -170,7 +170,7 @@ def _expansion_passthrough_advisory(ctx: typer.Context, *, provider_name: str) -
     reason = provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion)
     if reason is None:
         return None
-    if registration.expansion_mode == "none":
+    if registration.expansion_mode == "none" and reason != "provider_game_profile_unverified":
         return {
             "expansion_filter": "passthrough_no_expansion_semantics",
             "requested_expansion": requested_expansion,

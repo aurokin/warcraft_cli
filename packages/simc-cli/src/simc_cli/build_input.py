@@ -25,6 +25,7 @@ from warcraft_core.talent_transport import specialization_ids, tokenize_talent_n
 from warcraft_core.wow_specs import lookup_class, lookup_spec
 
 from simc_cli.repo import RepoPaths
+from simc_cli.run import require_retail_engine
 from simc_cli.trait_data import SimcNotReadyError, TieredEntry, load_trait_table
 
 ACTOR_LINE_RE = re.compile(r'^([a-z_]+)\s*=\s*"?(.*?)"?$')
@@ -1003,6 +1004,7 @@ def _unconfirmed_identity(repo: RepoPaths, build_spec: BuildSpec, caller_spec: B
 def identify_build(
     repo: RepoPaths, build_spec: BuildSpec, *, apl_path: str | Path | None = None
 ) -> tuple[BuildSpec, BuildIdentity]:
+    require_retail_engine(repo)
     identified, identity = _identify_build(repo, build_spec, apl_path=apl_path)
     if apl_path and identity.actor_class and identity.spec:
         guess_class, guess_spec = infer_actor_and_spec_from_apl(apl_path)
@@ -1227,6 +1229,7 @@ def _expand_tiered_talents(repo: RepoPaths, build_spec: BuildSpec, talents_by_tr
 
 
 def decode_build(repo: RepoPaths, build_spec: BuildSpec) -> BuildResolution:
+    require_retail_engine(repo)
     if not has_talent_data(build_spec):
         # An APL-only view (priority, inactive-actions) decodes a build that carries no talents, and
         # needs no class or spec for it: an APL whose file name names no SimC spec still reads.
@@ -1363,6 +1366,7 @@ def diff_talent_trees(
 
 def encode_build(repo: RepoPaths, build_spec: BuildSpec) -> str:
     """Run SimC to encode a BuildSpec and return the combined ``talents=`` export string."""
+    require_retail_engine(repo)
     if not build_spec.actor_class or not build_spec.spec:
         raise ValueError("Need both actor class and spec to encode talents.")
     if not repo.build_simc.exists():

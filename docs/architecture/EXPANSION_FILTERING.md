@@ -6,6 +6,10 @@ Reference for wrapper `--expansion` behavior. Remaining policy review is tracked
 
 When a caller requests a specific game version, the wrapper must not silently mix in providers that do not support that expansion. Expansion ambiguity is a trust problem, not only a ranking problem.
 
+The existing `--expansion` selector also names game variants: `forever` is World of Warcraft:
+Forever, not Classic Era or retail beta. Its verified provider is Wowhead. See
+[FOREVER_READINESS.md](FOREVER_READINESS.md) for the integration boundaries.
+
 ## Provider Modes
 
 | Mode | Meaning |
@@ -45,6 +49,7 @@ Without `--expansion`, cross-provider fanout behaves as before.
 - `provider_fixed_to_other_expansion`
 - `provider_has_no_expansion_support`
 - `provider_does_not_support_requested_expansion`
+- `provider_game_profile_unverified` — an explicitly unverified profile cannot use unscoped passthrough; `verification_note` explains the gap
 
 ## Phase 4 Expansion Policy
 
@@ -73,6 +78,7 @@ A provider is promoted toward `profiled` only when all of the following hold; un
 | `mop-classic` | classic (MoP) | `classic.warcraftlogs.com` |
 | `fresh` | fresh (Classic Fresh / Anniversary) | `fresh.warcraftlogs.com` |
 | `ptr` / `beta` / `classic-ptr` | — (unmapped) | rejected, not coerced |
+| `forever` | — (unverified) | no inferred Classic/Fresh host |
 
 ### (iii) none-expansion passthrough rule
 
@@ -84,6 +90,12 @@ A provider whose mode is `none` has no expansion semantics to honor. For the `wa
 
 This applies only to `none` providers. `fixed`/`profiled` providers asked for an unsupported expansion are a genuine mismatch and still hard-fail with `unsupported_provider_expansion` (exit 2, a usage error). The relaxed behavior is scoped to the proxy path; `warcraft --expansion <key> search|resolve` continues to exclude `none`/non-matching providers from the filtered fanout (surface/expansion filtering is unchanged).
 
+Explicitly unverified profiles are an exception to the advisory rule: `--expansion forever`
+with SimC, Blizzard, or CurseForge fails before the provider runs. This prevents a Forever
+request from reading retail data or choosing an addon file with unverified compatibility.
+Their standalone CLIs remain available for explicit inspection; that does not establish
+Forever compatibility. Doctor and exclusion payloads include the verification reason.
+
 ## Non-Goals
 
 - No fake universal expansion model across all providers
@@ -92,7 +104,7 @@ This applies only to `none` providers. `fixed`/`profiled` providers asked for an
 
 ## Open Work
 
-- Promote `simc` when upstream exposes a real non-retail game-version surface
+- Promote `simc` when the experimental upstream Forever engine and this provider's build/analysis contracts are verified together
 - Optional: per-expansion wiki routing when classic/fresh article policy is defined
 
 ## Related

@@ -57,8 +57,11 @@
 - use `news-post` and `blue-topic` once you already have a specific URL; `news-post` takes only
   `/news/...` or `/news=<id>` pages and `blue-topic` only `/blue-tracker/topic/...` pages, so the
   `/blue-tracker/news/...` rows of `blue-tracker` feed neither
-- a `/forever/` (WoW Forever) URL names no expansion this CLI reads: `entity --url` refuses it, and
-  `news-post` reads a Forever post with a `notes` entry saying the expansion could not be inferred
+- use `--expansion forever` for WoW Forever search, entities, guides and timelines; `/forever/`
+  URLs infer that profile, and follow-up commands preserve it. Forever data stays separate from
+  Classic and retail. Beta item data can be incomplete until players discover it; retain the raw
+  source and do not fill missing stats from Classic. Calculator decoding does not imply support
+  in a simulation engine
 - a news date window far in the past needs enough `--pages` to reach it; `scan.stop_reason: null`
   means `--pages` ran out before the scan got there
 - filter timelines by date with `--date-from` / `--date-to`, and read each row's ISO `posted_at`

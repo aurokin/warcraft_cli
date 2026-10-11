@@ -104,6 +104,29 @@ def test_a_classic_build_lists_each_trees_talents_with_rank_and_spell() -> None:
     assert decoded["points_total"] == 51
 
 
+@pytest.mark.parametrize(
+    ("actor_class", "tree_names", "talent_names", "spell_ids"),
+    [
+        ("warlock", ["Affliction", "Demonology", "Destruction"], ["Improved Life Tap", "Improved Health Funnel", "Destructive Reach"], [18182, 18703, 17917]),
+        ("druid", ["Balance", "Feral Combat", "Restoration"], ["Improved Wrath", "Ferocity", "Nature's Focus"], [16814, 16934, 17063]),
+    ],
+)
+def test_remaining_forever_classes_match_the_rendered_calculator(
+    actor_class: str, tree_names: list[str], talent_names: list[str], spell_ids: list[int]
+) -> None:
+    # Each v21-1-1_t0 build was rendered in Wowhead's calculator on 2026-10-11.
+    # Data source: /forever/data/talents-classic?dv=29&db=1791493526 on nether.wowhead.com.
+    data = compact_talent_data(captured_page("talent_data_forever_remaining.js"))
+    decoded = decode_build(data, calculator="forever", actor_class=actor_class, build_code="v21-1-1_t0")
+    assert decoded["decoded"] is True, decoded
+    assert decoded["points_by_tree"] == "1/1/1"
+    assert [tree["name"] for tree in decoded["trees"]] == tree_names
+    talents = [tree["talents"][0] for tree in decoded["trees"]]
+    assert [talent["name"] for talent in talents] == talent_names
+    assert [talent["spell_id"] for talent in talents] == spell_ids
+    assert all(talent["rank"] == 1 for talent in talents)
+
+
 def test_a_mop_classic_build_names_the_talent_chosen_in_each_tier() -> None:
     decoded = _decode("mop-classic", "druid", "323222")
     assert decoded["format"] == "mop_tiers"

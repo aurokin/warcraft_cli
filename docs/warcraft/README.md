@@ -39,6 +39,13 @@ warcraft --expansion wotlk resolve "thunderfury"
   `warcraftlogs --site`). Providers with no expansion axis (`simc`, `blizzard`, `curseforge`) pass
   through unchanged with an `expansion_advisory` note.
 
+`--expansion forever` scopes discovery and Wowhead passthrough to World of Warcraft: Forever.
+Unverified providers fail before an unscoped read, including SimC, Blizzard, and CurseForge
+despite their usual advisory-only passthrough. `warcraft --expansion forever doctor` reports
+each exclusion and its verification gap. Forever talent calculators are readable through
+Wowhead; retail talent transport, guide-to-SimC, and realm-based actor-profile handoffs do not
+support Forever. See [Forever readiness](../architecture/FOREVER_READINESS.md).
+
 `--warcraftlogs-endpoint client|user|auto` selects the authentication endpoint for WCL reads inside
 root composites and for WCL readiness in `warcraft doctor`. The default `client` deliberately uses
 public credentials. Use `user` to consume your saved authenticated session for a private report;
