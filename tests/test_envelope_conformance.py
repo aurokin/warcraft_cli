@@ -15,6 +15,7 @@ from warcraft_cli.main import app as warcraft_app
 from warcraft_cli.providers import PROVIDERS
 from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS, envelope_violations
 from warcraft_core.identity import build_reference_transport_packet_payload
+from warcraft_core.provider import ProviderError
 
 from tests.cli_testkit import apply_provider_stubs, run_binary
 from tests.discovery_contract import resolve_data_violations, search_data_violations
@@ -23,8 +24,8 @@ PROVIDER_IDS = [registration.name for registration in PROVIDERS]
 SURFACES = ("search", "resolve")
 TIERS = {
     "core": {"wowhead", "warcraftlogs", "simc"},
-    "supported": {"raiderio", "warcraft-wiki", "icy-veins", "method", "lorrgs"},
-    "experimental": {"raidbots", "blizzard-api", "curseforge"},
+    "supported": {"raiderio", "warcraft-wiki", "icy-veins", "method", "lorrgs", "blizzard-api"},
+    "experimental": {"raidbots", "curseforge"},
 }
 
 
@@ -57,6 +58,10 @@ def test_every_surface_answers_an_empty_upstream_with_a_conforming_envelope(
     """
     apply_provider_stubs(registration.name, monkeypatch)
     call = registration.surface.search if surface == "search" else registration.surface.resolve
+    if registration.wrapper_capabilities[surface] == "not_supported":
+        with pytest.raises(ProviderError, match="unsupported|does not support|no public report index"):
+            call("zzqx nonsense qqq", limit=3)
+        return
     payload = call("zzqx nonsense qqq", limit=3)
 
     context = f"{registration.name} {surface}"

@@ -16,9 +16,9 @@ app = typer.Typer(
     # The verification sentence comes from the client so --help, doctor and provenance never
     # disagree about which regions are confirmed.
     help=(
-        "Official Blizzard Battle.net World of Warcraft API CLI. Experimental tier: explicit reads "
+        "Official Blizzard Battle.net World of Warcraft API CLI. Supported tier: explicit reads "
         "(realm, item, character, PvP seasons/leaderboards/ratings, collections, auction prices); "
-        "search/resolve are stubs. " + verification_note()
+        "free-text discovery is unsupported. " + verification_note()
     ),
 )
 install_common_callback(app, provider=PROVIDER_NAME)
@@ -298,20 +298,26 @@ def commodities(
 def search(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Free-text query. Discovery search is not implemented yet."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused until blizzard search ships."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Compatibility limit; discovery is unsupported."),
 ) -> None:
-    """Coming soon: free-text discovery search is not implemented yet."""
-    emit(ctx, PROVIDER.search(query, limit=limit))
+    """Fail explicitly for unsupported free-text discovery."""
+    try:
+        emit(ctx, PROVIDER.search(query, limit=limit))
+    except ProviderError as exc:
+        fail(ctx, exc.code, exc.message, exit_code=exc.exit_code, details=exc.details)
 
 
 @app.command("resolve")
 def resolve(
     ctx: typer.Context,
     query: str = typer.Argument(..., help="Free-text query. Conservative resolution is not implemented yet."),
-    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Unused until blizzard resolve ships."),
+    limit: int = typer.Option(5, "--limit", min=1, max=50, help="Compatibility limit; discovery is unsupported."),
 ) -> None:
-    """Coming soon: conservative resolution is not implemented yet."""
-    emit(ctx, PROVIDER.resolve(query, limit=limit))
+    """Fail explicitly for unsupported free-text resolution."""
+    try:
+        emit(ctx, PROVIDER.resolve(query, limit=limit))
+    except ProviderError as exc:
+        fail(ctx, exc.code, exc.message, exit_code=exc.exit_code, details=exc.details)
 
 
 def run() -> None:

@@ -45,11 +45,7 @@ class ReportReference:
 
 
 def _saved_user_token_ready(state: dict[str, Any], *, site: WarcraftLogsSiteProfile | None = None) -> bool:
-    ready = bool(
-        state.get("has_access_token")
-        and state.get("auth_mode") in {"authorization_code", "pkce"}
-        and not state.get("expired")
-    )
+    ready = bool(state.get("has_access_token") and state.get("auth_mode") in {"authorization_code", "pkce"} and not state.get("expired"))
     if not ready or site is None:
         return ready
     return _saved_user_token_matches_site(site, state=state)
@@ -412,7 +408,7 @@ def _doctor_cache_payload() -> dict[str, Any]:
     }
 
 
-def doctor_payload(*, live: bool, site: WarcraftLogsSiteProfile) -> dict[str, Any]:
+def doctor_payload(*, live: bool, site: WarcraftLogsSiteProfile, endpoint: str = "client") -> dict[str, Any]:
     auth = load_warcraftlogs_auth_config()
     credential_source = auth.env_file if auth.env_file is not None else ("environment" if auth.configured else None)
     state = provider_auth_status("warcraftlogs")
@@ -429,16 +425,20 @@ def doctor_payload(*, live: bool, site: WarcraftLogsSiteProfile) -> dict[str, An
         live=live,
         site=site,
     )
+    effective_endpoint = "user" if endpoint == "user" or (endpoint == "auto" and _saved_user_token_ready(state, site=site)) else "client"
+    selected_access = user_api_access if effective_endpoint == "user" else public_api_access
     cache = _doctor_cache_payload()
     return {
-        # Every data command needs the public API, so without it the provider is degraded, as it is
-        # when a Redis cache does not answer or the cache config does not parse.
-        "status": "ready" if public_api_access["ready"] and cache.get("available") is not False else "degraded",
+        # Readiness follows the requested command endpoint, plus cache runtime health.
+        "status": "ready" if selected_access["ready"] and cache.get("available") is not False else "degraded",
         "installed": True,
         "language": "python",
         "cache": cache,
         "site_profile": _site_profile_payload(site),
         "auth": {
+            "command_endpoint_policy": endpoint,
+            "command_endpoint": effective_endpoint,
+            "command_access": selected_access,
             "required": True,
             "configured": auth.configured,
             "client_credentials_configured": auth.configured,
@@ -459,43 +459,43 @@ def doctor_payload(*, live: bool, site: WarcraftLogsSiteProfile) -> dict[str, An
             "search": "ready_explicit_report_only",
             "resolve": "ready_explicit_report_only",
             "rate_limit": _public_capability_status(public_api_access),
-            "regions": _public_capability_status(public_api_access),
-            "expansions": _public_capability_status(public_api_access),
-            "server": _public_capability_status(public_api_access),
-            "zone": _public_capability_status(public_api_access),
-            "zones": _public_capability_status(public_api_access),
-            "encounter": _public_capability_status(public_api_access),
-            "guild": _public_capability_status(public_api_access),
-            "guild_members": _public_capability_status(public_api_access),
-            "guild_attendance": _public_capability_status(public_api_access),
-            "guild_rankings": _public_capability_status(public_api_access),
-            "boss_kills": _public_capability_status(public_api_access),
-            "top_kills": _public_capability_status(public_api_access),
-            "spec_kill_samples": _public_capability_status(public_api_access),
-            "kill_time_distribution": _public_capability_status(public_api_access),
-            "boss_spec_usage": _public_capability_status(public_api_access),
-            "comp_samples": _public_capability_status(public_api_access),
-            "ability_usage_summary": _public_capability_status(public_api_access),
-            "report_encounter": _public_capability_status(public_api_access),
-            "report_encounter_players": _public_capability_status(public_api_access),
-            "report_encounter_casts": _public_capability_status(public_api_access),
-            "report_encounter_buffs": _public_capability_status(public_api_access),
-            "report_encounter_aura_summary": _public_capability_status(public_api_access),
-            "report_encounter_aura_compare": _public_capability_status(public_api_access),
-            "report_encounter_damage_source_summary": _public_capability_status(public_api_access),
-            "report_encounter_damage_target_summary": _public_capability_status(public_api_access),
-            "report_encounter_damage_breakdown": _public_capability_status(public_api_access),
-            "character": _public_capability_status(public_api_access),
-            "character_rankings": _public_capability_status(public_api_access),
-            "report": _public_capability_status(public_api_access),
-            "reports": _public_capability_status(public_api_access),
-            "report_fights": _public_capability_status(public_api_access),
-            "report_events": _public_capability_status(public_api_access),
-            "report_table": _public_capability_status(public_api_access),
-            "report_graph": _public_capability_status(public_api_access),
-            "report_master_data": _public_capability_status(public_api_access),
-            "report_player_details": _public_capability_status(public_api_access),
-            "report_rankings": _public_capability_status(public_api_access),
+            "regions": _public_capability_status(selected_access),
+            "expansions": _public_capability_status(selected_access),
+            "server": _public_capability_status(selected_access),
+            "zone": _public_capability_status(selected_access),
+            "zones": _public_capability_status(selected_access),
+            "encounter": _public_capability_status(selected_access),
+            "guild": _public_capability_status(selected_access),
+            "guild_members": _public_capability_status(selected_access),
+            "guild_attendance": _public_capability_status(selected_access),
+            "guild_rankings": _public_capability_status(selected_access),
+            "boss_kills": _public_capability_status(selected_access),
+            "top_kills": _public_capability_status(selected_access),
+            "spec_kill_samples": _public_capability_status(selected_access),
+            "kill_time_distribution": _public_capability_status(selected_access),
+            "boss_spec_usage": _public_capability_status(selected_access),
+            "comp_samples": _public_capability_status(selected_access),
+            "ability_usage_summary": _public_capability_status(selected_access),
+            "report_encounter": _public_capability_status(selected_access),
+            "report_encounter_players": _public_capability_status(selected_access),
+            "report_encounter_casts": _public_capability_status(selected_access),
+            "report_encounter_buffs": _public_capability_status(selected_access),
+            "report_encounter_aura_summary": _public_capability_status(selected_access),
+            "report_encounter_aura_compare": _public_capability_status(selected_access),
+            "report_encounter_damage_source_summary": _public_capability_status(selected_access),
+            "report_encounter_damage_target_summary": _public_capability_status(selected_access),
+            "report_encounter_damage_breakdown": _public_capability_status(selected_access),
+            "character": _public_capability_status(selected_access),
+            "character_rankings": _public_capability_status(selected_access),
+            "report": _public_capability_status(selected_access),
+            "reports": _public_capability_status(selected_access),
+            "report_fights": _public_capability_status(selected_access),
+            "report_events": _public_capability_status(selected_access),
+            "report_table": _public_capability_status(selected_access),
+            "report_graph": _public_capability_status(selected_access),
+            "report_master_data": _public_capability_status(selected_access),
+            "report_player_details": _public_capability_status(selected_access),
+            "report_rankings": _public_capability_status(selected_access),
             "user_auth": _user_auth_capability(
                 auth_configured=auth.configured,
                 runtime_access=runtime_access,
@@ -515,10 +515,7 @@ def _report_discovery_hint(site: WarcraftLogsSiteProfile) -> dict[str, Any]:
     """What a free-text search or resolve answers with: discovery only takes explicit report references."""
     command_prefix = _warcraftlogs_command_prefix(site)
     return {
-        "message": (
-            "Warcraft Logs discovery is intentionally narrow for now. "
-            "Use an explicit report URL or a bare report code."
-        ),
+        "message": ("Warcraft Logs discovery is intentionally narrow for now. Use an explicit report URL or a bare report code."),
         "supported_inputs": [
             f"{site.root_url}/reports/<code>?fight=<id> (or #fight=<id>)",
             "<report_code>",

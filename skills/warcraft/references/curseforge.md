@@ -1,6 +1,6 @@
 # CurseForge
 
-**Tier: experimental.** The command surface is thin (four commands). The endpoints are confirmed
+**Tier: experimental.** The command surface is explicit addon lookup and doctor. The endpoints are confirmed
 against the live API; `provenance.verified` is `true`.
 
 ## Best For
@@ -46,7 +46,7 @@ against the live API; `provenance.verified` is `true`.
 
 ## Boundaries
 
-- `search` / `resolve` are coming soon: use `addon` with a known slug or id
+- `search` / `resolve` fail with `unsupported_operation` (exit 2): use `addon` with a known slug or id
 - deferred: dependency graphs, game-version compatibility, file downloads
 - registered with `expansion_mode=none`: addon game-version compatibility lives inside file
   records, so `curseforge` stays out of `--expansion` fanout

@@ -11,7 +11,7 @@ import pytest
 import typer
 from curseforge_cli.main import app
 from typer.testing import CliRunner
-from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS
+from warcraft_core.envelope import ENVELOPE_KEYS
 
 runner = CliRunner()
 
@@ -405,20 +405,16 @@ def test_numeric_id_rejects_non_wow_mod(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.mark.parametrize("command", ["search", "resolve"])
-def test_coming_soon_commands_emit_structured_stub(command: str) -> None:
-    # doctor advertises search/resolve as coming_soon, so the commands must exist and emit a
-    # structured coming_soon envelope (not Click's "No such command") when a caller probes them.
-    result = runner.invoke(app, [command, "dbm"])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert set(payload) == REQUIRED_KEYS
-    assert payload["ok"] is True
-    assert payload["provider"] == "curseforge"
+def test_unsupported_discovery_emits_actionable_usage_error(command: str) -> None:
+    result = runner.invoke(app, [command, "illidan"])
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
     assert payload["command"] == command
-    assert payload["kind"] == ("search_results" if command == "search" else "resolve_match")
-    # `query` is the query text, as on every other provider's search/resolve envelope.
-    assert payload["query"] == "dbm"
-    assert payload["data"]["coming_soon"] is True
+    assert payload["error"]["code"] == "unsupported_operation"
+    assert payload["error"]["details"]["available_commands"]
+
 
 
 def test_numeric_id_missing_gameid_is_invalid_response(monkeypatch: pytest.MonkeyPatch) -> None:

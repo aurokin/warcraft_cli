@@ -333,7 +333,7 @@ Query one guide for the sections, links, and comments that match a query string.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `--limit` | int range [1<=x<=50] | 5 | Maximum matches to return per category and in the flattened top list. |
-| `--kind` | str (repeatable) |  | Restrict search kinds. Repeat or pass comma-separated values from: sections, analysis_surfaces, navigation, linked_entities, gatherer_entities, comments. |
+| `--kind` | str (repeatable) |  | Restrict search kinds. Repeat or pass comma-separated values from: sections, analysis_surfaces, navigation, linked_entities, gatherer_entities, comments, build_references. |
 | `--section-title` | str |  | Restrict section searching to section titles containing this text. |
 | `--linked-source` | str (repeatable) |  | Restrict merged linked-entity matches by provenance. Repeat or pass comma-separated values from: href, gatherer, multi. |
 | `--root` | directory |  | Root directory used to resolve non-path bundle selectors. Defaults to ./wowhead_exports/. |
@@ -355,7 +355,7 @@ Query every local guide bundle under a corpus root and rank the matching guides.
 | `--root` | directory |  | Root directory containing exported guide bundles. Defaults to ./wowhead_exports/. |
 | `--limit` | int range [1<=x<=50] | 5 | Maximum matches to return in the flattened top list and per bundle top results. |
 | `--bundle-limit` | int range [1<=x<=50] | 5 | Maximum matching bundles to return. |
-| `--kind` | str (repeatable) |  | Restrict search kinds. Repeat or pass comma-separated values from: sections, analysis_surfaces, navigation, linked_entities, gatherer_entities, comments. |
+| `--kind` | str (repeatable) |  | Restrict search kinds. Repeat or pass comma-separated values from: sections, analysis_surfaces, navigation, linked_entities, gatherer_entities, comments, build_references. |
 | `--section-title` | str |  | Restrict section searching to section titles containing this text. |
 | `--linked-source` | str (repeatable) |  | Restrict merged linked-entity matches by provenance. Repeat or pass comma-separated values from: href, gatherer, multi. |
 | `--max-age-hours` | int range [1<=x<=720] | 24 | Freshness window in hours used for bundle freshness summaries. |

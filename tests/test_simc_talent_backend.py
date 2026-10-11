@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 from simc_cli import build_input
+from simc_cli.build_services import identify_build_payload, validate_transport_packet_payload
 from simc_cli.main import app as simc_app
-from simc_cli.main import identify_build_payload, validate_transport_packet_payload
 from simc_cli.provider import simc_envelope
 from simc_cli.repo import RepoPaths
 from simc_cli.talent_transport import simc_backend
@@ -85,7 +85,7 @@ _EXACT_PACKET: dict[str, Any] = {
 def test_an_in_memory_packet_validates_exactly_as_the_cli_validates_its_file(monkeypatch, tmp_path: Path) -> None:
     """The wrapper's in-process call and `simc validate-talent-transport` share one function."""
     monkeypatch.setattr(
-        "simc_cli.main.validate_talent_tree_transport",
+        "simc_cli.build_services.validate_talent_tree_transport",
         lambda **kwargs: {
             "transport_forms": {"simc_split_talents": {"class_talents": "103324:1"}},
             "validation": {"status": "validated", "actor_class": "druid", "spec": "balance"},
@@ -104,7 +104,7 @@ def test_an_in_memory_packet_validates_exactly_as_the_cli_validates_its_file(mon
 
 def test_an_in_memory_packet_cites_only_the_file_its_caller_names(monkeypatch) -> None:
     monkeypatch.setattr(
-        "simc_cli.main.identify_build",
+        "simc_cli.build_services.identify_build",
         lambda _paths, spec, *, apl_path: (
             spec,
             build_input.BuildIdentity(actor_class=spec.actor_class, spec=spec.spec, confidence="high", source="direct",

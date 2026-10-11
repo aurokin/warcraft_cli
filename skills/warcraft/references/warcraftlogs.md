@@ -71,6 +71,10 @@ Best fits:
 - a URL's `#fight=N` (or a bare `CODE#fight=N` / `CODE?fight=N`) scopes `report-events`, `report-table`, `report-graph`, `report-player-details`, `report-rankings` and the `report-encounter*` commands when `--fight-id` is absent; an explicit `--fight-id` wins
 - a report code only exists on its own site: `resolve`/`search` on a `classic.` or `fresh.` report URL return a follow-up command with that `--site`, and the `report-encounter*` commands fail with `invalid_query` (exit 2) when the URL's site is not the selected `--site`
 - `server`, `guild*` (except `guild-reports`), `character` and `character-rankings` take a realm in any spelling (`Azjol-Nerub`, `azjolnerub`, `Mal'Ganis`) and try each slug spelling; `reports`/`guild-reports`, `--guild-realm` and `encounter-rankings --server-slug` send one slug, so pass the slug `server` reports (`azjolnerub`)
+- typed reads default to public `--endpoint client`; use global `--endpoint user` for private reports, or `--endpoint auto` to prefer a saved user token deliberately. Rejected user access never silently becomes public access
+- `doctor` readiness follows that selected endpoint; `auth whoami` always uses the saved user token
+- global `--refresh` re-fetches only queried cache entries; finished reports remain mutable and `report.revision` is observed evidence, not automatic cache invalidation
+- `report-events --all-pages --data-type casts --fight-id ... --max-pages 20 --max-events 100000 --out events.jsonl --artifact-format jsonl` writes bounded raw evidence. Check `export.complete`, stop reason and continuation before counting a whole fight; collection time does not equal upstream fetch time
 - public OAuth client credentials are the default auth mode
 - manual user-auth groundwork now exists for authorization-code and PKCE exchange, plus saved user-token verification via `warcraftlogs auth whoami`
 - current surface works both standalone and through the root `warcraft` wrapper, but wrapper discovery is still intentionally narrow

@@ -6,14 +6,13 @@ wraps them for the CLI and the ``warcraft`` wrapper can call ``PROVIDER`` in-pro
 
 from __future__ import annotations
 
-import shlex
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
-from warcraft_core.discovery import stub_envelope
 from warcraft_core.envelope import ENVELOPE_KEYS, Envelope, success_envelope
-from warcraft_core.provider import ProviderSurface
+from warcraft_core.exit_codes import EXIT_USAGE
+from warcraft_core.provider import ProviderError, ProviderSurface
 
 from simc_cli.repo import RepoPaths, discover_repo, resolve_repo_root, validate_build, validate_repo
 from simc_cli.run import binary_matches_checkout, binary_version, repo_git_status
@@ -23,8 +22,8 @@ PROVIDER_NAME = "simc"
 
 # Every command name the CLI exposes, with the state agents should expect from it.
 CAPABILITIES: dict[str, str] = {
-    "search": "coming_soon",
-    "resolve": "coming_soon",
+    "search": "not_supported",
+    "resolve": "not_supported",
     "doctor": "ready",
     "repo": "ready",
     "checkout": "ready",
@@ -37,6 +36,7 @@ CAPABILITIES: dict[str, str] = {
     "spec_files": "ready",
     "identify_build": "ready",
     "decode_build": "ready",
+    "apply_build": "ready",
     "validate_talent_transport": "ready",
     "apl_lists": "ready",
     "apl_graph": "ready",
@@ -75,6 +75,7 @@ BINARY_COMMANDS = frozenset({
     "sim",
     "identify_build",
     "decode_build",
+    "apply_build",
     "describe_build",
     "modify_build",
     "compare_builds",
@@ -93,10 +94,7 @@ BINARY_COMMANDS = frozenset({
     "apl_intent_explain",
 })
 
-COMING_SOON_MESSAGE = (
-    "Free-text discovery is not implemented yet for simc phase 1. "
-    "Use direct repo, spec-files, decode-build, or run commands."
-)
+
 
 
 def simc_envelope(command: str, payload: Mapping[str, Any]) -> Envelope:
@@ -149,35 +147,22 @@ def repo_payload(paths: RepoPaths) -> dict[str, Any]:
     }
 
 
-def _coming_soon_envelope(surface: Literal["search", "resolve"], query: str, suggested_command: str) -> Envelope:
-    """Structured stub for the discovery surfaces simc does not implement yet."""
-    return stub_envelope(
-        provider=PROVIDER_NAME,
-        surface=surface,
-        flag="coming_soon",
-        query=query,
-        message=COMING_SOON_MESSAGE,
-        suggested_command=suggested_command,
+def search(query: str, *, limit: int = 10, repo_root: str | Path | None = None, **options: Any) -> Envelope:
+    """Reject free-text discovery; the local catalog is exposed by explicit inspection commands."""
+    raise ProviderError(
+        "unsupported_operation", "SimC does not support free-text discovery. Use spec-files <class> or inspect.",
+        exit_code=EXIT_USAGE,
+        details={"operation": "search", "available_commands": ["spec-files", "inspect", "identify-build"]},
     )
 
 
-def _example_apl_path(paths: RepoPaths) -> Path | None:
-    """An APL file that actually exists, so the suggested command is runnable."""
-    return next(iter(sorted(paths.apl_default.glob("*_*.simc"))), None) if paths.apl_default.exists() else None
-
-
-def search(query: str, *, limit: int = 10, repo_root: str | Path | None = None, **options: Any) -> Envelope:
-    """Free-text search is deferred; return the coming-soon stub instead of guessing."""
-    del limit, repo_root, options
-    return _coming_soon_envelope("search", query, "simc spec-files monk")
-
-
 def resolve(target: str, *, repo_root: str | Path | None = None, **options: Any) -> Envelope:
-    """Free-text resolution is deferred; point at a command that runs against the discovered repo as is."""
-    del options
-    example_apl = _example_apl_path(discover_repo(repo_root))
-    suggested = shlex.join(["simc", "apl-lists", str(example_apl)]) if example_apl else "simc spec-files monk"
-    return _coming_soon_envelope("resolve", target, suggested)
+    """Reject free-text resolution without suggesting an unrelated class."""
+    raise ProviderError(
+        "unsupported_operation", "SimC does not support free-text resolution. Use identify-build for an explicit build.",
+        exit_code=EXIT_USAGE,
+        details={"operation": "resolve", "available_commands": ["identify-build", "spec-files", "inspect"]},
+    )
 
 
 def doctor(*, repo_root: str | Path | None = None, **options: Any) -> Envelope:

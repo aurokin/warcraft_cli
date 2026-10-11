@@ -1,6 +1,6 @@
 # Blizzard API
 
-**Tier: experimental.** Explicit reads only: there is no search or resolve yet. The Battle.net hosts and namespaces are
+**Tier: supported.** Explicit typed reads; free-text search and resolve are unsupported (exit 2). The Battle.net hosts and namespaces are
 confirmed against the live API for `us`, `eu`, `kr`, and `tw` (`provenance.verified: true`);
 `cn` is unverified. Cross-check anything load-bearing against `wowhead` or `warcraftlogs`.
 

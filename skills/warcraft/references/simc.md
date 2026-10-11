@@ -16,7 +16,9 @@
 - build identification: `simc identify-build`
 - build summary: `simc describe-build`
 - source inspection: `simc spec-files ...`, `simc apl-lists ...`, `simc apl-talents ...`
-- reasoning: `simc priority ...`, `simc inactive-actions ...`, `simc opener ...`, `simc analysis-packet ...`
+- complete APL evidence: `simc analysis-packet ...`
+- focused evidence: `simc priority ...`, `simc inactive-actions ...`, `simc opener ...`
+- geared guide handoff: `simc apply-build ./geared.simc --build-packet ./build.json --out ./variant.simc`
 - direct sim runs: `simc sim ...`
 - APL comparison: `simc build-harness ...`, `simc validate-apl ...`, `simc compare-apls ...`
 - talent comparison: `simc compare-builds --base ... --other ...`
@@ -25,8 +27,10 @@
 
 ## Effective Use
 
-- prefer readonly APL inspection before jumping to a real sim run
-- if the user provides a talent string, import string, or Wowhead talent-calc URL with build code, assume they want the exact build only; use `describe-build` first for “what is this build doing?” requests, then use `priority` or `inactive-actions` with the same `--talents` value when you need finer evidence (`--build-packet` is accepted only by `describe-build`, `decode-build`, `identify-build`, and `validate-talent-transport`; for the other exact-build commands pass the packet's `simc_split_talents` strings as `--class-talents` / `--spec-talents` / `--hero-talents`)
+- prefer `describe-build` for an explicit build and `analysis-packet` for a complete bounded APL evidence view before using focused expert commands or running a simulation
+- SimC has no generic discovery index; use typed inspection/build commands instead of `search` or `resolve`
+- use `apply-build` to apply a guide's explicit packet (or `--build-text`) to a supplied standalone profile whose single actor and explicit spec match the verified build. It preserves gear and other settings, replaces talent forms, append overrides and default/all-talent loading, and does not infer gear or simulate the result. Profiles with includes, copies, profilesets, player imports or explicit actor controls must first be made standalone. Enemy settings and independently scoped expansion talents are retained. Output must differ from the source; existing output requires `--overwrite`. Then run `simc sim` on the resulting profile
+- if the user provides a talent string, import string, or Wowhead talent-calc URL with build code, assume they want the exact build only; use `describe-build` first for “what is this build doing?” requests, then use `priority` or `inactive-actions` with the same `--talents` value when you need finer evidence (`--build-packet` is accepted by `describe-build`, `decode-build`, `identify-build`, `validate-talent-transport`, and `apply-build`; for the other exact-build commands pass the packet's `simc_split_talents` strings as `--class-talents` / `--spec-talents` / `--hero-talents`)
 - users may paste:
   - a bare WoW talent export string (this is what Method and Icy Veins guides publish; it names no class or spec, so the CLI identifies it by decoding it as each spec SimC knows)
   - a Wowhead talent-calc URL with build code, which names the class and spec by itself

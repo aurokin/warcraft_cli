@@ -67,7 +67,7 @@ def _bare_client() -> WarcraftLogsClient:
 
 
 class _FakeWarcraftLogsClient:
-    def __init__(self, *, site: WarcraftLogsSiteProfile = RETAIL_PROFILE) -> None:
+    def __init__(self, *, site: WarcraftLogsSiteProfile = RETAIL_PROFILE, endpoint: str = "client", refresh: bool = False) -> None:
         self._site = site
         self._guild_ttl = 300
         self._report_ttl = 60
@@ -4086,7 +4086,8 @@ def test_warcraftlogs_report_encounter_accepts_report_url(monkeypatch) -> None:
     assert payload["data"]["fight"]["encounter_id"] == 3012
     assert payload["data"]["encounter_identity"]["status"] == "canonical"
     assert payload["data"]["encounter_identity"]["identity"]["encounter_id"] == 3012
-    assert payload["data"]["stability"]["cache_safe"] is True
+    assert payload["data"]["stability"]["cache_policy"] == "ttl_staleness_budget"
+    assert payload["data"]["stability"]["immutable"] is False
 
 
 def test_warcraftlogs_report_url_on_another_site_names_the_site_to_select(monkeypatch) -> None:
@@ -4155,7 +4156,7 @@ def test_warcraftlogs_report_encounter_players_scopes_to_selected_fight(monkeypa
 def test_warcraftlogs_report_player_talents_emits_raw_transport_packet(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.validate_talent_tree_transport",
+        "warcraftlogs_cli.player_payloads.validate_talent_tree_transport",
         lambda **kwargs: {
             "transport_forms": {},
             "validation": {
@@ -4228,7 +4229,7 @@ def test_warcraftlogs_report_player_talents_passes_allow_unlisted(monkeypatch) -
 
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _AllowUnlistedClient())
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.validate_talent_tree_transport",
+        "warcraftlogs_cli.player_payloads.validate_talent_tree_transport",
         lambda **kwargs: {
             "transport_forms": {},
             "validation": {
@@ -4263,7 +4264,7 @@ def test_warcraftlogs_report_player_talents_rejects_missing_actor(monkeypatch) -
 def test_warcraftlogs_report_player_talents_rejects_null_only_talent_rows(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
     monkeypatch.setattr(
-        "warcraftlogs_cli.main._player_detail_actor",
+        "warcraftlogs_cli.operations._player_detail_actor",
         lambda details_payload, actor_id: {
             "id": actor_id,
             "combatant_info": {
@@ -4290,7 +4291,7 @@ def test_warcraftlogs_report_player_talents_rejects_null_only_talent_rows(monkey
 def test_warcraftlogs_report_player_talents_rejects_mixed_valid_and_invalid_talent_rows(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
     monkeypatch.setattr(
-        "warcraftlogs_cli.main._player_detail_actor",
+        "warcraftlogs_cli.operations._player_detail_actor",
         lambda details_payload, actor_id: {
             "id": actor_id,
             "combatant_info": {
@@ -4318,7 +4319,7 @@ def test_warcraftlogs_report_player_talents_rejects_mixed_valid_and_invalid_tale
 def test_warcraftlogs_report_player_talents_rejects_non_dict_talent_rows(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
     monkeypatch.setattr(
-        "warcraftlogs_cli.main._player_detail_actor",
+        "warcraftlogs_cli.operations._player_detail_actor",
         lambda details_payload, actor_id: {
             "id": actor_id,
             "combatant_info": {
@@ -4346,7 +4347,7 @@ def test_warcraftlogs_report_player_talents_rejects_non_dict_talent_rows(monkeyp
 def test_warcraftlogs_report_player_talents_rejects_boolean_talent_rows(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
     monkeypatch.setattr(
-        "warcraftlogs_cli.main._player_detail_actor",
+        "warcraftlogs_cli.operations._player_detail_actor",
         lambda details_payload, actor_id: {
             "id": actor_id,
             "combatant_info": {
@@ -4374,7 +4375,7 @@ def test_warcraftlogs_report_player_talents_rejects_boolean_talent_rows(monkeypa
 def test_warcraftlogs_report_player_talents_rejects_incomplete_talent_rows(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
     monkeypatch.setattr(
-        "warcraftlogs_cli.main._player_detail_actor",
+        "warcraftlogs_cli.operations._player_detail_actor",
         lambda details_payload, actor_id: {
             "id": actor_id,
             "combatant_info": {
@@ -4400,7 +4401,7 @@ def test_warcraftlogs_report_player_talents_rejects_incomplete_talent_rows(monke
 def test_warcraftlogs_report_player_talents_emits_validated_split_transport(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.validate_talent_tree_transport",
+        "warcraftlogs_cli.player_payloads.validate_talent_tree_transport",
         lambda **kwargs: {
             "transport_forms": {
                 "simc_split_talents": {
@@ -4433,7 +4434,7 @@ def test_warcraftlogs_report_player_talents_can_write_transport_packet(monkeypat
     out_path = tmp_path / "gubkfc-packet.json"
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.validate_talent_tree_transport",
+        "warcraftlogs_cli.player_payloads.validate_talent_tree_transport",
         lambda **kwargs: {
             "transport_forms": {
                 "simc_split_talents": {
@@ -4470,7 +4471,7 @@ def test_warcraftlogs_report_player_talents_normalizes_write_failure(monkeypatch
     out_dir.mkdir()
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
     monkeypatch.setattr(
-        "warcraftlogs_cli.main.validate_talent_tree_transport",
+        "warcraftlogs_cli.player_payloads.validate_talent_tree_transport",
         lambda **kwargs: {
             "transport_forms": {
                 "simc_split_talents": {
@@ -4498,7 +4499,7 @@ def test_warcraftlogs_report_player_talents_normalizes_write_failure(monkeypatch
 def test_warcraftlogs_report_player_talents_rejects_invalid_transport_packet(monkeypatch) -> None:
     monkeypatch.setattr("warcraftlogs_cli.main._client", lambda ctx: _FakeWarcraftLogsClient())
     monkeypatch.setattr(
-        "warcraftlogs_cli.main._player_talent_transport_packet",
+        "warcraftlogs_cli.operations._player_talent_transport_packet",
         lambda *args, **kwargs: {
             "kind": "talent_transport_packet",
             "transport_status": "validated",
@@ -8300,7 +8301,8 @@ def test_warcraftlogs_local_failure_codes_all_have_a_deliberate_exit_code(capsys
 
     source = Path(warcraftlogs_main.__file__).read_text(encoding="utf-8")
     raised = set(re.findall(r'_fail\(\s*ctx,\s*"([a-z_]+)"', source))
-    assert raised == set(_LOCAL_FAILURE_EXIT_CODES)
+    # Talent-tree failures now originate in the output-free report service.
+    assert raised | {"missing_talent_tree", "invalid_transport_packet"} == set(_LOCAL_FAILURE_EXIT_CODES)
 
     probe_command = typer.main.get_command(warcraftlogs_app)
     for code, expected_exit in _LOCAL_FAILURE_EXIT_CODES.items():

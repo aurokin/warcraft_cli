@@ -8,7 +8,7 @@ from typing import Any
 from warcraft_core.discovery import title_match
 from warcraft_core.shapes import as_dict
 
-from warcraft_cli.providers import STALE_GUIDE_REASON, WIKI_QUERY_COVERAGE_REASONS
+from warcraft_cli.ranking_facts import STALE_GUIDE_REASON, WIKI_QUERY_COVERAGE_REASONS
 
 # The wrapper's ranking weights. Changing them is a contract change: the table of realistic queries in
 # tests/test_provider_contract.py is what a change has to keep true.

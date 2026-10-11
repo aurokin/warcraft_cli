@@ -284,7 +284,7 @@ def test_doctor_reports_a_ready_checkout_and_needs_no_network(require, checkout:
     assert data["status"] == "ready"
     assert data["auth"] == {"required": False, "deferred": False}
     assert data["capabilities"]["decode_build"] == "ready"
-    assert data["capabilities"]["search"] == "coming_soon"
+    assert data["capabilities"]["search"] == "not_supported"
     assert data["dependencies"]["ripgrep"]["available"] is True, result.describe()
     assert data["dependencies"]["simc_binary"]["available"] is True, result.describe()
     assert data["repo"]["root"] == str(checkout.root)
@@ -390,21 +390,12 @@ def test_spec_files_lists_class_files_for_the_queried_spec(require, checkout: Ch
     assert any(ACTOR_CLASS in path for path in cpp_paths), result.describe()
 
 
-def test_search_and_resolve_are_structured_coming_soon_stubs(require) -> None:
+def test_unsupported_discovery_explains_explicit_lookup_alternatives(require) -> None:
     require("simc")
     for command in ("search", "resolve"):
-        result = run("simc", command, "mistweaver monk")
-        assert result.payload["kind"] == ("search_results" if command == "search" else "resolve_match")
-        assert result.data["coming_soon"] is True
-        assert result.data["results" if command == "search" else "candidates"] == []
-        assert (result.data["count"], result.data["total_matches"], result.data["truncated"]) == (0, None, False)
-        # The suggestion is the stub's whole answer, so it has to run against this checkout as written.
-        binary, *args = shlex.split(result.data["suggested_command"])
-        assert binary == "simc", result.describe()
-        run("simc", *args)
-
-
-# --- build description ---
+        result = run("simc", command, "mistweaver monk", expect=EXIT_USAGE, error_code="unsupported_operation")
+        assert result.payload["error"]["details"]["operation"] == command
+        assert result.payload["error"]["details"]["available_commands"], result.describe()
 
 
 def test_decode_and_identify_a_build_from_a_repo_profile(require, checkout: Checkout) -> None:

@@ -232,7 +232,7 @@ def test_entity_url_flag_overrides_type_and_id(monkeypatch) -> None:
         lambda self, entity_type, entity_id, data_env=None: {"name": "Thunderfury", "quality": 5},
     )
     monkeypatch.setattr(
-        "wowhead_cli.main.entity_page_needs_fetch",
+        "wowhead_cli.entity_services.entity_page_needs_fetch",
         lambda **kwargs: False,
     )
 

@@ -29,33 +29,28 @@ from warcraft_core.shapes import as_dict, as_list, unique_strings
 from warcraft_core.timestamps import iso_now_utc, parse_iso8601_utc
 from warcraft_core.wow_specs import WowSpec, lookup_class, lookup_spec
 
-from warcraft_cli.provider_contract import candidate_score
-from warcraft_cli.providers import (
-    DescribeOptions,
-    PacketInput,
+from warcraft_cli.provider_calls import (
     ProviderCalls,
     ProviderGuideExport,
     SimcCall,
     failed_call,
+    provider_payload_data,
+    shared_failure,
+)
+from warcraft_cli.provider_contract import candidate_score
+from warcraft_cli.providers import (
+    DescribeOptions,
+    PacketInput,
     get_provider,
     provider_expansion_exclusion_reason,
     provider_expansion_support,
-    provider_payload_data,
-    shared_failure,
 )
 
 GUIDE_COMPARE_QUERY_PROVIDERS = ("wowhead", "method", "icy-veins")
 
 
 def _slugify_path_fragment(value: str) -> str:
-    parts = [
-        part
-        for part in "".join(
-            character.lower() if character.isalnum() else " "
-            for character in value.strip()
-        ).split()
-        if part
-    ]
+    parts = [part for part in "".join(character.lower() if character.isalnum() else " " for character in value.strip()).split() if part]
     if not parts:
         return "query"
     return "-".join(parts[:12])
@@ -129,11 +124,7 @@ def _guide_compare_freshness_rollup(
     max_age_hours: int,
 ) -> dict[str, Any]:
     statuses = [row["freshness"]["status"] for row in bundle_freshness]
-    ages = [
-        row["freshness"]["age_hours"]
-        for row in bundle_freshness
-        if isinstance(row["freshness"].get("age_hours"), (int, float))
-    ]
+    ages = [row["freshness"]["age_hours"] for row in bundle_freshness if isinstance(row["freshness"].get("age_hours"), (int, float))]
     if not bundle_freshness:
         status = "unknown"
     elif all(status == "fresh" for status in statuses):
@@ -162,9 +153,7 @@ def _guide_comparison_packet(
     packet (raw evidence + `freshness` rollup + `comparison_evidence`).
     """
     comparison = compare_article_bundles(bundle_inputs)
-    bundle_descriptors = [
-        descriptor for descriptor in (comparison.get("bundles") or []) if isinstance(descriptor, dict)
-    ]
+    bundle_descriptors = [descriptor for descriptor in (comparison.get("bundles") or []) if isinstance(descriptor, dict)]
     bundle_freshness = [
         {
             "provider": descriptor.get("provider"),
@@ -177,8 +166,7 @@ def _guide_comparison_packet(
     ]
     freshness_rollup = _guide_compare_freshness_rollup(bundle_freshness, max_age_hours=max_age_hours)
     subjects = [
-        {"provider": row.get("provider"), "title": row.get("title"), **_guide_subject(row.get("title"))}
-        for row in bundle_descriptors
+        {"provider": row.get("provider"), "title": row.get("title"), **_guide_subject(row.get("title"))} for row in bundle_descriptors
     ]
     subject_keys = {(row["class"], row["spec"]) for row in subjects}
     return {
@@ -199,9 +187,11 @@ def _guide_comparison_packet(
             "subjects": subjects,
             "subject_agreement": "unknown"
             if any(row["class"] is None for row in subjects)
-            else "agree" if len(subject_keys) == 1 else "mixed",
-            # Bundles that hold no build references. One that cannot hold any (a wowhead guide-export) is
-            # left out of `build_references.shared`; one that can but has none keeps every build partial.
+            else "agree"
+            if len(subject_keys) == 1
+            else "mixed",
+            # Legacy bundles without declared build-reference support are excluded from shared builds;
+            # a supported bundle with no references keeps every build partial.
             "bundles_without_build_references": [
                 as_dict(bundle.get("manifest")).get("provider") for _path, bundle in bundle_inputs if not bundle.get("build_references")
             ],
@@ -297,8 +287,6 @@ def _write_guide_compare_manifest(
     return payload
 
 
-
-
 def manifest_bundle_path(root: Path, bundle_path: str) -> Path:
     """A manifest's ``bundle_path`` resolved against its root; older manifests stored absolute paths."""
     path = Path(bundle_path).expanduser()
@@ -350,7 +338,7 @@ def _collect_build_reference_handoff_rows(
                 "provider": provider,
                 "bundle_path": str(bundle_path),
                 "label": row.get("label"),
-                "source_urls": list(row.get("source_urls") or []),
+                "source_urls": unique_strings(as_list(row.get("source_urls")) or [row.get("source_url")]),
                 "build_identity": row.get("build_identity"),
             }
             if record is None:
@@ -403,12 +391,7 @@ def _build_handoff_transport_packet(
         source="guide_build_reference_handoff",
         label=normalized_reference.get("label") if isinstance(normalized_reference.get("label"), str) else None,
         source_urls=unique_strings(
-            [
-                url
-                for source_row in sources
-                if isinstance(source_row, dict)
-                for url in (source_row.get("source_urls") or [])
-            ]
+            [url for source_row in sources if isinstance(source_row, dict) for url in (source_row.get("source_urls") or [])]
         ),
         notes=[
             "exact build reference came from exported guide bundles",
@@ -442,26 +425,14 @@ def _handoff_evidence_section(sources: list[Any]) -> dict[str, Any]:
         "provider_count": len(
             {
                 provider
-                for provider in (
-                    source_row.get("provider") if isinstance(source_row, dict) else None
-                    for source_row in sources
-                )
+                for provider in (source_row.get("provider") if isinstance(source_row, dict) else None for source_row in sources)
                 if isinstance(provider, str) and provider
             }
         ),
-        "providers": unique_strings(
-            [source_row.get("provider") for source_row in sources if isinstance(source_row, dict)]
-        ),
-        "bundle_paths": unique_strings(
-            [source_row.get("bundle_path") for source_row in sources if isinstance(source_row, dict)]
-        ),
+        "providers": unique_strings([source_row.get("provider") for source_row in sources if isinstance(source_row, dict)]),
+        "bundle_paths": unique_strings([source_row.get("bundle_path") for source_row in sources if isinstance(source_row, dict)]),
         "source_urls": unique_strings(
-            [
-                url
-                for source_row in sources
-                if isinstance(source_row, dict)
-                for url in (source_row.get("source_urls") or [])
-            ]
+            [url for source_row in sources if isinstance(source_row, dict) for url in (source_row.get("source_urls") or [])]
         ),
     }
 
@@ -627,6 +598,17 @@ def _bundle_health(bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> dict[str
     }
 
 
+def _source_reference_exclusions(bundle_inputs: list[tuple[Path, dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Parser-rejected source references remain evidence, outside the selected handoff count."""
+    rows: list[dict[str, Any]] = []
+    for bundle_path, bundle in bundle_inputs:
+        manifest = as_dict(bundle.get("manifest"))
+        for exclusion in as_list(manifest.get("build_reference_exclusions")):
+            if isinstance(exclusion, dict):
+                rows.append({**exclusion, "provider": manifest.get("provider"), "bundle_path": str(bundle_path)})
+    return rows
+
+
 def _handoff_citations(
     selected_rows: list[dict[str, Any]],
     bundle_inputs: list[tuple[Path, dict[str, Any]]],
@@ -664,6 +646,7 @@ def guide_builds_simc_payload(
     handoff_rows = _collect_build_reference_handoff_rows(bundle_inputs)
     selected_rows = handoff_rows[:limit]
     bundle_health = _bundle_health(bundle_inputs)
+    source_reference_exclusions = _source_reference_exclusions(bundle_inputs)
     build_rows: list[dict[str, Any]] = []
     source_providers = sorted(
         {
@@ -678,9 +661,7 @@ def guide_builds_simc_payload(
         build_row = _build_simc_handoff_row(row, decode=decode, apl_path=apl_path, simc=simc)
         (excluded_rows if build_row["status"] == "excluded" else build_rows).append(build_row)
 
-    identify_success_count, decode_success_count, describe_success_count = _count_simc_handoff_successes(
-        build_rows
-    )
+    identify_success_count, decode_success_count, describe_success_count = _count_simc_handoff_successes(build_rows)
     requested_legs = [
         (leg, success_count)
         for leg, requested, success_count in (
@@ -691,9 +672,7 @@ def guide_builds_simc_payload(
         if requested
     ]
     empty_requested_legs = [leg for leg, success_count in requested_legs if success_count == 0]
-    partial_requested_legs = [
-        leg for leg, success_count in requested_legs if 0 < success_count < len(build_rows)
-    ]
+    partial_requested_legs = [leg for leg, success_count in requested_legs if 0 < success_count < len(build_rows)]
     return {
         "provider": "warcraft",
         "kind": "guide_builds_simc_handoff",
@@ -707,6 +686,7 @@ def guide_builds_simc_payload(
             "explicit_build_reference_only": True,
             "selection_contract": "embedded_build_references_only",
             "source_providers": source_providers,
+            "source_reference_exclusion_count": len(source_reference_exclusions),
         },
         "freshness": _guide_build_handoff_freshness(source_kind, source_manifest, bundle_inputs),
         "citations": _handoff_citations(selected_rows, bundle_inputs),
@@ -719,6 +699,7 @@ def guide_builds_simc_payload(
         "summary": {
             "returned_build_count": len(build_rows),
             "excluded_build_count": len(excluded_rows),
+            "source_reference_exclusion_count": len(source_reference_exclusions),
             # Builds past --limit: neither returned nor excluded.
             "truncated_build_count": len(handoff_rows) - len(selected_rows),
             "identify_success_count": identify_success_count,
@@ -738,6 +719,7 @@ def guide_builds_simc_payload(
             ),
         },
         "excluded_builds": excluded_rows,
+        "source_reference_exclusions": source_reference_exclusions,
         "builds": build_rows,
     }
 
@@ -749,9 +731,7 @@ def normalize_guide_compare_providers(values: list[str]) -> tuple[str, ...]:
     invalid = sorted(provider for provider in selected if provider not in GUIDE_COMPARE_QUERY_PROVIDERS)
     if invalid:
         supported = ", ".join(GUIDE_COMPARE_QUERY_PROVIDERS)
-        raise ValueError(
-            f"Unsupported guide comparison providers: {', '.join(invalid)}. Supported providers: {supported}."
-        )
+        raise ValueError(f"Unsupported guide comparison providers: {', '.join(invalid)}. Supported providers: {supported}.")
     deduped: list[str] = []
     for provider in selected:
         if provider not in deduped:
@@ -898,9 +878,7 @@ def _guide_compare_reusable(
     """An exported bundle is reusable only when the manifest row names this candidate and is still fresh."""
     if existing_row is None or force_refresh:
         return False
-    same_candidate = (
-        str(existing_row.get("candidate_ref") or "") == str(candidate["ref"])
-    )
+    same_candidate = str(existing_row.get("candidate_ref") or "") == str(candidate["ref"])
     return same_candidate and freshness.get("status") == "fresh" and export_dir.exists()
 
 
@@ -931,7 +909,10 @@ def _guide_bundle_identity(bundle: dict[str, Any]) -> dict[str, Any]:
 
 
 def _guide_bundle_matches_row(
-    bundle: dict[str, Any], provider_name: str, candidate: dict[str, Any], existing_row: dict[str, Any] | None,
+    bundle: dict[str, Any],
+    provider_name: str,
+    candidate: dict[str, Any],
+    existing_row: dict[str, Any] | None,
 ) -> bool:
     identity = _guide_bundle_identity(bundle)
     if existing_row is None or identity["provider"] != provider_name:
@@ -1148,9 +1129,7 @@ def _insufficient_guides_error(provider_rows: list[dict[str, Any]]) -> tuple[dic
     failed = [row for row in provider_rows if row.get("status") == "error"]
     empty = [row for row in provider_rows if row.get("status") not in ("exported", "reused")]
     if failed and len(failed) == len(empty):
-        code, exit_code = shared_failure(
-            [{**as_dict(row.get("error")), "exit_code": row.get("exit_code")} for row in failed]
-        )
+        code, exit_code = shared_failure([{**as_dict(row.get("error")), "exit_code": row.get("exit_code")} for row in failed])
         message = f"{len(failed)} guide providers failed, so fewer than two guide bundles exported."
         return {"code": code, "message": message}, exit_code
     return {"code": "insufficient_guides", "message": "Need at least two exported guide bundles to compare."}, EXIT_GENERIC
@@ -1163,9 +1142,7 @@ def simc_handoff_failure(handoff: Mapping[str, Any]) -> dict[str, Any]:
     are the suspect, so the message says that instead of pointing at ``simc doctor``.
     """
     summary = as_dict(handoff.get("summary"))
-    failure_codes = {
-        failure.get("code") for build in as_list(handoff.get("builds")) for failure in as_list(as_dict(build).get("failures"))
-    }
+    failure_codes = {failure.get("code") for build in as_list(handoff.get("builds")) for failure in as_list(as_dict(build).get("failures"))}
     advice = (
         "no build decodes as a class and spec SimC knows (`build_not_identified`); the guide's talent "
         "hashes may be newer or older than the SimC checkout."
@@ -1202,8 +1179,11 @@ def guide_compare_query_payload(options: GuideCompareQueryOptions, calls: Provid
             f"providers ({', '.join(options.providers)}) serve expansion {options.requested_expansion or 'retail'}."
         )
         details = {"selected_providers": list(options.providers), "provider_results": provider_rows}
-        return {"ok": False, "query": options.query, "error": {"code": "invalid_argument", "message": message,
-                                                                "details": details}}, EXIT_USAGE
+        return {
+            "ok": False,
+            "query": options.query,
+            "error": {"code": "invalid_argument", "message": message, "details": details},
+        }, EXIT_USAGE
     manifest_by_provider = _guide_compare_manifest_index(options.orchestration_root)
     bundle_inputs: list[tuple[Path, dict[str, Any]]] = []
     for provider_name in eligible:

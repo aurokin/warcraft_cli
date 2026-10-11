@@ -29,7 +29,7 @@ after checks pass. Use the published asset URL with `pipx install <wheel-url>` o
 | `method` | supported | guide extraction and local guide query | [docs/method](docs/method/README.md) |
 | `lorrgs` | supported | top-parse cooldown timelines, comp rankings | [docs/lorrgs](docs/lorrgs/README.md) |
 | `raidbots` | experimental | public report consumption, SimC handoff | [docs/raidbots](docs/raidbots/README.md) |
-| `blizzard` | experimental (verified live for us/eu/kr/tw) | official profiles, PvP, collections and market snapshots | [docs/blizzard-api](docs/blizzard-api/README.md) |
+| `blizzard` | supported (verified live for us/eu/kr/tw) | official profiles, PvP, collections and market snapshots | [docs/blizzard-api](docs/blizzard-api/README.md) |
 | `curseforge` | experimental (verified live) | addon metadata and changelogs | [docs/curseforge](docs/curseforge/README.md) |
 
 ## Quick Start

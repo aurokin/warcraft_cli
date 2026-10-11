@@ -176,7 +176,6 @@ def test_composite_guide_export_calls_pure_operation_without_output_capture(
         return success_envelope(provider=provider, command="guide-export", kind="guide_export", data={"path": str(tmp_path)})
 
     monkeypatch.setattr(f"warcraft_cli.providers.{operation}.guide_export", export)
-    monkeypatch.setattr("warcraft_cli.providers._capture_command", lambda *args, **kwargs: pytest.fail("Captured a Typer command"))
     result = provider_invoke(provider, ["guide-export", "mistweaver-monk", "--out", str(tmp_path)], expansion="retail")
     assert result["exit_code"] == 0
     assert result["payload"]["data"] == {"path": str(tmp_path)}
@@ -195,7 +194,6 @@ def test_pure_export_failure_maps_to_provider_envelope_and_exit_code(
         raise ProviderError(error_code, "Synthetic export failure")
 
     monkeypatch.setattr(f"warcraft_cli.providers.{operation}.guide_export", export)
-    monkeypatch.setattr("warcraft_cli.providers._capture_command", lambda *args, **kwargs: pytest.fail("Captured a Typer command"))
     result = provider_invoke(provider, ["guide-export", "mistweaver-monk", "--out", str(tmp_path)])
     assert result["exit_code"] == exit_code
     payload = result["payload"]

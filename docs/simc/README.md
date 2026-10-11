@@ -4,11 +4,18 @@
 checkout, decodes talent builds and APLs from it, and — when the binary is built — runs short sims and
 parses their JSON reports. It never talks to a web API.
 
+## Start with a complete view
+
+Use `describe-build` for an explicit talent build and `analysis-packet` for a bounded APL evidence
+summary. Start there before choosing the narrower `priority`, `inactive-actions`, or `opener` views.
+The expert inspection commands remain available when a specific question needs their evidence.
+Generic `search` and `resolve` are unsupported: this local tool has no provider discovery index.
+
 ## Requirements
 
 - a SimulationCraft source checkout for read-only analysis
 - a built `simc` binary inside that checkout (`build/simc`) for `version`, `sim`, `run`, `decode-build`,
-  `modify-build`, `validate-talent-transport`, and the comparison commands
+  `modify-build`, `apply-build`, `validate-talent-transport`, and the comparison commands
 - `rg` (ripgrep) on `PATH` for `spec-files`, `find-action`, and `trace-action`. Without it those three
   commands fail with `missing_dependency` and `simc doctor` marks them `unavailable`.
 - `git` and `cmake` for `sync`, `checkout`, and `build`. `simc build` builds only the `simc` target
@@ -367,9 +374,9 @@ decoded build differs.
 | `opener` | APL_PATH | Preview the early priority for an exact build, flagging runtime-only conditions. |
 | `priority` | APL_PATH | Return the static active priority for an exact build, excluding inactive talent branches. |
 | `repo` | - | Show or change which local SimulationCraft checkout the CLI uses. |
-| `resolve` | QUERY | Return the structured coming-soon stub for free-text resolution. |
+| `resolve` | QUERY | Reject unsupported free-text resolution; use `identify-build` for an explicit build. |
 | `run` | PROFILE_PATH | Run a profile through the local SimC binary with raw SimC arguments. |
-| `search` | QUERY | Return the structured coming-soon stub for free-text search. |
+| `search` | QUERY | Reject unsupported free-text search; use typed local inspection commands. |
 | `sim` | [PROFILE_PATH] | Run a profile through the local SimC binary and summarize the JSON report. |
 | `spec-files` | [QUERY] | List APL and class-module files in the checkout, optionally narrowed by the words of a query. |
 | `sync` | - | Pull the latest SimulationCraft sources into the local checkout. |
@@ -392,9 +399,8 @@ build source is given (`--right-profile-path`, `--right-build-file`, `--right-bu
 one, the right side is the left build again with any `--right-actor-class`/`--right-spec` and
 `--right-enable`/`--right-disable` layered on, which compares target counts or talent overrides.
 
-`search` and `resolve` are structured stubs that exit 0: `kind: search_results` / `kind: resolve_match`
-envelopes with `coming_soon: true`, no rows, `total_matches: null` and a `suggested_command`. They exist so
-the `warcraft` wrapper can route uniformly; use the direct commands above for discovery.
+`search` and `resolve` fail with `unsupported_operation` (exit 2). SimC has no free-text discovery
+index; use local inspection commands or `identify-build` for an explicit build.
 
 Flags, defaults, and value ranges are in [reference/simc.md](../reference/simc.md) and
 `simc <command> --help`.
@@ -443,9 +449,25 @@ A harness written with no talents keeps `load_default_talents=1` and sims the sp
 `build-harness` before comparing.
 A profile that sets `load_default_gear=1`, as every `build-harness` profile does (and `build-harness` says so in its own `disclosures`), wears SimC's low
 item level default gear, so its absolute DPS is far below a geared character's; only comparisons on the
-same profile are meaningful. To sim a guide build on current-tier gear, copy the checkout's
-`profiles/<tier>/<Tier>_<Class>_<Spec>.simc` (for example `profiles/MID2/MID2_Mage_Frost.simc`), replace
-its `talents=` line with the build, and `simc sim` that file.
+same profile are meaningful. To simulate a guide build on supplied gear, use a standalone,
+single-actor profile with an explicit class and spec (for example a matching checkout profile or a
+character export), then apply the guide's packet:
+
+```bash
+simc apply-build ./geared-mage-frost.simc --build-packet ./guide-build.json --out ./guide-variant.simc
+simc sim ./guide-variant.simc
+```
+
+`--build-text` accepts explicit SimC build text instead of a packet; supply exactly one. The build
+must decode successfully and match the profile's class/spec. The output replaces all old talent
+forms, append overrides, and default/all-talent loading, while retaining supplied gear and other
+simulation settings, including independently scoped expansion talents (`omnium_talents`).
+The command does not infer gear or simulate the result. It rejects multiple actors, `input`, `copy`,
+and `profileset` directives because their effective profile cannot be established from one file.
+Player imports (`armory`, `guild`, `local_json`, `player_simplified`) and explicit pet/guardian/active
+actor controls must first be expanded into a standalone player profile; enemy settings are retained.
+The destination must differ from the source, including symlink or hardlink aliases. Existing output
+requires `--overwrite`; the source profile is never changed.
 
 `validate-apl` and each `compare-apls` validation list SimC's `Warning:` lines in `warnings`. SimC
 exits 0 after ignoring an unknown option such as a mistyped condition (`frostbolt,iff=1` runs Frostbolt

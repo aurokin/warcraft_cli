@@ -20,12 +20,12 @@ Tiers describe how much depth an agent should expect. `warcraft doctor` reports 
 | supported | method | `method` | Guide search, resolve, and guide bundle export. |
 | supported | lorrgs | `lorrgs` | Cooldown timeline rankings and cached report overviews; no auth. |
 | experimental | raidbots | `raidbots` | Public report parsing and SimC input handoff; no search index. |
-| experimental | blizzard-api | `blizzard` | Official realms/items, PvP, collections, and auction/commodity prices (verified live); no search/resolve. |
+| supported | blizzard-api | `blizzard` | Official realms/items, PvP, collections, and auction/commodity prices (verified live); no search/resolve. |
 | experimental | curseforge | `curseforge` | Addon metadata lookup (verified live); no search/resolve. |
 
 ## Global flags
 
-Global flags go before the subcommand and are forwarded to the provider CLI on passthrough:
+Global output flags go before the subcommand and are forwarded to the provider CLI on passthrough:
 
 ```bash
 warcraft --pretty wowhead search "defias"
@@ -39,6 +39,18 @@ warcraft --expansion wotlk resolve "thunderfury"
   `warcraftlogs --site`). Providers with no expansion axis (`simc`, `blizzard`, `curseforge`) pass
   through unchanged with an `expansion_advisory` note.
 
+`--warcraftlogs-endpoint client|user|auto` selects the authentication endpoint for WCL reads inside
+root composites and for WCL readiness in `warcraft doctor`. The default `client` deliberately uses
+public credentials. Use `user` to consume your saved authenticated session for a private report;
+`auto` selects that session when locally valid, and never retries a rejected user request as public.
+Other providers do not receive this option. Provider passthrough retains its own native `--endpoint`:
+
+```bash
+warcraft --warcraftlogs-endpoint user doctor
+warcraft --warcraftlogs-endpoint user talent-packet <report-code> --actor-id 9 --fight-id 1
+warcraft warcraftlogs --endpoint user report <report-code>
+```
+
 `warcraft search --brief` and `warcraft resolve --brief` shrink candidate rows and drop the
 per-provider payloads; each brief row keeps the provider's `follow_up.command` as
 `follow_up_command`. `--compact` is the global output flag only, and it truncates long prose strings in
@@ -46,6 +58,29 @@ any payload; the two no longer share a name. `--brief` never hides a provider fa
 `failed_providers`, `failed_provider_count`, and `answered_provider_count` stay in both shapes, and
 so does `provider_warnings` (`[{provider, key, warning}]`, every `*_warning` a provider put in its
 provenance, such as Icy Veins' stale-sitemap warning).
+
+## Discovery scope
+
+Use repeatable `--provider` and `--entity-type` options after `search` or `resolve` to narrow discovery:
+
+```bash
+warcraft search "balance druid" --provider wowhead --provider method --entity-type guide
+warcraft resolve "Thunderfury" --provider wowhead --entity-type item
+warcraft search "Example" --entity-type character --entity-type guild
+```
+
+Provider names are registry names (`blizzard-api`, not its passthrough command `blizzard`). Unknown
+providers or kinds fail before any provider call. `data.filters` records the request, and
+`excluded_providers` explains providers omitted by scope, expansion, or surface readiness.
+
+Wowhead and Raider.IO apply entity scopes natively. Other eligible providers filter their bounded
+candidate response and report `data.entity_scope.mode: bounded_candidate_filter` with the number
+examined and `exhaustive: false`: a missing result does not prove no matching page exists. A filtered
+resolve never promotes a different candidate to a confirmed answer. Provider follow-up commands
+refer to the source page; repeat the root scope options when doing another root discovery query.
+
+SimC, Blizzard and CurseForge expose useful typed operations but no generic discovery index. Their
+search/resolve surfaces report unsupported instead of successful placeholder answers.
 
 ## Composite commands
 
@@ -66,8 +101,8 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   matched only on its snippet) is not rescaled up at all (`wrapper_ranking.covers_query: false`), so
   it cannot outrank another provider's title match.
   `count` is the rows on the page and `truncated` says whether `--limit` cut the merged candidates;
-  `merge_policy.provider_total_matches` keeps each provider's own `total_matches` (`null` for a stub or
-  a provider in `failed_providers`). The merged
+  `merge_policy.provider_total_matches` keeps each provider's own `total_matches` (`null` for a provider whose
+  query was filtered after candidate retrieval or a provider in `failed_providers`). The merged
   page interleaves the providers' own lists without ever reordering two rows from one provider,
   leads with Wowhead's top row when a bare query names it, applies a per-provider cap, ranks rows
   from a family the query did not ask for (a player profile for a bare item name) below the rest,
@@ -194,8 +229,10 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   class hub) and `subject_agreement` is `agree`, `mixed` (different specs, or a class hub next to a
   spec guide, so shared sections compare unlike guides) or `unknown`.
   `comparison_evidence.bundles_without_build_references` lists the bundles that hold none. A build
-  is `shared` when every bundle that can hold builds has it: a Wowhead export never holds any and is
-  left out, and at least two bundles must hold builds for any to be shared.
+  is `shared` when every bundle declaring build-reference support has it, and at least two bundles
+  must declare support. New Wowhead exports carry explicit calculator references; legacy exports
+  without build-reference support are excluded from that shared-build comparison. A supported
+  bundle with no references keeps the build partial.
   `freshness` is export recency; `bundles[].content_updated_at` (also on each
   `comparison_evidence.bundle_freshness` row) is when the site last changed the guide (Wowhead's
   `dateModified`, Method's and Icy Veins' last-updated date), `null` when the export did not record it.
@@ -252,6 +289,9 @@ Every command's flags are listed in [docs/reference/warcraft.md](../reference/wa
   with a reason. Classic Wowhead builds are inspectable through `wowhead talent-calc`, but SimC
   handoffs still support retail builds only. A reference that can
   go neither way is an `excluded_builds` row naming the reason, not a silently shorter list.
+  Parser-rejected references from the source manifest remain in `source_reference_exclusions`
+  with their provider, bundle path, and reason. Their count is separate in the summary and provenance;
+  they are not selected builds or failed SimC handoffs.
   `--limit` takes one build per provider in turn (bundle order), so it never drops a whole provider;
   the builds past it are `summary.truncated_build_count`, apart from `summary.excluded_build_count`.
   For an orchestration root, `freshness.sampled_at` is the oldest bundle's export time (`reason:

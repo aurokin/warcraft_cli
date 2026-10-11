@@ -8,9 +8,8 @@ What a green run proves:
 
 - every guide provider resolves the pinned query to its own main guide for the spec and exports it,
   and Icy Veins resolves a damage-spec query too;
-- Method and Icy Veins each contribute at least one explicit build reference (Wowhead's guide export
-  carries none), and the packet hands over exactly the unique references on disk (in order,
-  truncation reported);
+- Wowhead, Method and Icy Veins each contribute at least one explicit build reference, and the packet
+  hands over exactly the unique references on disk (in order, truncation reported);
 - simc identifies and decodes every handed-off build, with no class or spec supplied, as the class
   and spec the guide is for: the healer guide the pins name and a damage guide alike;
 - a leg simc cannot run is reported with its own error code per build, and the summary status
@@ -46,12 +45,12 @@ from tests.e2e.pins import GUIDE_CLASS, GUIDE_QUERY, GUIDE_SPEC
 GUIDE_PROVIDERS = ("wowhead", "method", "icy-veins")
 # Each provider's main guide for the pinned query: the one guide-compare-query has to select.
 GUIDE_REFS = {"wowhead": "3295", "method": "mistweaver-monk", "icy-veins": "mistweaver-monk-pve-healing-guide"}
-# Method and Icy Veins export article bundles with build references; a Wowhead guide export has none.
-BUILD_REFERENCE_PROVIDERS = {"method", "icy-veins"}
+# The pinned guide pages from all three providers publish explicit build references.
+BUILD_REFERENCE_PROVIDERS = set(GUIDE_PROVIDERS)
 BUNDLE_FILES = ("manifest.json", "guide.json", "pages.jsonl", "sections.jsonl", "build-references.jsonl")
 # Every page a bundle cites must come from that provider's own site.
 PROVIDER_HOSTS = {"wowhead": "wowhead.com", "method": "method.gg", "icy-veins": "icy-veins.com"}
-# Method and Icy Veins publish their builds as in-game loadout export strings.
+# The pinned guide pages publish their builds as in-game loadout export strings.
 GUIDE_REFERENCE_TYPE = "wow_talent_export"
 SIMC_LEGS = ("identify", "decode", "describe")
 # A damage spec SimC ships an APL for, so every leg of its handoff, describe included, must succeed.
@@ -141,8 +140,18 @@ def _assert_bundle_on_disk(bundle_path: Path) -> None:
     host = PROVIDER_HOSTS[provider]
     assert manifest["exported_at"], bundle_path
     assert manifest["counts"]["sections"] == len(_bundle_rows(bundle_path, "sections.jsonl")) > 0, bundle_path
+    references_file = manifest["files"]["build_references_jsonl"]
+    assert (bundle_path / references_file).is_file(), f"{provider} omitted its declared build-reference file"
+    references = _bundle_rows(bundle_path, references_file)
+    assert references, f"{provider} exported a guide with no explicit build reference"
+    assert manifest["counts"]["build_references"] == len(references)
+    for reference in references:
+        assert reference["reference_type"] == GUIDE_REFERENCE_TYPE, json.dumps(reference)[:200]
+        assert reference["build_code"] and reference["url"] and reference["label"]
+        source_urls = reference.get("source_urls") or [reference.get("source_url")]
+        assert source_urls and all(isinstance(url, str) and host in url for url in source_urls)
     if provider == "wowhead":
-        # A Wowhead guide export is one guide page and its sections, with no build references.
+        # Wowhead exports one guide page; its declared build file contributes to the same oracle.
         assert host in manifest["page"]["canonical_url"], json.dumps(manifest["page"])
         return
     for name in BUNDLE_FILES:
@@ -154,22 +163,14 @@ def _assert_bundle_on_disk(bundle_path: Path) -> None:
     assert manifest["counts"]["pages"] == len(pages), f"{bundle_path} manifest miscounts pages"
     assert len(list((bundle_path / "pages").glob("*.html"))) == len(pages), "one raw page per row"
 
-    references = _bundle_rows(bundle_path, "build-references.jsonl")
-    assert references, f"{provider} exported a guide with no explicit build reference"
-    assert manifest["counts"]["build_references"] == len(references)
-    for reference in references:
-        assert reference["reference_type"] == GUIDE_REFERENCE_TYPE, json.dumps(reference)[:200]
-        assert reference["build_code"] and reference["url"] and reference["label"]
-        assert reference["source_urls"] and all(host in url for url in reference["source_urls"])
-
 
 def _disk_reference_urls(bundle_paths: tuple[Path, ...]) -> list[str]:
-    """The unique build-reference URLs across the bundles on disk (Wowhead exports have none), in URL
-    order within each bundle and one bundle at a time in turn, so a --limit keeps every provider."""
+    """Every manifest-declared build file contributes unique URLs, interleaved by bundle order."""
     owner: dict[str, int] = {}
     for index, path in enumerate(bundle_paths):
-        if _manifest(path)["provider"] in BUILD_REFERENCE_PROVIDERS:
-            for row in _bundle_rows(path, "build-references.jsonl"):
+        filename = _manifest(path)["files"].get("build_references_jsonl")
+        if filename is not None:
+            for row in _bundle_rows(path, filename):
                 owner.setdefault(row["url"], index)
     turns: Counter[int] = Counter()
     keyed: list[tuple[int, int, str]] = []
@@ -344,7 +345,9 @@ def test_guide_compare_query_exports_bundles_and_compares_them(require, orchestr
 
 
 def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(
-    require, orchestration: Orchestration, out_dir: Path,
+    require,
+    orchestration: Orchestration,
+    out_dir: Path,
 ) -> None:
     """Copied comparisons reuse fresh bundles, then publish new paths without changing old exports."""
     require("wowhead", "method", "icy-veins")
@@ -365,8 +368,13 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(
         assert row["exported_at"] == previous[row["provider"]], result.describe()
 
     refreshed = run(
-        "warcraft", "guide-compare-query", GUIDE_QUERY,
-        "--out-root", str(refresh_root), "--force-refresh", timeout=300,
+        "warcraft",
+        "guide-compare-query",
+        GUIDE_QUERY,
+        "--out-root",
+        str(refresh_root),
+        "--force-refresh",
+        timeout=300,
     )
     assert refreshed.data["force_refresh"] is True
     rows = {row["provider"]: row for row in refreshed.data["provider_results"] if row["status"] == "exported"}
@@ -383,7 +391,9 @@ def test_guide_compare_query_reuses_fresh_bundles_until_force_refresh(
 
 
 def test_failed_refresh_preserves_a_completed_comparison(
-    require, orchestration: Orchestration, out_dir: Path,
+    require,
+    orchestration: Orchestration,
+    out_dir: Path,
 ) -> None:
     require("wowhead", "method", "icy-veins")
     root = out_dir / "completed-comparison"
@@ -393,8 +403,15 @@ def test_failed_refresh_preserves_a_completed_comparison(
     paths = tuple(root / row["bundle_path"] for row in orchestration.payload["manifest"]["providers"])
     bundle_bytes = _bundle_bytes(paths)
     failed = run(
-        "warcraft", "guide-compare-query", GUIDE_QUERY, "--out-root", str(root), "--force-refresh",
-        env={**dead_proxy_env(), **no_cache_env()}, expect=EXIT_NETWORK, error_code="network_error",
+        "warcraft",
+        "guide-compare-query",
+        GUIDE_QUERY,
+        "--out-root",
+        str(root),
+        "--force-refresh",
+        env={**dead_proxy_env(), **no_cache_env()},
+        expect=EXIT_NETWORK,
+        error_code="network_error",
     )
     assert all(row["status"] == "error" for row in failed.payload["error"]["details"]["provider_results"])
     assert manifest_path.read_bytes() == manifest_bytes
@@ -404,7 +421,9 @@ def test_failed_refresh_preserves_a_completed_comparison(
 
 
 def test_a_reused_bundle_reports_the_redirect_its_export_saw(
-    require, orchestration: Orchestration, out_dir: Path,
+    require,
+    orchestration: Orchestration,
+    out_dir: Path,
 ) -> None:
     """Reuse once dropped the redirect, so a retired guide read as the one asked for.
 
@@ -426,7 +445,8 @@ def test_a_reused_bundle_reports_the_redirect_its_export_saw(
     assert rows["wowhead"]["redirect"] is None
     retired_manifest = _manifest(retired_path)
     rows["icy-veins"].update(
-        bundle_path=str(retired_path.relative_to(root)), exported_at=retired_manifest["exported_at"],
+        bundle_path=str(retired_path.relative_to(root)),
+        exported_at=retired_manifest["exported_at"],
         redirect=redirect,
         bundle_identity={key: retired_manifest.get(key) for key in ("provider", "exported_at", "guide", "page", "redirect")},
     )
@@ -436,8 +456,16 @@ def test_a_reused_bundle_reports_the_redirect_its_export_saw(
     (root / "manifest.json").write_text(json.dumps(manifest))
     original_bytes = _bundle_bytes(paths)
     reused = run(
-        "warcraft", "guide-compare-query", GUIDE_QUERY, "--provider", "wowhead", "--provider", "icy-veins",
-        "--out-root", str(root), timeout=300,
+        "warcraft",
+        "guide-compare-query",
+        GUIDE_QUERY,
+        "--provider",
+        "wowhead",
+        "--provider",
+        "icy-veins",
+        "--out-root",
+        str(root),
+        timeout=300,
     )
     for row in reused.data["provider_results"]:
         assert row["status"] == "reused", reused.describe()
@@ -575,8 +603,18 @@ def test_a_damage_guide_query_resolves_and_hands_every_build_to_simc(require, ou
     out_root = out_dir / "damage"
     out_root.mkdir()
     result = run(
-        "warcraft", "guide-compare-query", DPS_GUIDE_QUERY, "--out-root", str(out_root),
-        "--provider", "wowhead", "--provider", "icy-veins", "--simc-build-handoff", "--simc-apl-path", str(apl_path),
+        "warcraft",
+        "guide-compare-query",
+        DPS_GUIDE_QUERY,
+        "--out-root",
+        str(out_root),
+        "--provider",
+        "wowhead",
+        "--provider",
+        "icy-veins",
+        "--simc-build-handoff",
+        "--simc-apl-path",
+        str(apl_path),
         timeout=300,
     )
     rows = {row["provider"]: row for row in result.data["provider_results"]}
@@ -586,9 +624,7 @@ def test_a_damage_guide_query_resolves_and_hands_every_build_to_simc(require, ou
         _assert_bundle_on_disk(bundle_path)
     packet = result.data["simc_build_handoff"]
     _assert_handoff_packet(packet, packet["provenance"], bundle_paths=bundle_paths, apl_path=apl_path, decode=True)
-    _assert_simc_legs(
-        packet, actor_class=DPS_CLASS, spec=DPS_SPEC, expected={"identify": True, "decode": True, "describe": True}
-    )
+    _assert_simc_legs(packet, actor_class=DPS_CLASS, spec=DPS_SPEC, expected={"identify": True, "decode": True, "describe": True})
 
 
 def test_guide_compare_query_can_emit_the_simc_build_handoff(require, monk_apl: Path, out_dir: Path) -> None:
@@ -622,9 +658,7 @@ def test_guide_compare_query_can_emit_the_simc_build_handoff(require, monk_apl: 
     assert packet is not None, result.describe()
     assert packet["kind"] == "guide_builds_simc_handoff"
     assert packet["source"]["path"] == str(out_root.resolve())
-    _assert_handoff_packet(
-        packet, packet["provenance"], bundle_paths=bundle_paths, apl_path=monk_apl, decode=True, limit=5
-    )
+    _assert_handoff_packet(packet, packet["provenance"], bundle_paths=bundle_paths, apl_path=monk_apl, decode=True, limit=5)
     _assert_simc_legs(packet, actor_class=GUIDE_CLASS, spec=GUIDE_SPEC, expected=HEALER_LEGS)
 
 
@@ -669,8 +703,13 @@ def test_guide_compare_query_refuses_flags_that_leave_one_guide_provider(out_dir
     run that resolved or exported anyway would fail on the network instead.
     """
     result = run(
-        "warcraft", *argv, "--out-root", str(out_dir),
-        env={**dead_proxy_env(), **no_cache_env()}, expect=EXIT_USAGE, error_code="invalid_argument",
+        "warcraft",
+        *argv,
+        "--out-root",
+        str(out_dir),
+        env={**dead_proxy_env(), **no_cache_env()},
+        expect=EXIT_USAGE,
+        error_code="invalid_argument",
     )
     assert result.payload["command"] == "guide-compare-query", result.describe()
     assert list(out_dir.iterdir()) == []
@@ -681,8 +720,14 @@ def test_guide_compare_query_reports_an_outage_as_the_network_error(out_dir: Pat
     out_root = out_dir / "outage"
     out_root.mkdir()
     result = run(
-        "warcraft", "guide-compare-query", GUIDE_QUERY, "--out-root", str(out_root),
-        env={**dead_proxy_env(), **no_cache_env()}, expect=EXIT_NETWORK, error_code="network_error",
+        "warcraft",
+        "guide-compare-query",
+        GUIDE_QUERY,
+        "--out-root",
+        str(out_root),
+        env={**dead_proxy_env(), **no_cache_env()},
+        expect=EXIT_NETWORK,
+        error_code="network_error",
     )
     rows = result.payload["error"]["details"]["provider_results"]
     assert [row["provider"] for row in rows] == list(GUIDE_PROVIDERS), result.describe()

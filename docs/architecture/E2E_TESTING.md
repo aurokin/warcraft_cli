@@ -169,10 +169,10 @@ Open weaknesses a green run does not rule out, beyond the limits above:
 
 - **Coverage is hand-maintained.** "Every command in `docs/reference/` has a journey" is checked by
   reading, not by a test, and nothing fails when a new command or flag ships without one.
-- **Wowhead guide exports carry no build references**, so `warcraft guide-builds-simc` hands simc
-  only the Method and Icy Veins builds, and the packet has no per-bundle count showing that the
-  Wowhead bundle contributed none. The guide journey pins the contributing providers, so it goes
-  red, not quiet, if that changes.
+- **Guide extraction covers explicit published builds.** Wowhead bundle journeys independently
+  compare native calculator codes in the raw guide body with exported references and identify an
+  exported code through SimC. This does not prove every provider-authored build format is supported;
+  rejected references remain visible in bundle manifests and handoff provenance.
 - **Merged search order between providers** is checked end to end only at the top: the journeys
   check each provider's rows against its own payload, and that `warcraft resolve` answers with the
   row `warcraft search` ranks first for an item and a guide query. The rest of the cross-provider
@@ -192,11 +192,12 @@ Open weaknesses a green run does not rule out, beyond the limits above:
 
 `.github/workflows/live-contracts.yml` runs weekly (Mondays 06:00 UTC) and on demand, with no
 secrets. It runs the keyless journey files (`test_wowhead.py`, `test_method.py`,
-`test_raiderio.py`, `test_warcraft_wiki.py`, `test_lorrgs.py`, `test_raidbots.py`, with
+`test_raiderio.py`, `test_warcraft_wiki.py`, `test_lorrgs.py`, `test_raidbots.py`, scoped wrapper
+discovery, and the published-code guide export journey, with
 `WARCRAFT_E2E_SKIP=raidbots-report`) and `make test-canary`, the Wowhead parser canary
 (`tests/test_wowhead_parser_canaries.py`, gated by `WOWHEAD_LIVE_TESTS=1`, fetching with the CLI's
 own HTTP client). Icy Veins answers GitHub runner IPs with 403, so `test_icy_veins.py` runs locally
-only, as do the keyed providers, SimulationCraft, the wrapper composites, and `test_contract.py`. It never
+only, as do the keyed providers, SimulationCraft, log/guide wrapper composites, and `test_contract.py`. It never
 gates a pull request. When a job fails, is cancelled, or is skipped, a scheduled run (or a manual
 run with `open_issue` set) opens or comments on the `live-failure` tracking issue.
 

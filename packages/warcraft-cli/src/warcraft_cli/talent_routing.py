@@ -26,14 +26,16 @@ from warcraft_core.identity import (
 )
 from warcraft_core.shapes import as_dict
 
-from warcraft_cli.providers import (
-    DescribeOptions,
-    PacketInput,
+from warcraft_cli.provider_calls import (
     ProviderCalls,
     ProviderInvoke,
     SimcCall,
     failed_call,
     provider_payload_data,
+)
+from warcraft_cli.providers import (
+    DescribeOptions,
+    PacketInput,
 )
 
 

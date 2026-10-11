@@ -140,3 +140,32 @@ If a query declares `$fightIDs: [Int]`, repeated `--fight-id` values are injecte
 User-endpoint raw queries are not cached, even when `--cache-ttl` is set, because saved user auth can switch accounts and may expose private report or `currentUser` data.
 
 Partial GraphQL errors with useful data are emitted as `provenance.graphql_warnings`; `data` stays the GraphQL result verbatim, so an alias such as `notes` is never overwritten.
+
+## Bounded complete event evidence
+
+The default `report-events` remains one page. Use `--all-pages` to follow continuation timestamps
+for exactly one fight or one explicit start/end window; `--data-type` is required. For example:
+
+```bash
+warcraftlogs --endpoint client --refresh report-events <code> --fight-id 1 --data-type casts \
+  --all-pages --max-pages 20 --max-events 100000 --out events.jsonl --artifact-format jsonl
+```
+
+`--limit` controls each page (capped by the remaining event budget); `--max-pages` bounds event
+page requests, with at most one additional fight validation request. Retries and the OAuth token
+exchange are outside that logical GraphQL request count. API-point cost varies by query;
+`export.bounds.api_point_budget: null` makes clear that this is not an exact point budget.
+
+Read `export.complete` before counting the whole scope. It means provider pagination exhausted,
+not a transactional or revision-validated snapshot; absent revisions are explicitly unknown. Bounds, missing data, partial GraphQL
+errors, or changed report revisions produce an incomplete result with a stop reason.
+Missing pagination cursors or nonfinite, boolean, or nonadvancing cursors fail as invalid responses,
+including when an event bound would otherwise stop the page early.
+`export.continuation.start_time` retains the next provider cursor. An unexpected oversized page
+also records `skip_events`: re-fetch that original page and skip that many retained rows; do not
+resume from the later provider cursor or events would be lost. Revision changes require restarting.
+
+Artifacts preserve raw events, the selected filters/site/report, citations and freshness. JSON
+stores one payload; JSONL starts with an `artifact` metadata record followed by `event` records.
+An existing output file is never overwritten. No artifact is a transactional upstream snapshot:
+cached pages can be older, and WCL can change JSON event semantics independently of report revision.

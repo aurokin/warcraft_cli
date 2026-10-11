@@ -16,6 +16,7 @@ Pass these before the subcommand: `warcraft --pretty <command> ...`.
 | `--fields-strict` | boolean | false | Fail when a requested --fields dot-path is missing from the payload. |
 | `--profile` | str |  | Output profile preset: agent (default compact JSON) or human (pretty JSON). |
 | `--compact-max-chars` | int range [40<=x<=10000] | 280 | Maximum string length before --compact truncation adds an ellipsis. |
+| `--warcraftlogs-endpoint` | str | client | WCL endpoint for composites and wrapper doctor: client, user, auto. Passthrough uses native --endpoint. |
 | `--expansion` | str |  | Filter wrapper search/resolve to a specific expansion profile. Passed through to expansion-aware providers like wowhead. |
 
 ## warcraft doctor
@@ -43,6 +44,8 @@ Fan out a free-text query to every search-ready provider and rank the merged can
 | `--limit` | int range [1<=x<=50] | 5 | Results to request from each provider, and the size of the merged result list. |
 | `--brief` | boolean | false | Return a smaller wrapper payload: compact candidate rows and no per-provider payloads. |
 | `--ranking-debug` | boolean | false | Include compact wrapper ranking summaries for the returned candidates. |
+| `--provider` | str (repeatable) |  | Provider to query; repeat for a subset. Use registry names such as blizzard-api. |
+| `--entity-type` | str (repeatable) |  | Entity kind to return; repeat for multiple kinds. Some providers filter bounded candidates. |
 | `--expansion-debug` | boolean | false | Include a compact expansion support snapshot for all providers. |
 
 ## warcraft resolve
@@ -62,6 +65,8 @@ Fan out a query to every resolve-ready provider and return the single best match
 | `--limit` | int range [1<=x<=50] | 5 | Ranked candidates to list under --ranking-debug. |
 | `--brief` | boolean | false | Return a smaller wrapper payload: a compact match summary and no per-provider payloads. |
 | `--ranking-debug` | boolean | false | Include the first --limit providers' matches in ranking order, each with its resolved flag. |
+| `--provider` | str (repeatable) |  | Provider to query; repeat for a subset. Use registry names such as blizzard-api. |
+| `--entity-type` | str (repeatable) |  | Entity kind to return; repeat for multiple kinds. Some providers filter bounded candidates. |
 | `--expansion-debug` | boolean | false | Include a compact expansion support snapshot for all providers. |
 
 ## warcraft guild
@@ -239,6 +244,6 @@ Each entry forwards every remaining argument to that provider's own CLI.
 - `warcraft warcraft-wiki ...` -> [warcraft-wiki](warcraft-wiki.md): Proxy to the warcraft-wiki CLI (supported tier). Remaining arguments are passed through unchanged.
 - `warcraft simc ...` -> [simc](simc.md): Proxy to the simc CLI (core tier). Remaining arguments are passed through unchanged.
 - `warcraft raidbots ...` -> [raidbots](raidbots.md): Proxy to the raidbots CLI (experimental tier). Remaining arguments are passed through unchanged.
-- `warcraft blizzard ...` -> [blizzard](blizzard.md): Proxy to the blizzard CLI (experimental tier). Remaining arguments are passed through unchanged.
+- `warcraft blizzard ...` -> [blizzard](blizzard.md): Proxy to the blizzard CLI (supported tier). Remaining arguments are passed through unchanged.
 - `warcraft curseforge ...` -> [curseforge](curseforge.md): Proxy to the curseforge CLI (experimental tier). Remaining arguments are passed through unchanged.
 - `warcraft lorrgs ...` -> [lorrgs](lorrgs.md): Proxy to the lorrgs CLI (supported tier). Remaining arguments are passed through unchanged.

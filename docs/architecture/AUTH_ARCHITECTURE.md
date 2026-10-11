@@ -1,6 +1,6 @@
 # Auth Architecture
 
-Shared auth design for official OAuth providers, workflow/session products, and light-credential APIs. Open rollout items beyond Warcraft Logs phase 2 live in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88).
+Shared auth design for official OAuth providers, workflow/session products, and light-credential APIs. Open rollout items live in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88).
 
 ## Rollout Status
 
@@ -45,8 +45,8 @@ API keys / static tokens — separate from OAuth; not the current driver.
 
 | Provider | Commands | Notes |
 |----------|----------|-------|
-| `warcraftlogs` | `auth status`, `auth login`, `auth pkce-login`, `auth logout`, `doctor` | OAuth + GraphQL; user vs client endpoints |
-| `blizzard-api` | Plan explicit `auth` early when implemented | Battle.net OAuth required |
+| `warcraftlogs` | `auth status`, `auth login`, `auth pkce-login`, `auth logout`, `doctor` | OAuth + GraphQL; public client endpoint by default, explicit user/auto selection; doctor checks selected endpoint |
+| `blizzard-api` | `doctor`; client-credentials tokens acquired automatically | Battle.net OAuth client credentials; regions/namespaces are provider-local |
 | `raidbots` | No auth commands until a real workflow exists | Report consumption / local SimC handoff only |
 
 ## What Not To Do

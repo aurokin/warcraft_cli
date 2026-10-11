@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+import simc_cli.build_services as simc_build_services
 import simc_cli.compare as simc_compare
 import simc_cli.main as simc_main
 from simc_cli.build_input import (
@@ -184,7 +185,7 @@ def test_simc_doctor_reports_phase_one_capabilities(monkeypatch, tmp_path: Path)
     payload = json.loads(result.stdout)
     assert payload["provider"] == "simc"
     assert payload["data"]["status"] == "ready"
-    assert payload["data"]["capabilities"]["search"] == "coming_soon"
+    assert payload["data"]["capabilities"]["search"] == "not_supported"
     assert {payload["data"]["capabilities"][name] for name in ("version", "repo", "priority", "modify_build")} == {"ready"}
     assert payload["data"]["dependencies"]["ripgrep"]["available"] is True
 
@@ -246,17 +247,18 @@ def test_simc_repo_reports_a_binary_built_from_an_older_commit_than_the_checkout
     assert any("3377576e3b" in issue and "0908ace08c9b" in issue for issue in repo["build_issues"])
 
 
-def test_simc_search_is_structured_coming_soon() -> None:
+def test_simc_search_explains_supported_explicit_alternatives() -> None:
     result = runner.invoke(simc_app, ["search", "mistweaver"])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["data"]["coming_soon"] is True
-    assert payload["data"]["count"] == 0
+    assert result.exit_code == 2
+    assert not result.stdout
+    payload = json.loads(result.stderr)
+    assert payload["error"]["code"] == "unsupported_operation"
+    assert "spec-files" in payload["error"]["details"]["available_commands"]
 
 
 def test_simc_envelopes_carry_only_the_envelope_keys(tmp_path: Path) -> None:
     """The payload lives in data; the deprecated top-level copies of it are gone."""
-    success = runner.invoke(simc_app, ["search", "mistweaver"])
+    success = runner.invoke(simc_app, ["--repo-root", str(_checkout(tmp_path)), "doctor"])
     failure = runner.invoke(simc_app, ["--repo-root", str(_checkout(tmp_path)), "decode-build"])
 
     assert set(json.loads(success.stdout)) == ENVELOPE_KEYS - {"error"}
@@ -375,7 +377,7 @@ def test_simc_spec_files_returns_grouped_results(monkeypatch, tmp_path: Path) ->
 
 def test_simc_decode_build_outputs_decoded_talents(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "simc_cli.main.load_build_spec",
+        "simc_cli.build_services.load_build_spec",
         lambda **kwargs: BuildSpec(actor_class="monk",
             spec="mistweaver",
             talents="ABC123",
@@ -386,7 +388,7 @@ def test_simc_decode_build_outputs_decoded_talents(monkeypatch, tmp_path: Path) 
             source_notes=["command-line build options"]),
     )
     monkeypatch.setattr(
-        "simc_cli.main.decode_build",
+        "simc_cli.build_services.decode_build",
         lambda paths, build_spec: _resolution(
             actor_class="monk",
             spec="mistweaver",
@@ -414,7 +416,7 @@ def test_simc_decode_build_outputs_decoded_talents(monkeypatch, tmp_path: Path) 
 
 def test_simc_identify_build_reports_probe_result(monkeypatch) -> None:
     monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
+        "simc_cli.build_services._load_identified_build_spec",
         lambda *args, **kwargs: (
             BuildSpec(actor_class="demonhunter",
                     spec="devourer",
@@ -470,7 +472,7 @@ def test_simc_identify_build_accepts_build_packet(monkeypatch, tmp_path: Path) -
                     source_notes=["talent transport packet"]),
         )
 
-    monkeypatch.setattr("simc_cli.main._load_identified_build_spec", fake_loader)
+    monkeypatch.setattr("simc_cli.build_services._load_identified_build_spec", fake_loader)
 
     result = runner.invoke(simc_app, ["identify-build", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
@@ -488,7 +490,7 @@ def test_simc_a_packet_build_read_against_another_specs_apl_is_a_usage_error(mon
     def refuse(_paths, **_kwargs):  # noqa: ANN001, ANN003
         raise UnknownClassSpecError("The build is mage frost, but mage_fire is the mage fire APL.")
 
-    monkeypatch.setattr("simc_cli.main._load_identified_build_spec", refuse)
+    monkeypatch.setattr("simc_cli.build_services._load_identified_build_spec", refuse)
 
     result = runner.invoke(simc_app, ["identify-build", "--build-packet", str(packet_path)])
 
@@ -517,7 +519,7 @@ def test_simc_identify_build_accepts_wow_export_transport_form_from_build_packet
     )
 
     monkeypatch.setattr(
-        "simc_cli.main.identify_build",
+        "simc_cli.build_services.identify_build",
         lambda _paths, build_spec, apl_path: (
             build_spec,
             BuildIdentity(actor_class=build_spec.actor_class,
@@ -906,7 +908,7 @@ def test_simc_validate_talent_transport_accepts_build_packet(monkeypatch, tmp_pa
             },
         }
 
-    monkeypatch.setattr("simc_cli.main.validate_talent_tree_transport", fake_validate)
+    monkeypatch.setattr("simc_cli.build_services.validate_talent_tree_transport", fake_validate)
 
     result = runner.invoke(simc_app, ["validate-talent-transport", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
@@ -952,7 +954,7 @@ def test_simc_validate_talent_transport_refreshes_packet_identity_from_cli_overr
     )
 
     monkeypatch.setattr(
-        "simc_cli.main.validate_talent_tree_transport",
+        "simc_cli.build_services.validate_talent_tree_transport",
         lambda **kwargs: {
             "transport_forms": {
                 "simc_split_talents": {
@@ -1173,14 +1175,14 @@ def test_simc_validate_talent_transport_normalizes_packet_refresh_failures(monke
     )
 
     monkeypatch.setattr(
-        "simc_cli.main.validate_talent_tree_transport",
+        "simc_cli.build_services.validate_talent_tree_transport",
         lambda **kwargs: {
             "transport_forms": {"simc_split_talents": {"class_talents": "103324:1"}},
             "validation": {"status": "validated", "actor_class": "druid", "spec": "balance"},
         },
     )
     monkeypatch.setattr(
-        "simc_cli.main.refresh_talent_transport_packet",
+        "simc_cli.build_services.refresh_talent_transport_packet",
         lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad refresh")),
     )
 
@@ -1217,7 +1219,7 @@ def test_simc_validate_talent_transport_can_write_upgraded_packet(monkeypatch, t
         )
     )
     monkeypatch.setattr(
-        "simc_cli.main.validate_talent_tree_transport",
+        "simc_cli.build_services.validate_talent_tree_transport",
         lambda **kwargs: {
             "transport_forms": {
                 "simc_split_talents": {
@@ -1279,7 +1281,7 @@ def test_simc_validate_talent_transport_normalizes_write_failure(monkeypatch, tm
         )
     )
     monkeypatch.setattr(
-        "simc_cli.main.validate_talent_tree_transport",
+        "simc_cli.build_services.validate_talent_tree_transport",
         lambda **kwargs: {
             "transport_forms": {
                 "simc_split_talents": {
@@ -1320,7 +1322,7 @@ def test_simc_validate_talent_transport_accepts_inline_rows(monkeypatch) -> None
             },
         }
 
-    monkeypatch.setattr("simc_cli.main.validate_talent_tree_transport", fake_validate)
+    monkeypatch.setattr("simc_cli.build_services.validate_talent_tree_transport", fake_validate)
 
     result = runner.invoke(
         simc_app,
@@ -1406,7 +1408,7 @@ def test_simc_validate_talent_transport_requires_one_input_mode() -> None:
 
 def test_simc_decode_build_auto_identifies_missing_class_and_spec(monkeypatch) -> None:
     monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
+        "simc_cli.build_services._load_identified_build_spec",
         lambda *args, **kwargs: (
             BuildSpec(actor_class="demonhunter",
                     spec="devourer",
@@ -1426,7 +1428,7 @@ def test_simc_decode_build_auto_identifies_missing_class_and_spec(monkeypatch) -
         ),
     )
     monkeypatch.setattr(
-        "simc_cli.main.decode_build",
+        "simc_cli.build_services.decode_build",
         lambda paths, build_spec: _resolution(
                 actor_class='demonhunter',
                 spec='devourer',
@@ -1684,9 +1686,9 @@ def test_simc_decode_build_accepts_build_packet(monkeypatch, tmp_path: Path) -> 
                     source_notes=["talent transport packet"]),
         )
 
-    monkeypatch.setattr("simc_cli.main._load_identified_build_spec", fake_loader)
+    monkeypatch.setattr("simc_cli.build_services._load_identified_build_spec", fake_loader)
     monkeypatch.setattr(
-        "simc_cli.main.decode_build",
+        "simc_cli.build_services.decode_build",
         lambda paths, build_spec: _resolution(
                 actor_class='druid',
                 spec='balance',
@@ -1752,7 +1754,7 @@ def test_simc_decode_build_uses_validated_split_packet_identity(monkeypatch, tmp
                 source_notes=['talent transport packet', 'decoded via /tmp/simc'],
             )
 
-    monkeypatch.setattr("simc_cli.main.decode_build", fake_decode_build)
+    monkeypatch.setattr("simc_cli.build_services.decode_build", fake_decode_build)
 
     result = runner.invoke(simc_app, ["decode-build", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
@@ -1801,7 +1803,7 @@ def test_simc_decode_build_accepts_wowhead_transport_form_from_build_packet(monk
                 source_notes=['talent transport packet'],
             )
 
-    monkeypatch.setattr("simc_cli.main.decode_build", fake_decode_build)
+    monkeypatch.setattr("simc_cli.build_services.decode_build", fake_decode_build)
 
     result = runner.invoke(simc_app, [*_any_hash_decodes(monkeypatch, tmp_path), "decode-build", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
@@ -1867,7 +1869,7 @@ def test_simc_decode_build_probes_wow_export_packet_instead_of_trusting_packet_i
                 source_notes=['decoded via /tmp/simc'],
             )
 
-    monkeypatch.setattr("simc_cli.main.decode_build", fake_decode_build)
+    monkeypatch.setattr("simc_cli.build_services.decode_build", fake_decode_build)
 
     result = runner.invoke(simc_app, ["decode-build", "--build-packet", str(packet_path)])
     assert result.exit_code == 0
@@ -1948,7 +1950,7 @@ def test_simc_describe_build_summarizes_st_and_aoe(monkeypatch, tmp_path: Path) 
     apl_path.write_text("actions=void_ray\n")
 
     monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
+        "simc_cli.build_services._load_identified_build_spec",
         lambda *args, **kwargs: (
             BuildSpec(actor_class="demonhunter",
                     spec="devourer",
@@ -1990,7 +1992,7 @@ def test_simc_describe_build_summarizes_st_and_aoe(monkeypatch, tmp_path: Path) 
         context = PruneContext(targets=targets, enabled_talents={"void_ray", "world_killer"}, disabled_talents=set(), talent_sources={"void_ray": "spec"})
         return context, resolution
 
-    monkeypatch.setattr("simc_cli.main._prune_context", _resolve_prune_context)
+    monkeypatch.setattr("simc_cli.build_services._prune_context", _resolve_prune_context)
 
     def _describe_target_payload(_resolved, context, *, start_list, priority_limit, inactive_limit):
         if context.targets == 1:
@@ -2035,7 +2037,7 @@ def test_simc_describe_build_summarizes_st_and_aoe(monkeypatch, tmp_path: Path) 
             "runtime_sensitive": [],
         }
 
-    monkeypatch.setattr("simc_cli.main._describe_target_payload", _describe_target_payload)
+    monkeypatch.setattr("simc_cli.build_services._describe_target_payload", _describe_target_payload)
 
     result = runner.invoke(simc_app, ["describe-build", "--apl-path", str(apl_path), "--build-text", "ABC123", "--aoe-targets", "5"])
     assert result.exit_code == 0
@@ -2058,7 +2060,7 @@ def test_simc_action_names_keep_the_dispatch_target() -> None:
     single-target versus AoE comparison would report no difference when the build dispatches to a
     different action list at another target count.
     """
-    names = simc_main._action_names(
+    names = simc_build_services._action_names(
         [
             {"action": "tiger_palm", "target_list": None},
             {"action": "call_action_list", "target_list": "default_st"},
@@ -2098,7 +2100,7 @@ def test_simc_describe_build_accepts_build_packet(monkeypatch, tmp_path: Path) -
                     source_notes=["talent transport packet"]),
         )
 
-    monkeypatch.setattr("simc_cli.main._load_identified_build_spec", fake_loader)
+    monkeypatch.setattr("simc_cli.build_services._load_identified_build_spec", fake_loader)
 
     resolution = _resolution(
             actor_class='druid',
@@ -2113,9 +2115,9 @@ def test_simc_describe_build_accepts_build_packet(monkeypatch, tmp_path: Path) -
         context = PruneContext(targets=targets, enabled_talents={"wrath"}, disabled_talents=set(), talent_sources={})
         return context, resolution
 
-    monkeypatch.setattr("simc_cli.main._prune_context", fake_resolve_prune_context)
+    monkeypatch.setattr("simc_cli.build_services._prune_context", fake_resolve_prune_context)
     monkeypatch.setattr(
-        "simc_cli.main._describe_target_payload",
+        "simc_cli.build_services._describe_target_payload",
         lambda _resolved, context, *, start_list, priority_limit, inactive_limit: {
             "targets": context.targets,
             "focus_list": "default",
@@ -2191,9 +2193,9 @@ def test_simc_describe_build_uses_validated_split_packet_identity(monkeypatch, t
         context = PruneContext(targets=targets, enabled_talents={"mind_blast"}, disabled_talents=set(), talent_sources={})
         return context, resolution
 
-    monkeypatch.setattr("simc_cli.main._prune_context", fake_resolve_prune_context)
+    monkeypatch.setattr("simc_cli.build_services._prune_context", fake_resolve_prune_context)
     monkeypatch.setattr(
-        "simc_cli.main._describe_target_payload",
+        "simc_cli.build_services._describe_target_payload",
         lambda _resolved, context, *, start_list, priority_limit, inactive_limit: {
             "targets": context.targets,
             "focus_list": "default",
@@ -2273,9 +2275,9 @@ def test_simc_describe_build_accepts_wow_export_transport_form_from_build_packet
         context = PruneContext(targets=targets, enabled_talents={"wrath"}, disabled_talents=set(), talent_sources={})
         return context, resolution
 
-    monkeypatch.setattr("simc_cli.main._prune_context", fake_resolve_prune_context)
+    monkeypatch.setattr("simc_cli.build_services._prune_context", fake_resolve_prune_context)
     monkeypatch.setattr(
-        "simc_cli.main._describe_target_payload",
+        "simc_cli.build_services._describe_target_payload",
         lambda _resolved, context, *, start_list, priority_limit, inactive_limit: {
             "targets": context.targets,
             "focus_list": "default",
@@ -2359,9 +2361,9 @@ def test_simc_describe_build_probes_wow_export_packet_instead_of_trusting_packet
         context = PruneContext(targets=targets, enabled_talents={"wrath"}, disabled_talents=set(), talent_sources={})
         return context, resolution
 
-    monkeypatch.setattr("simc_cli.main._prune_context", fake_resolve_prune_context)
+    monkeypatch.setattr("simc_cli.build_services._prune_context", fake_resolve_prune_context)
     monkeypatch.setattr(
-        "simc_cli.main._describe_target_payload",
+        "simc_cli.build_services._describe_target_payload",
         lambda _resolved, context, *, start_list, priority_limit, inactive_limit: {
             "targets": context.targets,
             "focus_list": "default",
@@ -2472,7 +2474,7 @@ def test_simc_describe_build_uses_leaf_focus_and_full_action_diff(monkeypatch, t
     )
 
     monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
+        "simc_cli.build_services._load_identified_build_spec",
         lambda *args, **kwargs: (
             BuildSpec(actor_class="demonhunter",
                     spec="devourer",
@@ -2504,7 +2506,7 @@ def test_simc_describe_build_uses_leaf_focus_and_full_action_diff(monkeypatch, t
         context = PruneContext(targets=targets, enabled_talents={"void_ray"}, disabled_talents=set(), talent_sources={"void_ray": "spec"})
         return context, resolution
 
-    monkeypatch.setattr("simc_cli.main._prune_context", _resolve_prune_context)
+    monkeypatch.setattr("simc_cli.build_services._prune_context", _resolve_prune_context)
 
     result = runner.invoke(
         simc_app,
@@ -2520,7 +2522,7 @@ def test_simc_describe_build_uses_leaf_focus_and_full_action_diff(monkeypatch, t
 
 def test_simc_decode_build_failure_includes_source_metadata(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "simc_cli.main.load_build_spec",
+        "simc_cli.build_services.load_build_spec",
         lambda **kwargs: BuildSpec(actor_class="demonhunter",
             spec="devourer",
             talents="CgcBG5bbocFKcv+yIq8fPd6ORBA2MmZmxMzMGzMAAAAAAAegxsNYGAAAAAAAAmxMMmZmZmZmZGzsYGjFtsxMzMzWbzMzAYYAIwMGMmB",
@@ -2534,7 +2536,7 @@ def test_simc_decode_build_failure_includes_source_metadata(monkeypatch, tmp_pat
     def _raise_decode(_paths, _build_spec):
         raise RuntimeError("Nothing to sim!")
 
-    monkeypatch.setattr("simc_cli.main.decode_build", _raise_decode)
+    monkeypatch.setattr("simc_cli.build_services.decode_build", _raise_decode)
     result = runner.invoke(
         simc_app,
         [
@@ -2783,10 +2785,10 @@ def test_simc_compare_builds_shows_tree_diffs(monkeypatch) -> None:
         return base_res if call_count["n"] == 1 else other_res
 
     monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
+        "simc_cli.build_services._load_identified_build_spec",
         lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
     )
-    monkeypatch.setattr("simc_cli.main.decode_build", fake_decode)
+    monkeypatch.setattr("simc_cli.build_services.decode_build", fake_decode)
 
     result = runner.invoke(simc_app, [
         "compare-builds", "--base", "ABC123", "--other", "DEF456", "--tree", "class",
@@ -2809,10 +2811,10 @@ def test_simc_compare_builds_reports_no_differences(monkeypatch) -> None:
     res = _fake_resolution()
 
     monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
+        "simc_cli.build_services._load_identified_build_spec",
         lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
     )
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: res)
+    monkeypatch.setattr("simc_cli.build_services.decode_build", lambda paths, spec: res)
 
     result = runner.invoke(simc_app, ["compare-builds", "--base", "ABC", "--other", "ABC"])
     assert result.exit_code == 0
@@ -2834,10 +2836,10 @@ def test_simc_compare_builds_multiple_others(monkeypatch) -> None:
     decode_results = iter([base_res, other_a, other_b])
 
     monkeypatch.setattr(
-        "simc_cli.main._load_identified_build_spec",
+        "simc_cli.build_services._load_identified_build_spec",
         lambda *a, **kw: (_fake_build_spec(), _fake_identity()),
     )
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: next(decode_results))
+    monkeypatch.setattr("simc_cli.build_services.decode_build", lambda paths, spec: next(decode_results))
 
     result = runner.invoke(simc_app, [
         "compare-builds", "--base", "A", "--other", "B", "--other", "C", "--tree", "class",
@@ -2862,7 +2864,7 @@ def _decode_failing_on(bad: str) -> Any:
 
 def test_simc_compare_builds_fails_when_no_other_build_decodes(monkeypatch, tmp_path: Path) -> None:
     """A comparison with nothing to compare against is a failure, not an empty success."""
-    monkeypatch.setattr("simc_cli.main.decode_build", _decode_failing_on("BAD"))
+    monkeypatch.setattr("simc_cli.build_services.decode_build", _decode_failing_on("BAD"))
 
     result = runner.invoke(
         simc_app,
@@ -2878,7 +2880,7 @@ def test_simc_compare_builds_fails_when_no_other_build_decodes(monkeypatch, tmp_
 
 
 def test_simc_compare_builds_counts_the_other_builds_that_failed(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("simc_cli.main.decode_build", _decode_failing_on("BAD"))
+    monkeypatch.setattr("simc_cli.build_services.decode_build", _decode_failing_on("BAD"))
 
     result = runner.invoke(
         simc_app,
@@ -2893,7 +2895,7 @@ def test_simc_compare_builds_counts_the_other_builds_that_failed(monkeypatch, tm
 
 def test_simc_compare_builds_rejects_an_unknown_tree(monkeypatch) -> None:
     """An unknown tree used to compare nothing and report no differences."""
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: _fake_resolution())
+    monkeypatch.setattr("simc_cli.build_services.decode_build", lambda paths, spec: _fake_resolution())
 
     result = runner.invoke(
         simc_app,
@@ -2911,7 +2913,7 @@ def test_simc_compare_builds_rejects_an_unknown_tree(monkeypatch) -> None:
     [("--base", ["--base", "", "--other", "B"]), ("--other", ["--base", "A", "--other", "B", "--other", " "])],
 )
 def test_simc_compare_builds_names_the_option_given_an_empty_build(monkeypatch, tmp_path: Path, flag: str, args: list[str]) -> None:
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: _fake_resolution())
+    monkeypatch.setattr("simc_cli.build_services.decode_build", lambda paths, spec: _fake_resolution())
 
     result = runner.invoke(
         simc_app, [*_any_hash_decodes(monkeypatch, tmp_path), "compare-builds", *args, "--actor-class", "druid", "--spec", "balance"]
@@ -2943,7 +2945,7 @@ def test_simc_compare_builds_rejects_buildless_wowhead_talent_calc_url() -> None
 
 def test_simc_compare_builds_rejects_buildless_wowhead_other(monkeypatch, tmp_path: Path) -> None:
     """An --other that is no build is a usage error, even when the base decodes."""
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: _fake_resolution())
+    monkeypatch.setattr("simc_cli.build_services.decode_build", lambda paths, spec: _fake_resolution())
 
     result = runner.invoke(
         simc_app,
@@ -3391,7 +3393,7 @@ def test_simc_modify_build_rejects_buildless_wowhead_talent_calc_url() -> None:
 
 def test_simc_modify_build_rejects_buildless_wowhead_swap_source(monkeypatch, tmp_path: Path) -> None:
     """The swap source goes through the same reference parsing as the base build."""
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda paths, spec: _fake_resolution())
+    monkeypatch.setattr("simc_cli.build_services.decode_build", lambda paths, spec: _fake_resolution())
 
     result = runner.invoke(
         simc_app,
@@ -3721,7 +3723,7 @@ def test_simc_apl_prune_branch_trace_and_intent(monkeypatch, tmp_path: Path) -> 
         + "\n"
     )
     monkeypatch.setattr(
-        "simc_cli.main._prune_context",
+        "simc_cli.build_services._prune_context",
         lambda paths, build_spec, option_values, targets: (
             PruneContext(enabled_talents={"mass_disintegrate"}, disabled_talents=set(), targets=targets, talent_sources={"mass_disintegrate": "spec"}),
             _resolution(actor_class="evoker", spec="devastation"),
@@ -3762,7 +3764,7 @@ def test_simc_priority_inactive_actions_and_opener(monkeypatch, tmp_path: Path) 
         + "\n"
     )
     monkeypatch.setattr(
-        "simc_cli.main._prune_context",
+        "simc_cli.build_services._prune_context",
         lambda paths, build_spec, option_values, targets: (
             PruneContext(enabled_talents={"void_ray", "predators_wake"}, disabled_talents=set(), targets=targets, talent_sources={"void_ray": "spec", "predators_wake": "spec"}),
             _resolution(actor_class="demonhunter", spec="devourer"),
@@ -3810,7 +3812,7 @@ def test_simc_intent_explain_branch_compare_and_analysis_packet(monkeypatch, tmp
             _resolution(actor_class="evoker", spec="devastation"),
         )
 
-    monkeypatch.setattr("simc_cli.main._prune_context", fake_context)
+    monkeypatch.setattr("simc_cli.build_services._prune_context", fake_context)
 
     explain_result = runner.invoke(simc_app, [*_checkout_args(tmp_path), "apl-intent-explain", str(apl), "--targets", "1"])
     assert explain_result.exit_code == 0
@@ -3884,7 +3886,7 @@ def test_simc_analysis_packet_surfaces_runtime_timing_failures(monkeypatch, tmp_
     apl.write_text("actions.st+=/disintegrate\n")
 
     monkeypatch.setattr(
-        "simc_cli.main._prune_context",
+        "simc_cli.build_services._prune_context",
         lambda paths, build_spec, option_values, targets: (
             PruneContext(enabled_talents=set(), disabled_talents=set(), targets=targets, talent_sources={}),
             _resolution(actor_class="evoker", spec="devastation"),
@@ -4344,7 +4346,7 @@ def test_apl_analysis_rejects_talents_it_cannot_tie_to_a_class_and_spec(monkeypa
     apl.write_text(WINDWALKER_APL)
     # Identification found no class or spec for the talents (no binary runs in this test).
     monkeypatch.setattr(
-        "simc_cli.main.identify_build",
+        "simc_cli.build_services.identify_build",
         lambda _paths, spec, *, apl_path: (
             spec,
             BuildIdentity(actor_class=None, spec=None, confidence="none", source="unresolved", candidate_count=0),
@@ -4367,7 +4369,7 @@ def test_an_unknown_action_list_is_not_found_instead_of_an_empty_answer(tmp_path
 
 
 def _decoded_as(monkeypatch, resolution: BuildResolution) -> None:
-    monkeypatch.setattr("simc_cli.main.decode_build", lambda _paths, _spec: resolution)
+    monkeypatch.setattr("simc_cli.build_services.decode_build", lambda _paths, _spec: resolution)
 
 
 def test_apl_views_resolve_hero_tree_and_talent_suffixes_from_the_decoded_build(monkeypatch, tmp_path: Path) -> None:

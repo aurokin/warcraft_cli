@@ -41,7 +41,8 @@ jobs:
 
   # The keyless half of tests/e2e (docs/architecture/E2E_TESTING.md). No secrets are passed, so the
   # journeys for Warcraft Logs, Blizzard, CurseForge, SimulationCraft (needs a local checkout and
-  # build), the wrapper composites, and the cross-binary contract file stay local-only. Missing
+  # build), log/guide wrapper composites, and the cross-binary contract file stay local-only. Scoped
+  # wrapper discovery and the guide-export half of the build handoff are keyless. Missing
   # providers fail rather than skip; the one optional input is excluded by name.
   e2e-keyless:
     runs-on: ubuntu-latest
@@ -66,7 +67,8 @@ jobs:
         run: >-
           make test-e2e E2E_ARGS="-rs" E2E_PATHS="tests/e2e/test_wowhead.py tests/e2e/test_method.py
           tests/e2e/test_raiderio.py tests/e2e/test_warcraft_wiki.py tests/e2e/test_lorrgs.py
-          tests/e2e/test_raidbots.py"
+          tests/e2e/test_raidbots.py tests/e2e/test_wrapper_discovery_scope.py
+          tests/e2e/test_wowhead_guide_build_handoff.py::test_guide_bundle_preserves_published_codes_and_original_urls"
 
   report-failure:
     needs:

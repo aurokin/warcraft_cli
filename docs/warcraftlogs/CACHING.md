@@ -50,13 +50,16 @@ upstream failure is not replayed after Warcraft Logs recovers.
 | Finished report detail | `WARCRAFTLOGS_FINISHED_REPORT_CACHE_TTL_SECONDS` | 86400s |
 
 Report **listings** (`reports`, `guild-reports`) keep the short report TTL — the list itself
-changes as new reports arrive even though each finished report is stable.
+changes as new reports arrive even when each report appears finished.
 
 **Report rankings** (`report-rankings`) also keep the short report TTL even for a finished
 report: rankings are population-relative percentiles that Warcraft Logs keeps recomputing
 after the log completes, so they are *not* immutable and must not inherit the 24h finished
-TTL. The finished TTL applies only to the immutable report-detail payloads (fights, events,
-tables, graphs, master data, player details, and the report metadata lookup).
+TTL. The finished TTL applies to report-detail payloads (fights, events, tables, graphs,
+master data, player details, and report metadata) as an explicit **staleness budget**.
+Finished does not mean immutable: WCL can re-export a report and increment its `revision`, and
+can change events, tables, and graphs. Report metadata and brief report payloads expose `revision`;
+it is observed evidence, not an invalidation trigger. Cached revisions are not upstream revalidation.
 
 ## Derived-output trust fields
 
@@ -105,15 +108,16 @@ are `null` rather than a TTL the deployment never applies. The `finished`/`live`
 
 ## Invalidation
 
-File and Redis caches expire by TTL; there is no manual per-report invalidation, and
-`warcraftlogs` has no cache-admin command (only `wowhead` has `cache-inspect` / `cache-clear`).
-To skip the cache for one run, set `WARCRAFTLOGS_CACHE_BACKEND=none`. To drop a namespace, delete
-its directory under the `cache_dir` that `warcraftlogs doctor` reports (default
-`~/.cache/warcraft/warcraftlogs/http/<namespace>/`), or on Redis delete its keys
-(`redis-cli --scan --pattern 'warcraftlogs_cli:<namespace>:*' | xargs redis-cli del`, with the
-configured `WARCRAFTLOGS_REDIS_PREFIX`). Because the finished TTL is long, re-fetching a report that
-has since been edited waits out the TTL or a manual clear; finished WoW logs are effectively
-immutable, so this is acceptable.
+File and Redis caches expire by TTL. Use `warcraftlogs --refresh report <code>` (or any
+other read command) to bypass existing responses and replace only the queried cache entries.
+This is targeted refresh, not a purge of every cached filter for that report. User endpoints remain
+account-scoped; site profiles are isolated in every cache key. Raw GraphQL refresh also bypasses
+cache reads, but writes only when its existing `--cache-ttl` opt-in is positive.
+
+Use `WARCRAFTLOGS_CACHE_BACKEND=none` to disable both cache reads and writes for a run.
+There is no per-report cache-admin purge command. The CLI does not poll revisions or guarantee
+a coherent snapshot across independently cached report requests. A long finished TTL deliberately
+trades freshness for API cost; use `--refresh` when current evidence matters.
 
 ### Live → finished staleness window
 
@@ -123,8 +127,8 @@ for up to that TTL (default 60s) after the report finishes, including by
 sampled boss analytics. This is the accepted consequence of caching live reports
 (rather than no-caching them, for rate-limit relief): the short live TTL bounds the window,
 and once it expires the next fetch sees an `endTime` over two hours old and re-caches under the
-finished TTL. Finished WoW logs are immutable thereafter. To eliminate the window, run the sampling command
-with `WARCRAFTLOGS_CACHE_BACKEND=none`, or drop the `report` namespace first as described above.
+finished TTL. Finished reports can still change afterward. To bypass cached evidence, run the sampling command
+with `--refresh`, or disable caching using `WARCRAFTLOGS_CACHE_BACKEND=none`.
 
 #### Provenance is a report property, not a per-namespace cache audit
 
@@ -145,4 +149,15 @@ every namespace per response.
   with `cache_ttl_seconds: null`).
 - `cache_provenance` is not retrofitted onto every typed report command — only report-encounter
   and sampled cross-report surfaces.
-- Classic/fresh cache isolation is deferred (AUR-389).
+- Classic/fresh cache isolation is shipped: the site key is included in every response key.
+
+## Event evidence exports
+
+`report-events --all-pages` emits an `export` block with explicit completeness, continuation,
+page/event bounds, observed revisions, collection time, and transport counts. `collected_at` is
+the artifact collection time, not a claim that each page was fetched upstream then. Revision
+changes stop collection before merging the new revision; callers must restart the investigation.
+Missing event data and GraphQL partial errors cannot be reported as complete.
+
+`stability.cache_policy: ttl_staleness_budget` and `stability.immutable: false` replace the
+ambiguous `stability.cache_safe` boolean on encounter payloads.

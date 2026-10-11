@@ -1,7 +1,7 @@
 """Pure CurseForge provider surface. The Typer commands and the ``warcraft`` wrapper both call these.
 
 CurseForge is an experimental provider because the surface is small — one addon lookup plus doctor,
-with search/resolve still stubs — and ``doctor`` reports ``tier: experimental``. The endpoints the
+with free-text discovery unsupported — and ``doctor`` reports ``tier: experimental``. The endpoints the
 addon lookup uses are confirmed against live traffic, so its payloads carry
 ``provenance.verified: true``.
 """
@@ -12,9 +12,9 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from warcraft_api.cache import cache_backend_health, redacted_redis_url
-from warcraft_core.discovery import stub_envelope
 from warcraft_core.envelope import Envelope, success_envelope
-from warcraft_core.provider import ProviderSurface
+from warcraft_core.exit_codes import EXIT_USAGE
+from warcraft_core.provider import ProviderError, ProviderSurface
 
 from curseforge_cli.auth import (
     API_KEY_ENV,
@@ -76,35 +76,28 @@ def doctor_envelope() -> Envelope:
         "auth": _auth_payload(auth),
         "capabilities": {
             "doctor": "ready",
-            "search": "coming_soon",
-            "resolve": "coming_soon",
+            "search": "not_supported",
+            "resolve": "not_supported",
             "addon": "ready" if auth.configured else "requires_api_key",
         },
         "cache": cache,
         "notes": [
             f"curseforge is an {TIER} provider: the surface is one addon lookup plus doctor, and "
-            "search/resolve are stubs. The endpoints it does use are live-confirmed.",
+            "free-text search/resolve are unsupported. The endpoints it does use are live-confirmed.",
             "addon lookup returns CurseForge metadata, the latest files, and the latest file's "
             "changelog over the public CurseForge API (x-api-key auth, gameId=1).",
             verification_note(),
-            "search/resolve are not implemented yet (report-style addon lookup is the first slice).",
+            "Free-text discovery is outside the addon lookup scope; use an explicit slug or mod id.",
         ],
     }
     return success_envelope(provider=PROVIDER_NAME, command="doctor", kind="doctor", data=data)
 
 
-def coming_soon_envelope(command: Literal["search", "resolve"], query: str) -> Envelope:
-    """Structured stub for an advertised-but-unimplemented surface, so probing it is not a Click error."""
-    return stub_envelope(
-        provider=PROVIDER_NAME,
-        surface=command,
-        flag="coming_soon",
-        query=query,
-        message=(
-            f"curseforge {command} is not implemented yet; addon lookup by slug or mod id is the "
-            "first slice. Use `curseforge addon <slug-or-id>`."
-        ),
-        suggested_command="curseforge addon deadly-boss-mods",
+def unsupported_discovery(command: Literal["search", "resolve"], query: str) -> Envelope:
+    """Discovery is outside the supported addon lookup surface."""
+    raise ProviderError(
+        "unsupported_operation", f"CurseForge {command} is unsupported. Use addon <slug-or-id> for an explicit lookup.",
+        exit_code=EXIT_USAGE, details={"operation": command, "available_commands": ["addon"]},
     )
 
 
@@ -142,15 +135,15 @@ def addon_envelope(slug_or_id: str) -> Envelope:
 
 @dataclass(slots=True)
 class CurseForgeProvider:
-    """CurseForge search/resolve/doctor surface; search and resolve are unimplemented stubs."""
+    """CurseForge search/resolve/doctor surface; free-text search and resolve are unsupported."""
 
     name: str = PROVIDER_NAME
 
     def search(self, query: str, *, limit: int = 10, **options: Any) -> Envelope:
-        return coming_soon_envelope("search", query)
+        return unsupported_discovery("search", query)
 
     def resolve(self, target: str, **options: Any) -> Envelope:
-        return coming_soon_envelope("resolve", target)
+        return unsupported_discovery("resolve", target)
 
     def doctor(self, **options: Any) -> Envelope:
         return doctor_envelope()

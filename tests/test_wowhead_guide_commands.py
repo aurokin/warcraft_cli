@@ -474,6 +474,7 @@ def test_guide_export_writes_local_assets(monkeypatch, tmp_path) -> None:
     assert payload["data"]["counts"] == {
         "sections": 2,
         "analysis_surfaces": 1,
+        "build_references": 0,
         "navigation_links": 2,
         "linked_entities": 2,
         "gatherer_entities": 1,
@@ -488,6 +489,7 @@ def test_guide_export_writes_local_assets(monkeypatch, tmp_path) -> None:
         "body.markup.txt",
         "navigation.markup.txt",
         "sections.jsonl",
+        "build-references.jsonl",
         "navigation-links.jsonl",
         "linked-entities.jsonl",
         "gatherer-entities.jsonl",

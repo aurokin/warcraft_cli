@@ -2,7 +2,7 @@
 
 # blizzard
 
-Official Blizzard Battle.net World of Warcraft API CLI. Experimental tier: explicit reads (realm, item, character, PvP seasons/leaderboards/ratings, collections, auction prices); search/resolve are stubs. Host, OAuth token URL, and namespace strings are confirmed against live Blizzard endpoints for us/eu/kr/tw (Game Data and Profile, every game version), whose payloads report provenance.verified=true. CN routing (gateway.battlenet.com.cn + oauth.battlenet.com.cn) follows documented Blizzard API conventions and is unconfirmed; those hosts are unreachable from outside China, so CN payloads report provenance.verified=false.
+Official Blizzard Battle.net World of Warcraft API CLI. Supported tier: explicit reads (realm, item, character, PvP seasons/leaderboards/ratings, collections, auction prices); free-text discovery is unsupported. Host, OAuth token URL, and namespace strings are confirmed against live Blizzard endpoints for us/eu/kr/tw (Game Data and Profile, every game version), whose payloads report provenance.verified=true. CN routing (gateway.battlenet.com.cn + oauth.battlenet.com.cn) follows documented Blizzard API conventions and is unconfirmed; those hosts are unreachable from outside China, so CN payloads report provenance.verified=false.
 
 ## Global options
 
@@ -201,7 +201,7 @@ The region-wide retail commodity market summarized per item id: listings, units,
 
 ## blizzard search
 
-Coming soon: free-text discovery search is not implemented yet.
+Fail explicitly for unsupported free-text discovery.
 
 **Arguments**
 
@@ -213,11 +213,11 @@ Coming soon: free-text discovery search is not implemented yet.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 5 | Unused until blizzard search ships. |
+| `--limit` | int range [1<=x<=50] | 5 | Compatibility limit; discovery is unsupported. |
 
 ## blizzard resolve
 
-Coming soon: conservative resolution is not implemented yet.
+Fail explicitly for unsupported free-text resolution.
 
 **Arguments**
 
@@ -229,4 +229,4 @@ Coming soon: conservative resolution is not implemented yet.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `--limit` | int range [1<=x<=50] | 5 | Unused until blizzard resolve ships. |
+| `--limit` | int range [1<=x<=50] | 5 | Compatibility limit; discovery is unsupported. |

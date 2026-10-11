@@ -34,13 +34,13 @@ from warcraft_cli.cooldown_packet import (
     tracked_spell_ids,
     warcraftlogs_phase_windows,
 )
-from warcraft_cli.providers import (
+from warcraft_cli.provider_calls import (
     ProviderFetch,
-    parse_lorrgs_report_reference,
     provider_payload_data,
     source_exit_code,
     wrapper_envelope,
 )
+from warcraft_cli.providers import parse_lorrgs_report_reference
 
 
 def _fail_cooldown_packet(

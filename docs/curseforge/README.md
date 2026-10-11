@@ -3,7 +3,7 @@
 `curseforge` is an **experimental** provider whose host, `x-api-key` auth, mod search, mod lookup,
 and changelog endpoints were confirmed against the live API on 2026-09-13, so payloads carry
 `provenance.verified: true`. `doctor` reports `tier: experimental` because the command surface is
-thin (four commands) and addon metadata sits at the edge of the product's scope. Core API keys
+thin (addon lookup and doctor) and addon metadata sits at the edge of the product's scope. Core API keys
 without search access can only resolve numeric mod ids; the slug path then fails with
 `auth_failed` and a message pointing at the numeric form.
 
@@ -31,7 +31,7 @@ Every command accepts the shared output flags, which go **before** the subcomman
 Reports install state, API-key auth posture (`api_key` flow, `CURSEFORGE_API_KEY`, credential source
 and lookup order), the `experimental` tier, the cache configuration, and capability metadata:
 `doctor` is `ready`, `addon` is `ready` with a key and `requires_api_key` without one, and `search`
-and `resolve` are `coming_soon`. `status` is `ready` with a key and `degraded` without one, or when the cache config does not parse or a Redis cache backend does not
+and `resolve` are `not_supported`. `status` is `ready` with a key and `degraded` without one, or when the cache config does not parse or a Redis cache backend does not
 answer (`cache.available: false`; an unparsable config also carries `cache.error.code: "invalid_cache_config"`).
 
 ### `curseforge addon <slug-or-id>`
@@ -66,10 +66,13 @@ Resolves one WoW addon and returns its metadata, latest files, and latest change
 
 ### `curseforge search <query>` and `curseforge resolve <query>`
 
-Not implemented. Both accept `--limit <1-50>` (currently unused) and return a structured
-`kind: search_results` / `kind: resolve_match` envelope with `ok: true`, `coming_soon: true`, the query text as
-`query`, empty `results` (search) or `candidates` (resolve), `total_matches: null`, and a `suggested_command`, so
-probing them is a stable contract rather than a Click "no such command" error.
+Both fail with `unsupported_operation` (exit 2), with an explicit `addon` lookup as the
+available operation. `--limit` remains a compatibility parameter. The wrapper excludes these
+operations from discovery.
+
+The provider remains experimental for explicit addon lookup. Additional discovery and addon
+management are paused until a compatible stable-release workflow justifies expanding this scope.
+
 
 ## Output And Exit Codes
 

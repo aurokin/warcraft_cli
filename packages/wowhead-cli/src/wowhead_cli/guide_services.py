@@ -12,6 +12,7 @@ from warcraft_core.timestamps import iso_now_utc
 
 from wowhead_cli.entities import dedupe_links, truncated_link_block
 from wowhead_cli.expansion_profiles import EXPANSION_PREFIXES, ExpansionProfile, expansion_url_policy_issues
+from wowhead_cli.guide_builds import guide_build_references
 from wowhead_cli.guides import (
     GuideExportOptions,
     GuideHydrationResult,
@@ -312,6 +313,9 @@ def build_guide_full_payload(
         "author": _guide_author_block(html),
         "rating": extract_guide_rating(html),
         "body": body,
+        "build_references": guide_build_references(
+            html, body["raw_markup"], source_url=canonical_url, expansion=client.expansion.key,
+        ),
         "navigation": navigation,
         "linked_entities": {
             **linked_entities_block,

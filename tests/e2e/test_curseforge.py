@@ -49,8 +49,8 @@ def test_doctor_reports_the_api_key_and_capabilities(require) -> None:
 
     capabilities = result.data["capabilities"]
     assert capabilities["addon"] == "ready"
-    assert capabilities["search"] == "coming_soon"
-    assert capabilities["resolve"] == "coming_soon"
+    assert capabilities["search"] == "not_supported"
+    assert capabilities["resolve"] == "not_supported"
     # With the key the one lookup is usable, so the provider is ready, not "partial".
     assert result.data["status"] == "ready", result.describe()
 
@@ -100,20 +100,12 @@ def test_addon_by_slug_resolves_to_the_same_mod(require) -> None:
     assert result.data["metadata"] == by_id.data["metadata"], result.describe()
 
 
-def test_search_and_resolve_are_structured_coming_soon_stubs(require) -> None:
+def test_unsupported_discovery_explains_explicit_lookup_alternatives(require) -> None:
     require("curseforge")
     for command in ("search", "resolve"):
-        result = run("curseforge", command, "boss mods")
-        assert result.payload["kind"] == ("search_results" if command == "search" else "resolve_match")
-        assert result.data["coming_soon"] is True
-        assert result.data["results" if command == "search" else "candidates"] == []
-        assert (result.data["count"], result.data["total_matches"], result.data["truncated"]) == (0, None, False)
-        assert result.data["suggested_command"] == "curseforge addon deadly-boss-mods"
-        assert f"curseforge {command} is not implemented yet" in result.data["message"]
-
-        # The stubs still validate their one flag rather than accepting anything until they ship.
-        rejected = run("curseforge", command, "boss mods", "--limit", "0", expect=EXIT_USAGE, error_code="invalid_argument")
-        assert "--limit" in rejected.payload["error"]["message"], rejected.describe()
+        result = run("curseforge", command, "boss mods", expect=EXIT_USAGE, error_code="unsupported_operation")
+        assert result.payload["error"]["details"]["operation"] == command
+        assert result.payload["error"]["details"]["available_commands"], result.describe()
 
 
 def test_unknown_slug_and_unknown_id_are_not_found(require) -> None:

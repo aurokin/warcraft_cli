@@ -14,7 +14,7 @@ from blizzard_api_cli.main import app
 from blizzard_api_cli.provider import PROVIDER
 from typer.testing import CliRunner
 from warcraft_core.envelope import ENVELOPE_KEYS, REQUIRED_KEYS, SCHEMA_VERSION, envelope_violations
-from warcraft_core.provider import ProviderSurface
+from warcraft_core.provider import ProviderError, ProviderSurface
 
 runner = CliRunner()
 
@@ -297,17 +297,16 @@ def test_unsupported_game_version_rejected(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.parametrize("command", ["search", "resolve"])
-def test_coming_soon_commands_emit_structured_stub(command: str) -> None:
-    # doctor advertises search/resolve as coming_soon, so the commands must exist and emit a
-    # structured coming_soon envelope (not Click's "No such command") when a caller probes them.
+def test_unsupported_discovery_emits_actionable_usage_error(command: str) -> None:
     result = runner.invoke(app, [command, "illidan"])
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["ok"] is True
-    assert payload["provider"] == "blizzard-api"
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert payload["ok"] is False
     assert payload["command"] == command
-    assert payload["kind"] == ("search_results" if command == "search" else "resolve_match")
-    assert payload["data"]["coming_soon"] is True
+    assert payload["error"]["code"] == "unsupported_operation"
+    assert payload["error"]["details"]["available_commands"]
+
 
 
 def test_classic_conflicts_with_explicit_retail(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -526,8 +525,8 @@ def test_in_memory_token_keyed_by_region(monkeypatch: pytest.MonkeyPatch) -> Non
     ("args", "stream"),
     [
         (["doctor"], "stdout"),
-        (["search", "illidan"], "stdout"),
-        (["resolve", "illidan"], "stdout"),
+        (["search", "illidan"], "stderr"),
+        (["resolve", "illidan"], "stderr"),
         (["realm", "illidan"], "stdout"),
         (["item", "19019"], "stdout"),
         (["character", "illidan", "Imonthegcd"], "stdout"),
@@ -544,16 +543,17 @@ def test_every_command_emits_a_conforming_envelope(monkeypatch: pytest.MonkeyPat
     assert payload["provider"] == "blizzard-api"
 
 
-def test_provider_surface_is_pure_and_experimental() -> None:
-    # The wrapper calls PROVIDER in process, so the surface must return envelopes without printing.
+def test_provider_surface_is_pure_and_supported() -> None:
     assert isinstance(PROVIDER, ProviderSurface)
     doctor = PROVIDER.doctor()
     assert envelope_violations(doctor) == []
-    assert doctor["data"]["tier"] == "experimental"
-    assert doctor["data"]["capabilities"]["search"] == "coming_soon"
-    for envelope in (PROVIDER.search("illidan", limit=3), PROVIDER.resolve("illidan")):
-        assert envelope_violations(envelope) == []
-        assert envelope["data"]["coming_soon"] is True
+    assert doctor["data"]["tier"] == "supported"
+    assert doctor["data"]["capabilities"]["search"] == "not_supported"
+    for call in (PROVIDER.search, PROVIDER.resolve):
+        with pytest.raises(ProviderError) as error:
+            call("illidan")
+        assert (error.value.code, error.value.exit_code) == ("unsupported_operation", 2)
+
 
 
 def test_timeout_maps_to_network_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -55,8 +55,8 @@ def test_doctor_reports_scaffold_auth_and_capabilities() -> None:
     assert auth["token_cache"]["has_access_token"] is False
     capabilities = payload["data"]["capabilities"]
     assert capabilities["doctor"] == "ready"
-    assert capabilities["search"] == "coming_soon"
-    assert capabilities["resolve"] == "coming_soon"
+    assert capabilities["search"] == "not_supported"
+    assert capabilities["resolve"] == "not_supported"
     assert capabilities["game_data"] == "requires_client_credentials"
     assert capabilities["profile"] == "requires_client_credentials"
     assert payload["data"]["cache"]["ttls"] == {"static": 86400, "dynamic_and_profile": 900, "snapshot": 3600}

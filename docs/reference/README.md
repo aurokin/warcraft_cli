@@ -16,6 +16,6 @@ live here only; `docs/USAGE.md` carries workflows and conventions.
 | `simc` | core | [simc.md](simc.md) | SimulationCraft local provider with repo inspection, build decoding, and local run workflows. |
 | `warcraftlogs` | core | [warcraftlogs.md](warcraftlogs.md) | Warcraft Logs API provider with explicit report discovery plus guild, character, and report analytics commands. |
 | `raidbots` | experimental | [raidbots.md](raidbots.md) | Raidbots report consumption provider: parse public reports and bridge SimC input to local simc. |
-| `blizzard` | experimental | [blizzard.md](blizzard.md) | Official Blizzard Battle.net WoW API provider: realm, item, PvP seasons/leaderboards, auctions, commodities, character profiles, PvP ratings, and collections reads. |
+| `blizzard` | supported | [blizzard.md](blizzard.md) | Official Blizzard Battle.net WoW API provider: realm, item, PvP seasons/leaderboards, auctions, commodities, character profiles, PvP ratings, and collections reads. |
 | `curseforge` | experimental | [curseforge.md](curseforge.md) | CurseForge addon provider: doctor + addon lookup (metadata, latest files, changelog) over the public CurseForge API. |
 | `lorrgs` | supported | [lorrgs.md](lorrgs.md) | Lorrgs public API provider: cooldown timeline rankings by spec/boss, composition rankings, report overview handoffs, and static class/spec/boss/spell metadata. |

@@ -13,7 +13,7 @@ from raidbots_cli.report import _actor_summary, parse_report
 from raidbots_cli.simc_input import classify_simc_input, simc_handoff
 from typer.testing import CliRunner
 from warcraft_core.envelope import envelope_violations
-from warcraft_core.provider import ProviderSurface
+from warcraft_core.provider import ProviderError, ProviderSurface
 
 runner = CliRunner()
 
@@ -596,11 +596,12 @@ def test_provider_surface_is_pure_and_matches_doctor_capabilities() -> None:
     capabilities = PROVIDER.doctor()["data"]["capabilities"]
     assert capabilities["search"] == "not_supported"
     assert capabilities["resolve"] == "not_supported"
-    search = PROVIDER.search("thunderfury", limit=3)["data"]
-    assert search["not_supported"] is True
-    # A shell line: a <placeholder> would be read as a redirection.
-    assert search["suggested_command"] == "raidbots inspect-report REPORT_URL_OR_ID"
-    assert PROVIDER.resolve("abc123")["data"]["not_supported"] is True
+    for call in (PROVIDER.search, PROVIDER.resolve):
+        with pytest.raises(ProviderError) as error:
+            call("abc123")
+        assert (error.value.code, error.value.exit_code) == ("unsupported_operation", 2)
+        assert "inspect-report" in error.value.details["available_commands"]
+
 
 
 def test_global_output_flags_apply_to_raidbots(monkeypatch: pytest.MonkeyPatch) -> None:

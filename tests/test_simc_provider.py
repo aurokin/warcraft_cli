@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shlex
 from pathlib import Path
 
 import pytest
@@ -11,7 +10,7 @@ from simc_cli.main import app as simc_app
 from simc_cli.provider import BINARY_COMMANDS, CAPABILITIES, PROVIDER, simc_envelope
 from typer.testing import CliRunner
 from warcraft_core.envelope import SCHEMA_VERSION, envelope_violations
-from warcraft_core.provider import ProviderSurface
+from warcraft_core.provider import ProviderError, ProviderSurface
 
 runner = CliRunner()
 
@@ -20,8 +19,6 @@ runner = CliRunner()
     ("args", "kind"),
     [
         (["doctor"], "doctor"),
-        (["search", "mistweaver"], "search_results"),
-        (["resolve", "mistweaver"], "resolve_match"),
         (["repo"], "repo"),
     ],
 )
@@ -98,29 +95,27 @@ def test_missing_target_exits_with_the_not_found_code(tmp_path: Path) -> None:
 
 def test_provider_surface_is_pure_and_conforms(tmp_path: Path) -> None:
     assert isinstance(PROVIDER, ProviderSurface)
-    for envelope in (
-        PROVIDER.search("mistweaver", limit=3, repo_root=str(tmp_path)),
-        PROVIDER.resolve("mistweaver", repo_root=str(tmp_path)),
-        PROVIDER.doctor(repo_root=str(tmp_path)),
-    ):
-        assert envelope_violations(envelope) == []
-        assert envelope["ok"] is True
-    assert PROVIDER.search("mistweaver", repo_root=str(tmp_path))["data"]["coming_soon"] is True
+    envelope = PROVIDER.doctor(repo_root=str(tmp_path))
+    assert envelope_violations(envelope) == []
+    assert envelope["ok"] is True
+    for call in (PROVIDER.search, PROVIDER.resolve):
+        with pytest.raises(ProviderError) as error:
+            call("mistweaver", repo_root=str(tmp_path))
+        assert (error.value.code, error.value.exit_code) == ("unsupported_operation", 2)
 
 
 
-def test_resolve_suggests_a_command_that_runs(tmp_path: Path) -> None:
-    """It used to suggest `decode-build --apl-path <apl>`, which always fails: an APL carries no build."""
-    root = tmp_path / "simc checkout"
-    (root / "ActionPriorityLists" / "default").mkdir(parents=True)
-    (root / "ActionPriorityLists" / "default" / "monk_windwalker.simc").write_text("actions=tiger_palm\n")
 
-    suggested = PROVIDER.resolve("windwalker", repo_root=str(root))["data"]["suggested_command"]
-    program, *args = shlex.split(suggested)
-    result = runner.invoke(simc_app, ["--repo-root", str(root), *args])
+@pytest.mark.parametrize("command", ["search", "resolve"])
+def test_unsupported_discovery_emits_actionable_usage_error(command: str) -> None:
+    result = runner.invoke(simc_app, [command, "arcane"])
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    payload = json.loads(result.stderr)
+    assert envelope_violations(payload) == []
+    assert payload["error"]["code"] == "unsupported_operation"
+    assert "identify-build" in payload["error"]["details"]["available_commands"]
 
-    assert program == "simc"
-    assert result.exit_code == 0, result.stdout + result.stderr
 
 
 def test_the_capability_map_covers_every_command_the_cli_exposes() -> None:

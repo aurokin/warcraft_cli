@@ -40,25 +40,21 @@ from warcraft_core.cli import (
     RuntimeConfig as BaseRuntimeConfig,
 )
 from warcraft_core.envelope import success_envelope
-from warcraft_core.exit_codes import EXIT_AUTH, EXIT_USAGE, exit_code_for
 from warcraft_core.identity import (
-    IdentityConfidence,
     ability_identity_payload,
     class_spec_identity_payload,
     encounter_identity_payload,
     report_actor_identity_payload,
-    talent_transport_packet_payload,
-    validate_talent_transport_packet,
 )
 from warcraft_core.output import DEFAULT_COMPACT_MAX_CHARS
 from warcraft_core.paths import provider_state_path
-from warcraft_core.talent_transport import validate_talent_tree_transport
+from warcraft_core.provider import ProviderError
 from warcraft_core.wow_normalization import profile_region
 from warcraft_core.wow_specs import WOW_CLASS_NAMES, lookup_class, warcraftlogs_class_slug
 
+from warcraftlogs_cli import operations
 from warcraftlogs_cli.boss_kills import (
     CrossReportScope,
-    player_details_roles,
     retail_specs_named,
 )
 from warcraftlogs_cli.boss_kills import (
@@ -89,7 +85,6 @@ from warcraftlogs_cli.boss_kills import (
     spec_filtered_kill_samples_payload as _spec_filtered_kill_samples_payload,
 )
 from warcraftlogs_cli.client import (
-    GRAPHQL_WARNINGS_KEY,
     RETAIL_PROFILE,
     EncounterRankingsOptions,
     ReportFilterOptions,
@@ -102,6 +97,12 @@ from warcraftlogs_cli.client import (
     resolve_site_profile,
     validated_region,
     warcraftlogs_provider_env_path,
+)
+from warcraftlogs_cli.errors import client_error_exit_code
+from warcraftlogs_cli.event_export import collect_events, write_event_artifact
+from warcraftlogs_cli.player_payloads import (
+    _all_player_detail_rows_from_roles,
+    _report_player_details_payload,
 )
 from warcraftlogs_cli.provider import doctor as provider_doctor
 from warcraftlogs_cli.provider import payload_body
@@ -133,13 +134,15 @@ from warcraftlogs_cli.sampling_utils import (
     normalize_match_text as _normalize_match_text,
 )
 from warcraftlogs_cli.sampling_utils import (
-    report_cache_provenance as _report_cache_provenance,
-)
-from warcraftlogs_cli.sampling_utils import (
-    report_is_finished as _report_is_finished,
-)
-from warcraftlogs_cli.sampling_utils import (
     sampled_spec_filter_notes as _sampled_spec_filter_notes,
+)
+from warcraftlogs_cli.scope_payloads import (
+    _emitted_finished_report_ttl,
+    _emitted_report_ttl,
+    _encounter_payload,
+    _encounter_summary_payload,
+    _fight_encounter_id,
+    _kill_type_for_fight,
 )
 from warcraftlogs_cli.services import (
     ReportReference,
@@ -147,7 +150,6 @@ from warcraftlogs_cli.services import (
     _endpoint_family_from_state,
     _parse_report_reference,
     _public_api_access_payload,
-    _report_reference_payload,
     _runtime_access_payload,
     _runtime_error_message,
     _saved_provider_auth_payload,
@@ -280,6 +282,8 @@ class RuntimeConfig(BaseRuntimeConfig):
     """Shared runtime config plus the Warcraft Logs ``--site`` profile."""
 
     site_profile: WarcraftLogsSiteProfile = RETAIL_PROFILE
+    endpoint: str = "client"
+    refresh: bool = False
 
 
 def _cfg(ctx: typer.Context) -> RuntimeConfig:
@@ -317,46 +321,9 @@ def _with_warnings(payload: dict[str, Any], client: Any) -> dict[str, Any]:
     return {**payload, "notes": notes, "graphql_warnings": warnings}
 
 
-# Warcraft Logs error codes that mean "the caller is not authorised", on top of the shared vocabulary.
-# `site_profile_mismatch` belongs here: the saved token exists but is not usable for the selected site.
-_AUTH_ERROR_CODES = frozenset(
-    {
-        "missing_client_credentials",
-        "missing_public_auth",
-        "missing_user_auth",
-        "site_profile_mismatch",
-        "user_token_expired",
-    }
-)
-
-
-# Rejected or contradictory command input is a usage error (exit 2), like Click's own parse failures.
-# Keep every locally-raised input code here: an omission silently downgrades the command to exit 1.
-_USAGE_ERROR_CODES = frozenset(
-    {
-        "ambiguous_boss",
-        "boss_scope_mismatch",
-        "invalid_variables",
-        "missing_boss",
-        "missing_query",
-        "missing_scope",
-        "missing_spec",
-        "missing_state",
-        "redirect_uri_mismatch",
-        "state_mismatch",
-    }
-)
-
-
 def _fail(ctx: typer.Context, code: str, message: str, *, details: dict[str, Any] | None = None) -> NoReturn:
     """Fail with the Warcraft Logs exit-code mapping."""
-    if code in _AUTH_ERROR_CODES:
-        exit_code = EXIT_AUTH
-    elif code in _USAGE_ERROR_CODES:
-        exit_code = EXIT_USAGE
-    else:
-        exit_code = exit_code_for(code)
-    fail(ctx, code, message, exit_code=exit_code, details=details)
+    fail(ctx, code, message, exit_code=client_error_exit_code(code), details=details)
 
 
 def _finite_float(value: str) -> float:
@@ -406,9 +373,7 @@ def _difficulty_id(value: str) -> int:
     try:
         return int(text)
     except ValueError:
-        raise typer.BadParameter(
-            f"{value!r} is not a difficulty: use an id or lfr (1), normal (3), heroic (4) or mythic (5)."
-        ) from None
+        raise typer.BadParameter(f"{value!r} is not a difficulty: use an id or lfr (1), normal (3), heroic (4) or mythic (5).") from None
 
 
 def _difficulty_option(help: str = "Optional difficulty filter.") -> Any:
@@ -444,12 +409,36 @@ _KILL_TYPES = ("All", "Encounters", "Kills", "Trash", "Wipes")
 _VIEW_TYPES = ("Default", "Ability", "Source", "Target")
 # TableDataType and GraphDataType share these values; EventDataType swaps Summary and Survivability for All and CombatantInfo.
 _TABLE_DATA_TYPES = (
-    "Summary", "Buffs", "Casts", "DamageDone", "DamageTaken", "Deaths", "Debuffs", "Dispels", "Healing", "Interrupts",
-    "Resources", "Summons", "Survivability", "Threat",
+    "Summary",
+    "Buffs",
+    "Casts",
+    "DamageDone",
+    "DamageTaken",
+    "Deaths",
+    "Debuffs",
+    "Dispels",
+    "Healing",
+    "Interrupts",
+    "Resources",
+    "Summons",
+    "Survivability",
+    "Threat",
 )
 _EVENT_DATA_TYPES = (
-    "All", "Buffs", "Casts", "CombatantInfo", "DamageDone", "DamageTaken", "Deaths", "Debuffs", "Dispels", "Healing",
-    "Interrupts", "Resources", "Summons", "Threat",
+    "All",
+    "Buffs",
+    "Casts",
+    "CombatantInfo",
+    "DamageDone",
+    "DamageTaken",
+    "Deaths",
+    "Debuffs",
+    "Dispels",
+    "Healing",
+    "Interrupts",
+    "Resources",
+    "Summons",
+    "Threat",
 )
 _HOSTILITY_OPTION = _graphql_enum_option("--hostility-type", _HOSTILITY_TYPES, help="Optional hostility filter.")
 _KILL_TYPE_OPTION = _graphql_enum_option("--kill-type", _KILL_TYPES, help="Optional kill filter.")
@@ -565,7 +554,7 @@ def _graphql_balanced_parenthesized_block(text: str, start: int) -> str | None:
         elif char == ")":
             depth -= 1
             if depth == 0:
-                return text[start: index + 1]
+                return text[start : index + 1]
         index += 1
     return None
 
@@ -650,13 +639,6 @@ def _inject_graphql_scope_helpers(
     return merged
 
 
-def _validated_transport_packet(ctx: typer.Context, packet: Any, *, command_name: str) -> dict[str, Any]:
-    try:
-        return validate_talent_transport_packet(packet)
-    except ValueError as exc:
-        _fail(ctx, "invalid_transport_packet", f"{command_name} produced an invalid talent transport packet: {exc}")
-
-
 # characterRankings takes Warcraft Logs' own CamelCase slugs ("DeathKnight", "BeastMastery") and
 # answers "Invalid class and spec specified." for the spaced display names, and a character's
 # zoneRankings silently ignores any other spec spelling (both checked live 2026-09-30).
@@ -713,13 +695,13 @@ def _ranking_class_and_spec(ctx: typer.Context, class_name: str | None, spec_nam
 
 def _client(ctx: typer.Context) -> WarcraftLogsClient:
     try:
-        return WarcraftLogsClient(site=_cfg(ctx).site_profile)
+        return WarcraftLogsClient(site=_cfg(ctx).site_profile, endpoint=_cfg(ctx).endpoint, refresh=_cfg(ctx).refresh)
     except Exception as exc:
         _fail(ctx, "invalid_runtime_config", _runtime_error_message(str(exc)))
 
 
-def _handle_client_error(ctx: typer.Context, exc: WarcraftLogsClientError) -> NoReturn:
-    _fail(ctx, exc.code, exc.message)
+def _handle_client_error(ctx: typer.Context, exc: WarcraftLogsClientError | ProviderError) -> NoReturn:
+    _fail(ctx, exc.code, exc.message, details=getattr(exc, "details", None))
 
 
 def _grant_statuses(*, auth_configured: bool, runtime_access: dict[str, Any]) -> dict[str, str]:
@@ -784,23 +766,6 @@ def _zone_payload(zone: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _encounter_payload(encounter: dict[str, Any]) -> dict[str, Any]:
-    zone = dict_at(encounter, "zone")
-    expansion = dict_at(zone, "expansion")
-    return {
-        "id": encounter.get("id"),
-        "name": encounter.get("name"),
-        "journal_id": encounter.get("journalID"),
-        "zone": {
-            "id": zone.get("id"),
-            "name": zone.get("name"),
-            "expansion": {"id": expansion.get("id"), "name": expansion.get("name")} if expansion else None,
-        }
-        if zone
-        else None,
-    }
-
-
 def _expansion_payload(expansion: dict[str, Any]) -> dict[str, Any]:
     zones = expansion.get("zones")
     zone_rows = [zone for zone in zones if isinstance(zone, dict)] if isinstance(zones, list) else []
@@ -841,13 +806,7 @@ def _guild_payload(guild: dict[str, Any]) -> dict[str, Any]:
         "description": guild.get("description"),
         "competition_mode": guild.get("competitionMode"),
         "stealth_mode": guild.get("stealthMode"),
-        "tags": [
-            {"id": tag.get("id"), "name": tag.get("name")}
-            for tag in tags
-            if isinstance(tag, dict)
-        ]
-        if isinstance(tags, list)
-        else [],
+        "tags": [{"id": tag.get("id"), "name": tag.get("name")} for tag in tags if isinstance(tag, dict)] if isinstance(tags, list) else [],
         "faction": {
             "id": faction.get("id"),
             "name": faction.get("name"),
@@ -911,8 +870,19 @@ def _pagination_payload(value: dict[str, Any] | None) -> dict[str, Any] | None:
 # Warcraft Logs numbers classes itself (gameData.classes, the same on every site), not the way Blizzard does:
 # its class 5 is Monk, Blizzard's is Priest.
 _WARCRAFTLOGS_CLASS_KEYS = (
-    "deathknight", "druid", "hunter", "mage", "monk", "paladin", "priest",
-    "rogue", "shaman", "warlock", "warrior", "demonhunter", "evoker",
+    "deathknight",
+    "druid",
+    "hunter",
+    "mage",
+    "monk",
+    "paladin",
+    "priest",
+    "rogue",
+    "shaman",
+    "warlock",
+    "warrior",
+    "demonhunter",
+    "evoker",
 )
 
 
@@ -1060,19 +1030,6 @@ def _report_code_and_fights(ctx: typer.Context, reference: str, fight_ids: list[
     return ref.code, fight_ids or ([ref.fight_id] if ref.fight_id is not None else None)
 
 
-def _fight_encounter_id(fight: dict[str, Any]) -> int | None:
-    """The fight's boss encounter ID; ``None`` for a trash fight, which Warcraft Logs reports as 0."""
-    encounter_id = fight.get("encounterID")
-    return encounter_id if isinstance(encounter_id, int) and encounter_id > 0 else None
-
-
-def _kill_type_for_fight(fight: dict[str, Any]) -> str | None:
-    """Kills or Wipes for a boss fight. A trash fight is neither, so its slice carries no kill filter."""
-    if _fight_encounter_id(fight) is None:
-        return None
-    return "Kills" if fight.get("kill") else "Wipes"
-
-
 # Report reference, report, selected fight, and the encounter the fight belongs to (when known).
 _EncounterScope = tuple[ReportReference, dict[str, Any], dict[str, Any], dict[str, Any] | None]
 
@@ -1111,68 +1068,6 @@ def _resolve_encounter_scope(
         except WarcraftLogsClientError:
             encounter = None
     return ref, report, selected, encounter
-
-
-def _emitted_finished_report_ttl(client: WarcraftLogsClient) -> int | None:
-    """Finished-report TTL as it should appear in emitted provenance/freshness.
-
-    Returns ``None`` when caching is disabled (``WARCRAFTLOGS_CACHE_BACKEND=none|off|disabled``),
-    so the trust metadata never claims a TTL for data that is never stored.
-    """
-    return client._finished_report_ttl if client._cache_store is not None else None
-
-
-def _emitted_report_ttl(client: WarcraftLogsClient) -> int | None:
-    """Short report TTL as it should appear in emitted provenance; ``None`` when caching is off."""
-    return client._report_ttl if client._cache_store is not None else None
-
-
-def _encounter_summary_payload(*, ref: ReportReference, report: dict[str, Any],
-                               fight: dict[str, Any], encounter: dict[str, Any] | None,
-                               finished_report_ttl: int | None = 86400, report_ttl: int | None = 60) -> dict[str, Any]:
-    encounter_payload = None
-    encounter_identity = encounter_identity_payload(
-        encounter_id=_fight_encounter_id(fight),
-        name=fight.get("name") if isinstance(fight.get("name"), str) else None,
-        provider="warcraftlogs",
-        source="report_encounter",
-        notes=["canonical only within explicit encounter metadata returned by Warcraft Logs"],
-    )
-    if isinstance(encounter, dict):
-        zone = dict_at(encounter, "zone")
-        encounter_identity = encounter_identity_payload(
-            encounter_id=encounter.get("id") if isinstance(encounter.get("id"), int) else None,
-            journal_id=encounter.get("journalID") if isinstance(encounter.get("journalID"), int) else None,
-            name=encounter.get("name") if isinstance(encounter.get("name"), str) else None,
-            zone_id=zone.get("id") if isinstance(zone.get("id"), int) else None,
-            provider="warcraftlogs",
-            source="report_encounter",
-        )
-        encounter_payload = _encounter_payload(encounter)
-    return {
-        "reference": _report_reference_payload(ref),
-        "report": _report_payload(report),
-        "fight": _fight_payload(fight),
-        "encounter": encounter_payload,
-        "encounter_identity": encounter_identity,
-        "stability": {
-            "report_finished": _report_is_finished(report),
-            "cache_safe": _report_is_finished(report),
-            "live": not _report_is_finished(report),
-        },
-        # cache_provenance describes the *report's* finish state, resolved from the report
-        # metadata lookup (client.report(); REPORT_QUERY selects report-level endTime). It is a
-        # property of the log, not a per-namespace cache-entry audit: an encounter command may
-        # also return data from other namespaces (report_fights/report_player_details/...), and
-        # during the bounded live->finished window (<= the live TTL) those entries can briefly
-        # disagree with the report's resolved finish state. See docs/warcraftlogs/CACHING.md.
-        "cache_provenance": _report_cache_provenance(
-            report,
-            finished_ttl=finished_report_ttl,
-            live_ttl=report_ttl,
-            source="report_detail",
-        ),
-    }
 
 
 def _encounter_window_bounds(
@@ -1438,15 +1333,9 @@ def _require_explicit_window(ctx: typer.Context, *, name: str, start_ms: float |
 
 def _master_data_indexes(report: dict[str, Any]) -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
     payload = _report_master_data_payload(report)["master_data"]
-    actor_index = {
-        int(row["id"]): row
-        for row in payload["actors"]
-        if isinstance(row, dict) and isinstance(row.get("id"), int)
-    }
+    actor_index = {int(row["id"]): row for row in payload["actors"] if isinstance(row, dict) and isinstance(row.get("id"), int)}
     ability_index = {
-        int(row["game_id"]): row
-        for row in payload["abilities"]
-        if isinstance(row, dict) and isinstance(row.get("game_id"), int)
+        int(row["game_id"]): row for row in payload["abilities"] if isinstance(row, dict) and isinstance(row.get("game_id"), int)
     }
     return actor_index, ability_index
 
@@ -1906,12 +1795,8 @@ def _resolve_encounter(
 ) -> dict[str, Any]:
     encounters = [row for row in (list_at(zone, "encounters")) if isinstance(row, dict)]
     if boss_id is not None:
-        return _resolve_encounter_by_id(
-            ctx, client=client, zone_id=zone_id, boss_id=boss_id, boss_name=boss_name, encounters=encounters
-        )
-    return _resolve_encounter_by_name(
-        ctx, client=client, zone_id=zone_id, boss_name=boss_name, encounters=encounters
-    )
+        return _resolve_encounter_by_id(ctx, client=client, zone_id=zone_id, boss_id=boss_id, boss_name=boss_name, encounters=encounters)
+    return _resolve_encounter_by_name(ctx, client=client, zone_id=zone_id, boss_name=boss_name, encounters=encounters)
 
 
 def _encounter_rankings_rows(value: Any) -> list[dict[str, Any]]:
@@ -1991,12 +1876,8 @@ def _encounter_ranking_row_payload(
     guild = dict_at(row, "guild")
     class_name = row.get("className") if isinstance(row.get("className"), str) else row.get("class")
     spec_name = row.get("spec") if isinstance(row.get("spec"), str) else row.get("specName")
-    report_code = _first_non_empty_str(
-        row.get("reportCode"), row.get("reportID"), row.get("code"), report.get("code")
-    )
-    fight_id = _first_int(
-        row.get("fightID"), row.get("fightId"), report.get("fightID"), report.get("fightId")
-    )
+    report_code = _first_non_empty_str(row.get("reportCode"), row.get("reportID"), row.get("code"), report.get("code"))
+    fight_id = _first_int(row.get("fightID"), row.get("fightId"), report.get("fightID"), report.get("fightId"))
     return {
         "name": row.get("name"),
         "server_name": _first_non_empty_str(row.get("serverName"), server.get("name")),
@@ -2016,7 +1897,9 @@ def _encounter_ranking_row_payload(
         "rank_percent": (
             row.get("rankPercent")
             if isinstance(row.get("rankPercent"), (int, float))
-            else row.get("percentile") if isinstance(row.get("percentile"), (int, float)) else None
+            else row.get("percentile")
+            if isinstance(row.get("percentile"), (int, float))
+            else None
         ),
         "amount": row.get("amount"),
         "total": row.get("total"),
@@ -2078,50 +1961,6 @@ def _all_player_detail_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
     return _all_player_detail_rows_from_roles(details)
 
 
-def _all_player_detail_rows_from_roles(details: dict[str, Any]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for role, actors in details.items():
-        for actor in actors:
-            if isinstance(actor, dict):
-                rows.append({"role": role, **actor})
-    return rows
-
-
-def _player_detail_actor(details_payload: dict[str, Any], actor_id: int) -> dict[str, Any] | None:
-    player_details = dict_at(details_payload, "player_details")
-    roles = dict_at(player_details, "roles")
-    return next((row for row in _all_player_detail_rows_from_roles(roles) if row.get("id") == actor_id), None)
-
-
-def _normalized_talent_tree_rows(actor: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
-    combatant_info = dict_at(actor, "combatant_info")
-    rows = list_at(combatant_info, "talentTree")
-    normalized_rows: list[dict[str, Any]] = []
-    had_invalid_rows = False
-    for row in rows:
-        if not isinstance(row, dict):
-            had_invalid_rows = True
-            continue
-        normalized_row = {
-            "entry": row.get("id") if isinstance(row.get("id"), int) and not isinstance(row.get("id"), bool) else None,
-            "node_id": row.get("nodeID") if isinstance(row.get("nodeID"), int) and not isinstance(row.get("nodeID"), bool) else None,
-            "rank": row.get("rank") if isinstance(row.get("rank"), int) and not isinstance(row.get("rank"), bool) else None,
-        }
-        if all(isinstance(normalized_row.get(key), int) for key in ("entry", "node_id", "rank")):
-            normalized_rows.append(normalized_row)
-        else:
-            had_invalid_rows = True
-    return normalized_rows, had_invalid_rows
-
-
-def _player_talent_transport_identity(actor: dict[str, Any]) -> tuple[str | None, str | None]:
-    class_spec_identity = dict_at(actor, "class_spec_identity")
-    identity = dict_at(class_spec_identity, "identity")
-    actor_class = identity.get("actor_class") if isinstance(identity.get("actor_class"), str) else None
-    spec = identity.get("spec") if isinstance(identity.get("spec"), str) else None
-    return actor_class, spec
-
-
 def _write_transport_packet_json(out: str | None, transport_packet: dict[str, Any]) -> str | None:
     if not out:
         return None
@@ -2132,42 +1971,6 @@ def _write_transport_packet_json(out: str | None, transport_packet: dict[str, An
         return str(output_path)
     except OSError as exc:
         raise WarcraftLogsClientError("transport_packet_write_failed", str(exc)) from exc
-
-
-def _player_talent_transport_packet(
-    actor: dict[str, Any],
-    *,
-    report_code: str,
-    fight_id: int,
-    actor_id: int,
-    raw_rows: list[dict[str, Any]],
-) -> dict[str, Any]:
-    actor_class, spec = _player_talent_transport_identity(actor)
-    # Warcraft Logs has no SimulationCraft backend: validation stops at the identity checks or at
-    # `simc_backend_unavailable`, and `simc validate-talent-transport` does the real validation.
-    validation_result = validate_talent_tree_transport(
-        actor_class=actor_class, spec=spec, talent_tree_rows=raw_rows, backend=None
-    )
-    return talent_transport_packet_payload(
-        actor_class=actor_class,
-        spec=spec,
-        confidence="high" if actor_class and spec else "none",
-        source="warcraftlogs_talent_tree",
-        provider="warcraftlogs",
-        source_notes=["raw talents came from combatant_info.talentTree", "one report, one fight, one actor scope"],
-        transport_forms=dict_at(validation_result, "transport_forms"),
-        raw_evidence={
-            "source_contract": "warcraftlogs_combatant_info_talentTree",
-            "talent_tree_entries": raw_rows,
-        },
-        validation=dict_at(validation_result, "validation"),
-        scope={
-            "type": "report_fight_actor",
-            "report_code": report_code,
-            "fight_id": fight_id,
-            "actor_id": actor_id,
-        },
-    )
 
 
 def _accumulate_boss_spec_counts(
@@ -2429,9 +2232,7 @@ def _accumulate_comp_presence(
         composition = dict_at(row, "composition")
         class_rows = list_at(composition, "class_counts")
         _record_comp_class_presence(class_presence, class_rows, report_code=report_code, fight_id=fight_id)
-        _record_comp_signature(
-            signature_counts, composition.get("class_signature"), report_code=report_code, fight_id=fight_id
-        )
+        _record_comp_signature(signature_counts, composition.get("class_signature"), report_code=report_code, fight_id=fight_id)
     return class_presence, signature_counts, sampled_player_count
 
 
@@ -2683,15 +2484,6 @@ def _ability_usage_summary_payload(
     }
 
 
-def _report_events_payload(report: dict[str, Any]) -> dict[str, Any]:
-    paginator = dict_at(report, "events")
-    return {
-        "report": _report_brief_payload(report),
-        "next_page_timestamp": paginator.get("nextPageTimestamp"),
-        "events": paginator.get("data"),
-    }
-
-
 def _report_json_payload(report: dict[str, Any], *, field: str) -> dict[str, Any]:
     return {
         "report": _report_brief_payload(report),
@@ -2764,79 +2556,6 @@ def _report_master_data_payload(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _fight_identity_confidence(actor: dict[str, Any], *, spec_count: int) -> IdentityConfidence:
-    """Class and spec come from the fight itself: one spec is high confidence, several are low."""
-    if not isinstance(actor.get("type"), str) or spec_count == 0:
-        return "none"
-    return "high" if spec_count == 1 else "low"
-
-
-def _player_detail_actor_payload(actor: dict[str, Any], *, report_code: str | None = None, fight_id: int | None = None) -> dict[str, Any]:
-    specs = list_at(actor, "specs")
-    normalized_specs = [
-        {"spec": spec.get("spec"), "count": spec.get("count")}
-        for spec in specs
-        if isinstance(spec, dict)
-    ]
-    return {
-        "name": actor.get("name"),
-        "id": actor.get("id"),
-        "guid": actor.get("guid"),
-        "type": actor.get("type"),
-        "server": actor.get("server"),
-        "region": actor.get("region"),
-        "icon": actor.get("icon"),
-        "specs": normalized_specs,
-        "min_item_level": actor.get("minItemLevel"),
-        "max_item_level": actor.get("maxItemLevel"),
-        # potionUse/healthstoneUse are left out: Warcraft Logs reports 0 for players whose casts show
-        # both (use report-encounter-casts for real counts).
-        "combatant_info": actor.get("combatantInfo"),
-        # Class and spec come from the fight itself: one spec is a high-confidence identity, several
-        # are low-confidence candidates.
-        "class_spec_identity": class_spec_identity_payload(
-            actor_class=actor.get("type") if isinstance(actor.get("type"), str) else None,
-            spec=normalized_specs[0].get("spec") if len(normalized_specs) == 1 else None,
-            provider="warcraftlogs",
-            source="report_player_details",
-            confidence=_fight_identity_confidence(actor, spec_count=len(normalized_specs)),
-            candidates=(
-                [(actor.get("type") if isinstance(actor.get("type"), str) else None, spec.get("spec")) for spec in normalized_specs]
-                if len(normalized_specs) > 1
-                else None
-            ),
-        ),
-        "identity_contract": report_actor_identity_payload(
-            report_code=report_code,
-            fight_id=fight_id,
-            actor_id=actor.get("id") if isinstance(actor.get("id"), int) else None,
-            name=actor.get("name") if isinstance(actor.get("name"), str) else None,
-            actor_class=actor.get("type") if isinstance(actor.get("type"), str) else None,
-            spec=normalized_specs[0].get("spec") if len(normalized_specs) == 1 else None,
-            provider="warcraftlogs",
-            source="report_player_details",
-            notes=["canonical only when one report and one fight are both explicit"],
-        ),
-    }
-
-
-def _report_player_details_payload(report: dict[str, Any], *, report_code: str |
-                                   None = None, fight_id: int | None = None) -> dict[str, Any]:
-    roles = {
-        role: [_player_detail_actor_payload(row, report_code=report_code, fight_id=fight_id) for row in rows]
-        for role, rows in player_details_roles(report).items()
-    }
-    counts = {role: len(rows) for role, rows in roles.items()}
-    counts["total"] = sum(counts.values())
-    return {
-        "report": _report_brief_payload(report),
-        "player_details": {
-            "counts": counts,
-            "roles": roles,
-        },
-    }
-
-
 def _raid_fight_ids(report: dict[str, Any]) -> set[Any]:
     """The ranked fights of ``report`` that are not Mythic+ runs."""
     return {
@@ -2898,7 +2617,9 @@ def _report_encounter_aura_summary_payload(
                     report_code=report.get("code") if isinstance(report.get("code"), str) else None,
                     fight_id=fight.get("id") if isinstance(fight.get("id"), int) else None,
                     source="report_encounter_aura_summary",
-                ) if actor_id is not None else {"id": None, "name": entry.get("name")},
+                )
+                if actor_id is not None
+                else {"id": None, "name": entry.get("name")},
                 # An ability-scoped Buffs table reports per-actor uptime (ms), uses and bands only.
                 "reported_total_uptime": entry.get("totalUptime"),
                 "reported_total_uses": entry.get("totalUses"),
@@ -2957,7 +2678,9 @@ def _report_encounter_damage_summary_payload(
                     report_code=report.get("code") if isinstance(report.get("code"), str) else None,
                     fight_id=fight.get("id") if isinstance(fight.get("id"), int) else None,
                     source=identity_source,
-                ) if actor_id is not None else {"id": None, "name": entry.get("name")},
+                )
+                if actor_id is not None
+                else {"id": None, "name": entry.get("name")},
                 "reported_total": entry.get("total"),
                 **({"raw_entry": entry} if include_raw else {}),
             }
@@ -3009,9 +2732,7 @@ def _aura_compare_rows(
             compared[f"left_{field}"] = left_value
             compared[f"right_{field}"] = right_value
             compared[f"{field}_delta"] = (
-                right_value - left_value
-                if isinstance(left_value, (int, float)) and isinstance(right_value, (int, float))
-                else None
+                right_value - left_value if isinstance(left_value, (int, float)) and isinstance(right_value, (int, float)) else None
             )
         return {**compared, "left_row": left, "right_row": right}
 
@@ -3035,9 +2756,7 @@ def _character_rankings_payload(character: dict[str, Any], *, top: int, transpor
     all_stars = list_at(rankings, "allStars")
     ranking_rows = list_at(rankings, "rankings")
     all_star_specs = [
-        row.get("spec")
-        for row in all_stars
-        if isinstance(row, dict) and isinstance(row.get("spec"), str) and row.get("spec")
+        row.get("spec") for row in all_stars if isinstance(row, dict) and isinstance(row.get("spec"), str) and row.get("spec")
     ]
     unique_specs = list(dict.fromkeys(all_star_specs))
     class_name = _class_name(character.get("classID"))
@@ -3139,6 +2858,10 @@ def main(
         "--site",
         help="Warcraft Logs site profile: retail, classic, or fresh.",
     ),
+    endpoint: str = typer.Option(
+        "client", "--endpoint", help="Typed read endpoint: client (public default), user (private), or auto (prefer saved user token)."
+    ),
+    refresh: bool = typer.Option(False, "--refresh", help="Bypass cached responses and refresh only the queried cache entries."),
     pretty: PrettyOption = False,
     compact: CompactOption = False,
     fields: FieldsOption = None,
@@ -3151,6 +2874,8 @@ def main(
         site_profile = resolve_site_profile(site)
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint="--site") from exc
+    if endpoint not in {"client", "user", "auto"}:
+        raise typer.BadParameter("Choose client, user, or auto.", param_hint="--endpoint")
     configure(
         ctx,
         provider="warcraftlogs",
@@ -3160,7 +2885,7 @@ def main(
         fields_strict=fields_strict,
         profile=profile,
         compact_max_chars=compact_max_chars,
-        config=RuntimeConfig(site_profile=site_profile),
+        config=RuntimeConfig(site_profile=site_profile, endpoint=endpoint, refresh=refresh),
     )
 
 
@@ -3191,7 +2916,7 @@ def doctor(
     no_live: bool = typer.Option(False, "--no-live", help="Skip live Warcraft Logs auth probes and report local/runtime readiness only."),
 ) -> None:
     """Report Warcraft Logs auth, site profile, and per-command readiness."""
-    emit(ctx, provider_doctor(live=not no_live, site=_cfg(ctx).site_profile))
+    emit(ctx, provider_doctor(live=not no_live, site=_cfg(ctx).site_profile, endpoint=_cfg(ctx).endpoint))
 
 
 def _random_state_token() -> str:
@@ -3786,9 +3511,7 @@ def _run_encounter_rankings(ctx: typer.Context, request: _EncounterRankingsReque
             boss_name=request.boss_name,
         )
         if request.options.metric is None:
-            request = replace(
-                request, options=replace(request.options, metric=_default_ranking_metric(zone, request.options.spec_name))
-            )
+            request = replace(request, options=replace(request.options, metric=_default_ranking_metric(zone, request.options.spec_name)))
         rankings_payload = client.encounter_rankings(
             encounter_id=int(encounter_payload["id"]),
             options=request.options,
@@ -4236,9 +3959,7 @@ def _validate_cohort_scope(ctx: typer.Context, client: WarcraftLogsClient, scope
     The scan then matches fights on that encounter id alone, so a loose ``--boss-name`` cannot pull
     in another encounter whose name merely contains it.
     """
-    _require_complete_guild_scope(
-        ctx, guild_region=scope.guild_region, guild_realm=scope.guild_realm, guild_name=scope.guild_name
-    )
+    _require_complete_guild_scope(ctx, guild_region=scope.guild_region, guild_realm=scope.guild_realm, guild_name=scope.guild_name)
     # A misspelled spec matches no player and reads as "nobody played it". Only retail is checked:
     # a classic site has specs the retail list lacks (Combat).
     if scope.spec_name and client.site.key == RETAIL_PROFILE.key and not retail_specs_named(scope.spec_name):
@@ -4323,9 +4044,7 @@ def _ability_usage_query(scope: CrossReportScope, *, ability_id: int) -> dict[st
     return {"zone_id": scoped.pop("zone_id"), "ability_id": ability_id, **scoped}
 
 
-def _require_complete_guild_scope(
-    ctx: typer.Context, *, guild_region: str | None, guild_realm: str | None, guild_name: str | None
-) -> None:
+def _require_complete_guild_scope(ctx: typer.Context, *, guild_region: str | None, guild_realm: str | None, guild_name: str | None) -> None:
     """Warcraft Logs drops a guild filter missing any of its three parts and answers with every guild's reports.
 
     The region is checked here too, so a typo is a usage error before the first request.
@@ -4418,9 +4137,7 @@ def _fastest_kills_command(kind: str, summary: str) -> Callable[..., None]:
     return command
 
 
-app.command("boss-kills")(
-    _fastest_kills_command("boss_kills", "Sample recent kills of one boss across reports and summarize them.")
-)
+app.command("boss-kills")(_fastest_kills_command("boss_kills", "Sample recent kills of one boss across reports and summarize them."))
 app.command("top-kills")(_fastest_kills_command("top_kills", "Sample recent kills of one boss and return the fastest ones."))
 
 
@@ -4558,8 +4275,9 @@ def ability_usage_summary(
     ),
     kill_time_min: float | None = _float_option("--kill-time-min", help="Optional minimum kill time in seconds."),
     kill_time_max: float | None = _float_option("--kill-time-max", help="Optional maximum kill time in seconds."),
-    preview_limit: int = typer.Option(10, "--preview-limit", min=1, max=100,
-                                      help="Maximum sampled kill rows to include in the preview payload."),
+    preview_limit: int = typer.Option(
+        10, "--preview-limit", min=1, max=100, help="Maximum sampled kill rows to include in the preview payload."
+    ),
     event_limit: int = typer.Option(200, "--event-limit", min=1, max=5000, help="Maximum cast events to request per sampled kill."),
     report_pages: int = typer.Option(1, "--report-pages", min=1, max=10, help="How many report-list pages to sample."),
     reports_per_page: int = typer.Option(25, "--reports-per-page", min=1, max=100, help="Reports to fetch per sampled page."),
@@ -4670,7 +4388,8 @@ def report_encounter(
     ctx: typer.Context,
     reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     fight_id: int | None = typer.Option(
-        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."
+    ),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """Show one report fight with its report, fight, and encounter identity."""
@@ -4709,7 +4428,8 @@ def report_encounter_players(
     ctx: typer.Context,
     reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     fight_id: int | None = typer.Option(
-        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."
+    ),
     include_combatant_info: bool | None = typer.Option(
         None,
         "--include-combatant-info/--no-include-combatant-info",
@@ -4771,91 +4491,23 @@ def report_player_talents(
     reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     actor_id: int = typer.Option(..., "--actor-id", help="Report-local actor ID scoped to the selected fight."),
     fight_id: int | None = typer.Option(
-        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."
+    ),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
     out: str | None = typer.Option(None, "--out", help="Optional path to write the scoped talent transport packet JSON."),
 ) -> None:
     """Emit one player's talent tree from a report fight as a talent transport packet."""
     client = _client(ctx)
     try:
-        ref, report, fight, encounter = _resolve_encounter_scope(
-            ctx,
-            client=client,
-            reference=reference,
-            fight_id=fight_id,
-            allow_unlisted=allow_unlisted,
+        envelope = operations.report_player_talents(
+            client, reference=reference, actor_id=actor_id, fight_id=fight_id, allow_unlisted=allow_unlisted
         )
-        payload = client.report_player_details(
-            code=ref.code,
-            allow_unlisted=allow_unlisted,
-            options=ReportPlayerDetailsOptions(
-                encounter_id=_fight_encounter_id(fight),
-                fight_ids=[int(fight["id"])] if isinstance(fight.get("id"), int) else None,
-                include_combatant_info=True,
-                kill_type=_kill_type_for_fight(fight),
-            ),
-        )
-    except WarcraftLogsClientError as exc:
+        envelope["data"]["written_packet_path"] = _write_transport_packet_json(out, envelope["data"]["talent_transport_packet"])
+    except (WarcraftLogsClientError, ProviderError) as exc:
         _handle_client_error(ctx, exc)
     finally:
         client.close()
-
-    details_payload = _report_player_details_payload(
-        payload,
-        report_code=ref.code,
-        fight_id=fight.get("id") if isinstance(fight.get("id"), int) else None,
-    )
-    actor = _player_detail_actor(details_payload, actor_id)
-    if not isinstance(actor, dict):
-        _fail(ctx, "not_found", f"Actor ID {actor_id} was not present in the selected fight.")
-        return
-
-    talent_rows, had_invalid_talent_rows = _normalized_talent_tree_rows(actor)
-    if not talent_rows:
-        _fail(ctx, "missing_talent_tree", f"Actor ID {actor_id} did not include combatant_info.talentTree in the selected fight.")
-        return
-    if had_invalid_talent_rows:
-        _fail(
-            ctx,
-            "missing_talent_tree",
-            f"Actor ID {actor_id} included incomplete combatant_info.talentTree rows in the selected fight.",
-        )
-        return
-
-    transport_packet = _validated_transport_packet(
-        ctx,
-        _player_talent_transport_packet(
-            actor,
-            report_code=ref.code,
-            fight_id=int(fight["id"]),
-            actor_id=actor_id,
-            raw_rows=talent_rows,
-        ),
-        command_name="warcraftlogs report-player-talents",
-    )
-    try:
-        written_packet_path = _write_transport_packet_json(out, transport_packet)
-    except WarcraftLogsClientError as exc:
-        _handle_client_error(ctx, exc)
-
-    _emit(
-        ctx,
-        {
-            "kind": "report_player_talents",
-            **_encounter_summary_payload(
-                ref=ref,
-                report=report,
-                fight=fight,
-                encounter=encounter,
-                finished_report_ttl=_emitted_finished_report_ttl(client),
-                report_ttl=_emitted_report_ttl(client),
-            ),
-            "player": actor,
-            "talent_transport_packet": transport_packet,
-            "written_packet_path": written_packet_path,
-        },
-        client=client,
-    )
+    _emit(ctx, {"kind": envelope["kind"], **envelope["data"]}, client=client)
 
 
 @app.command("report-encounter-casts")
@@ -4863,14 +4515,13 @@ def report_encounter_casts(
     ctx: typer.Context,
     reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     fight_id: int | None = typer.Option(
-        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."
+    ),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
     hostility_type: str | None = _HOSTILITY_OPTION,
-    limit: int = typer.Option(
-        200, "--event-limit", "--limit", min=1, max=10000, help="Maximum cast events to request from Warcraft Logs."
-    ),
+    limit: int = typer.Option(200, "--event-limit", "--limit", min=1, max=10000, help="Maximum cast events to request from Warcraft Logs."),
     preview_limit: int = typer.Option(20, "--preview-limit", min=1, max=200, help="Maximum preview cast rows to return."),
     window_start_ms: float | None = _float_option("--window-start-ms", help="Optional encounter-relative start offset in milliseconds."),
     window_end_ms: float | None = _float_option("--window-end-ms", help="Optional encounter-relative end offset in milliseconds."),
@@ -4947,7 +4598,8 @@ def report_encounter_buffs(
     ctx: typer.Context,
     reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     fight_id: int | None = typer.Option(
-        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."
+    ),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
@@ -5028,7 +4680,8 @@ def report_encounter_aura_summary(
     reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     ability_id: int = typer.Option(..., "--ability-id", help="Required aura ability game ID."),
     fight_id: int | None = typer.Option(
-        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."
+    ),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     hostility_type: str | None = _HOSTILITY_OPTION,
@@ -5201,8 +4854,7 @@ def _aura_compare_payload(
         ),
         "aura": left.payload.get("aura"),
         "windows": [
-            {"label": window.label, "query": window.query, "aura_summary": window.payload.get("aura_summary")}
-            for window in (left, right)
+            {"label": window.label, "query": window.query, "aura_summary": window.payload.get("aura_summary")} for window in (left, right)
         ],
         "comparison": {
             "matching_rule": "same_report_same_fight_same_ability_explicit_windows",
@@ -5222,7 +4874,8 @@ def report_encounter_aura_compare(
     reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     ability_id: int = typer.Option(..., "--ability-id", help="Required aura ability game ID."),
     fight_id: int | None = typer.Option(
-        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."
+    ),
     left_window_start_ms: float | None = _float_option(
         "--left-window-start-ms", help="Encounter-relative start offset for the left comparison window."
     ),
@@ -5292,7 +4945,8 @@ def _damage_summary_command(actor_field: Literal["source", "target"]) -> Callabl
         ctx: typer.Context,
         reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
         fight_id: int | None = typer.Option(
-            None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+            None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."
+        ),
         source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
         target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
         ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
@@ -5375,7 +5029,8 @@ def report_encounter_damage_breakdown(
     ctx: typer.Context,
     reference: str = typer.Argument(..., help="Warcraft Logs report URL or report code, optionally with a #fight=N fragment."),
     fight_id: int | None = typer.Option(
-        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."),
+        None, "--fight-id", help="Override or supply a fight ID when the report reference does not include one."
+    ),
     source_id: int | None = typer.Option(None, "--source-id", help="Optional source actor filter."),
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor filter."),
     ability_id: float | None = _float_option("--ability-id", help="Optional ability game ID filter."),
@@ -5503,25 +5158,14 @@ def report_fights(
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
 ) -> None:
     """List the fights in one report."""
-    code = _report_reference(ctx, code).code
     client = _client(ctx)
     try:
-        payload = client.report_fights(code=code, difficulty=difficulty, allow_unlisted=allow_unlisted)
-    except WarcraftLogsClientError as exc:
+        envelope = operations.report_fights(client, reference=code, difficulty=difficulty, allow_unlisted=allow_unlisted)
+    except (WarcraftLogsClientError, ProviderError) as exc:
         _handle_client_error(ctx, exc)
     finally:
         client.close()
-    fights = list_at(payload, "fights")
-    _emit(
-        ctx,
-        {
-            "report": _report_brief_payload(payload),
-            "difficulty": difficulty,
-            "count": len(fights),
-            "fights": [_fight_payload(fight) for fight in fights if isinstance(fight, dict)],
-        },
-        client=client,
-    )
+    _emit(ctx, envelope["data"], client=client)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5538,36 +5182,19 @@ class _GraphqlRequest:
 def _run_graphql(ctx: typer.Context, request: _GraphqlRequest) -> None:
     client = _client(ctx)
     try:
-        payload, effective_endpoint = client.raw_graphql(
+        envelope = operations.raw_graphql(
+            client,
             operation_name=request.operation_name,
             query=request.query,
             variables=request.variables,
             endpoint=request.endpoint,
             cache_ttl_seconds=request.cache_ttl_seconds,
         )
-    except WarcraftLogsClientError as exc:
+    except (WarcraftLogsClientError, ProviderError) as exc:
         _handle_client_error(ctx, exc)
     finally:
         client.close()
-    # ``data`` is the GraphQL result's own ``data`` object (``__schema`` under --introspect), built
-    # directly so no field of it, whatever its alias, becomes an envelope key or is rewritten. Partial
-    # errors go under ``provenance`` for the same reason.
-    data = dict(payload or {})
-    warnings = data.pop(GRAPHQL_WARNINGS_KEY, None)
-    query = {
-        "operation_name": request.operation_name,
-        "variables": request.variables,
-        "endpoint": effective_endpoint,
-        "requested_endpoint": request.endpoint,
-        "cache_ttl_seconds": request.cache_ttl_seconds,
-    }
-    provenance = {"graphql_warnings": warnings} if warnings else {}
-    emit(
-        ctx,
-        success_envelope(
-            provider="warcraftlogs", command="graphql", kind="graphql", data=data, query=query, provenance=provenance
-        ),
-    )
+    emit(ctx, envelope)
 
 
 @app.command("graphql")
@@ -5639,46 +5266,12 @@ def _emit_report_events_slice(
     """Fetch one raw event slice and emit it with the filter options echoed back as the query."""
     client = _client(ctx)
     try:
-        fights_end = _require_matching_fight(
-            ctx,
-            client,
-            code=code,
-            allow_unlisted=allow_unlisted,
-            fight_ids=options.fight_ids,
-            encounter_id=options.encounter_id,
-            difficulty=options.difficulty,
-            start_time=options.start_time,
-            end_time=options.end_time,
-        )
-        # Warcraft Logs answers a start time without an end time with no events, so a next-page
-        # request (--start-time only) runs to the end of the selected fights instead.
-        if options.start_time is not None and options.end_time is None and fights_end is not None:
-            options = replace(options, end_time=fights_end)
-        payload = client.report_events(code=code, allow_unlisted=allow_unlisted, options=options)
-    except WarcraftLogsClientError as exc:
+        envelope = operations.report_events(client, reference=code, options=options, allow_unlisted=allow_unlisted)
+    except (WarcraftLogsClientError, ProviderError) as exc:
         _handle_client_error(ctx, exc)
     finally:
         client.close()
-    result_payload = _report_events_payload(payload)
-    emitted: dict[str, Any] = {
-        "query": asdict(options),
-        **result_payload,
-    }
-    if result_payload.get("events") is None and options.data_type is None:
-        emitted["notes"] = [
-            "events.data is null. Warcraft Logs requires --data-type "
-            "(e.g. casts, damage-done, healing) for non-null event slices."
-        ]
-    next_page = result_payload.get("next_page_timestamp")
-    if next_page is not None:
-        slice_end = options.end_time if options.end_time is not None else fights_end
-        end_flag = f" --end-time {slice_end:.0f}" if slice_end is not None else ""
-        emitted["notes"] = [
-            f"This is one page: events stop at timestamp {next_page:.0f}, before the end of the slice. Fetch the next "
-            f"page with the same filters plus --start-time {next_page:.0f}{end_flag} before counting events over "
-            "the whole slice."
-        ]
-    _emit(ctx, emitted, client=client)
+    _emit(ctx, {"query": envelope["query"], **envelope["data"]}, client=client)
 
 
 def _emit_report_json_slice(
@@ -5730,10 +5323,7 @@ def report_events(
     data_type: str | None = _graphql_enum_option(
         "--data-type",
         _EVENT_DATA_TYPES,
-        help=(
-            "Event data type. Strongly recommended; "
-            "without it Warcraft Logs returns events.data: null even on valid scoped slices."
-        ),
+        help=("Event data type. Strongly recommended; without it Warcraft Logs returns events.data: null even on valid scoped slices."),
     ),
     difficulty: int | None = _difficulty_option(),
     encounter_id: int | None = typer.Option(None, "--encounter-id", help="Optional encounter ID filter."),
@@ -5748,6 +5338,13 @@ def report_events(
     target_id: int | None = typer.Option(None, "--target-id", help="Optional target actor ID filter."),
     translate: bool | None = typer.Option(None, "--translate/--no-translate", help="Optional translation toggle."),
     allow_unlisted: bool = typer.Option(False, "--allow-unlisted", help="Allow lookup of unlisted reports."),
+    all_pages: bool = typer.Option(False, "--all-pages", help="Collect the complete scoped slice, stopping at explicit page/event bounds."),
+    max_pages: int = typer.Option(20, "--max-pages", min=1, max=1000, help="Maximum event-page requests with --all-pages."),
+    max_events: int = typer.Option(100000, "--max-events", min=1, max=1000000, help="Maximum retained events with --all-pages."),
+    out: str | None = typer.Option(
+        None, "--out", help="Create a reusable evidence artifact with --all-pages; existing files are preserved."
+    ),
+    artifact_format: str = typer.Option("json", "--artifact-format", help="Evidence artifact format: json or jsonl."),
 ) -> None:
     """Return raw report events for one fight (--fight-id) or one explicit --start-time/--end-time window."""
     code, fight_id = _report_code_and_fights(ctx, code, fight_id)
@@ -5774,7 +5371,25 @@ def report_events(
         start_time=start_time,
         end_time=end_time,
     )
-    _emit_report_events_slice(ctx, code=code, allow_unlisted=allow_unlisted, options=options)
+    if not all_pages:
+        if out is not None:
+            _fail(ctx, "invalid_query", "--out requires --all-pages.")
+        _emit_report_events_slice(ctx, code=code, allow_unlisted=allow_unlisted, options=options)
+        return
+    if artifact_format not in {"json", "jsonl"}:
+        _fail(ctx, "invalid_query", "--artifact-format must be json or jsonl.")
+    client = _client(ctx)
+    try:
+        payload = collect_events(
+            client, reference=code, options=options, allow_unlisted=allow_unlisted, max_pages=max_pages, max_events=max_events
+        )
+        if out is not None:
+            payload["written_artifact_path"] = write_event_artifact(out, payload, format=artifact_format)
+    except (WarcraftLogsClientError, ProviderError) as exc:
+        _handle_client_error(ctx, exc)
+    finally:
+        client.close()
+    _emit(ctx, payload, client=client)
 
 
 @app.command("report-table")
@@ -5958,44 +5573,12 @@ def report_player_details(
     )
     client = _client(ctx)
     try:
-        _require_matching_fight(
-            ctx,
-            client,
-            code=code,
-            allow_unlisted=allow_unlisted,
-            fight_ids=fight_id,
-            encounter_id=encounter_id,
-            difficulty=difficulty,
-            start_time=start_time,
-            end_time=end_time,
-        )
-        payload = client.report_player_details(code=code, allow_unlisted=allow_unlisted, options=options)
-    except WarcraftLogsClientError as exc:
+        envelope = operations.report_player_details(client, reference=code, options=options, allow_unlisted=allow_unlisted)
+    except (WarcraftLogsClientError, ProviderError) as exc:
         _handle_client_error(ctx, exc)
     finally:
         client.close()
-    details = _report_player_details_payload(
-        payload,
-        report_code=code,
-        fight_id=fight_id[0] if fight_id and len(fight_id) == 1 else None,
-    )
-    # A fight Warcraft Logs actually has always has a roster. An empty one means the slice matched
-    # no fight (an unknown fight ID, a mismatched --encounter-id/--difficulty, an empty window),
-    # which must not read as "this report has no players".
-    if details["player_details"]["counts"]["total"] == 0:
-        _fail(
-            ctx,
-            "not_found",
-            f"Warcraft Logs report {code} has no fight matching {_described_slice(query)}, so the roster is empty.",
-        )
-    _emit(
-        ctx,
-        {
-            "query": query,
-            **details,
-        },
-        client=client,
-    )
+    _emit(ctx, {"query": query, **envelope["data"]}, client=client)
 
 
 @app.command("report-rankings")
