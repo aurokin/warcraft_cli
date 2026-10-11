@@ -323,6 +323,18 @@ def actor_profile_payload(
     """Cross-walk a Warcraft Logs report actor to a Raider.IO profile, failing on any break in the join."""
     code, fight_id = _report_code_and_fight(ctx, code, name=name, fight_id=fight_id)
     query: dict[str, Any] = {"report_code": code, "actor_name": name, "fight_id": fight_id}
+    if expansion == "forever":
+        _fail_actor_profile(
+            ctx,
+            query=query,
+            code="unsupported_game_variant",
+            message=(
+                "Forever character identities use full names within a region, without realms. "
+                "The realm-based Warcraft Logs to Raider.IO profile join is not verified for Forever."
+            ),
+            details={"game_variant": "forever", "join_rule": _ACTOR_PROFILE_JOIN_RULE},
+            exit_code=EXIT_USAGE,
+        )
     scoped_fight_ids, fight_scope = (
         ([fight_id], {"rule": "explicit_fight_id", "scoped_fight_count": 1, "truncated": False})
         if fight_id is not None
@@ -344,6 +356,8 @@ def actor_profile_payload(
     actor = _actor_profile_actor(ctx, query=query, log_payload=log_payload, code=code, name=name)
     log_side = {
         "status": "ok",
+        "id": actor.get("id"),
+        "name": actor.get("name"),
         "role": actor.get("role"),
         "server": actor.get("server"),
         "region": actor.get("region"),

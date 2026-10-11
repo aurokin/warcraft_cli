@@ -143,6 +143,23 @@ Keep `hashVersion` and only those classes' `talents` and `trees` in the
 `WH.Gatherer.addData(6, <env>, ...)`, keep only those talents' first-rank spell entries, unchanged.
 Drop everything else in the file. Do not replace the remaining talent or spell values by hand.
 
+Forever captures added on 2026-10-11:
+
+- `forever_page_meta.json`: `data.pageMeta` from `https://www.wowhead.com/forever/item=19019`;
+  keep `dataEnv`, `activeDbChanged`, `page`, `serverTime`, `envDomain` and `availableDataEnvs` when
+  present. Delete other fields; retained field values remain unchanged. This pins environment 16,
+  version 1.60.1 and the source database revision independently of our profile registry.
+- `search_suggestions_forever_thunderfury.json`: the unchanged response from
+  `https://www.wowhead.com/forever/search/suggestions-template?q=Thunderfury`.
+- `guides_forever_classes.js`: the unchanged `new Listview` script from
+  `https://www.wowhead.com/forever/guides/classes`, including its full guide rows. Unlike the
+  captured HTML fixtures above, this JavaScript is the guide listing parser's source data.
+- `talent_data_forever_remaining.js`: the warlock and druid trees from
+  `https://nether.wowhead.com/forever/data/talents-classic?dv=29&db=1791493526`, trimmed by the
+  talent-file rules above. Both `v21-1-1_t0` builds were compared with the rendered calculator's
+  selected spell IDs, ranks and tree totals. Seven other Forever class comparisons use earlier
+  captures; these are beta data, so recheck against the rendered calculator after tree revisions.
+
 ```bash
 pytest -q tests/test_wowhead_classic_talents.py
 ```

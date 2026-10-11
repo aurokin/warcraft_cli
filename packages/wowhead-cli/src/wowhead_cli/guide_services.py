@@ -131,12 +131,18 @@ def _page_meta_block(page_meta_json: Any) -> dict[str, Any] | None:
     """Wowhead's embedded page meta, renamed to the snake_case keys the payloads expose."""
     if not isinstance(page_meta_json, dict):
         return None
-    return {
+    metadata = {
         "page": page_meta_json.get("page"),
         "server_time": page_meta_json.get("serverTime"),
         "available_data_envs": page_meta_json.get("availableDataEnvs"),
         "env_domain": page_meta_json.get("envDomain"),
     }
+    # Beta content can change within the same game version; retain the source's environment
+    # and database revision so consumers can distinguish captures without inferring from a URL.
+    for source, target in (("dataEnv", "data_env"), ("activeDbChanged", "active_db_changed")):
+        if source in page_meta_json:
+            metadata[target] = page_meta_json[source]
+    return metadata
 
 
 

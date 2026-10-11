@@ -982,6 +982,8 @@ def test_decode_build_removes_the_profile_directory_it_wrote(tmp_path: Path) -> 
     written: list[Path] = []
 
     def fake_run(cmd, **kwargs):  # noqa: ANN001, ANN003
+        if cmd[1] == "spell_query=spell.id=133":
+            return subprocess.CompletedProcess(cmd, 0, stdout="SimulationCraft 1210-01", stderr="")
         written.append(Path(str(cmd[1])))
         return subprocess.CompletedProcess(cmd, 0, stdout=(FIXTURES / "dh_decode_debug.txt").read_text(), stderr="")
 

@@ -5,11 +5,17 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
+
+from warcraft_core.exit_codes import EXIT_USAGE
+from warcraft_core.provider import ProviderError
 
 from simc_cli.repo import RepoPaths
 
 VERSION_RE = re.compile(r"(SimulationCraft[^\r\n]+)")
 GIT_BUILD_RE = re.compile(r"git build (?P<branch>\S+) (?P<revision>[0-9a-f]{7,40})")
+WOW_VERSION_RE = re.compile(r"for World of Warcraft (?P<version>\d+\.\d+\.\d+(?:\.\d+)?)\b")
+GameVariant = Literal["retail", "forever", "unknown"]
 # The cheapest invocation that makes SimC print its full build banner: the bare binary and a profile
 # it cannot open both print a short banner that omits the git revision.
 _BANNER_PROBE_ARG = "spell_query=spell.id=133"
@@ -32,6 +38,20 @@ class BinaryVersion:
     returncode: int | None
     git_branch: str | None = None
     git_revision: str | None = None
+    wow_version: str | None = None
+    game_variant: GameVariant = "unknown"
+
+
+def game_variant_for_version(wow_version: str | None) -> GameVariant:
+    # The Forever branch still reports SimC 1210-01. Only the actual client data identifies it.
+    if wow_version is None or re.fullmatch(r"\d+\.\d+\.\d+(?:\.\d+)?", wow_version) is None:
+        return "unknown"
+    major, minor, *_ = wow_version.split(".")
+    if (major, minor) == ("1", "60"):
+        return "forever"
+    if int(major) >= 10:
+        return "retail"
+    return "unknown"
 
 
 def _run(command: list[str], *, cwd: Path | None = None) -> CommandResult:
@@ -58,6 +78,8 @@ def binary_version(paths: RepoPaths) -> BinaryVersion:
         return BinaryVersion(binary_path=paths.build_simc, available=False, version_line=None, returncode=None)
     text = result.stdout + result.stderr
     git = GIT_BUILD_RE.search(text)
+    wow = WOW_VERSION_RE.search(text)
+    wow_version = wow.group("version") if wow else None
     return BinaryVersion(
         binary_path=paths.build_simc,
         available=True,
@@ -65,7 +87,26 @@ def binary_version(paths: RepoPaths) -> BinaryVersion:
         returncode=result.returncode,
         git_branch=git.group("branch") if git else None,
         git_revision=git.group("revision") if git else None,
+        wow_version=wow_version,
+        game_variant=game_variant_for_version(wow_version),
     )
+
+
+def require_retail_engine(paths: RepoPaths) -> None:
+    """Refuse retail build transport and derived analyses on a positively identified Forever engine."""
+    version = binary_version(paths)
+    if version.game_variant == "forever":
+        raise ProviderError(
+            "unsupported_game_variant",
+            "Retail talent transport and build/APL analysis are not supported on the experimental Forever engine. "
+            "Select a retail checkout for these workflows; Forever raw simulations require an explicit compatible profile.",
+            exit_code=EXIT_USAGE,
+            details={
+                "game_variant": version.game_variant,
+                "wow_version": version.wow_version,
+                "binary_path": str(version.binary_path),
+            },
+        )
 
 
 def binary_matches_checkout(version: BinaryVersion, git_status: dict[str, object]) -> bool | None:
@@ -87,6 +128,8 @@ class BinaryProvenance:
     git_revision: str | None
     checkout_head: str | None
     matches_checkout: bool | None
+    wow_version: str | None = None
+    game_variant: GameVariant = "unknown"
 
     @property
     def stale_hint(self) -> str | None:
@@ -108,6 +151,8 @@ def binary_provenance(paths: RepoPaths) -> BinaryProvenance:
         git_revision=version.git_revision,
         checkout_head=head if isinstance(head, str) else None,
         matches_checkout=binary_matches_checkout(version, git),
+        wow_version=version.wow_version,
+        game_variant=version.game_variant,
     )
 
 

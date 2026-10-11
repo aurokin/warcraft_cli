@@ -166,7 +166,7 @@ Global flags go before the subcommand.
 | `--fields-strict` | fail with exit 2 when a requested `--fields` path is missing |
 | `--profile agent\|human` | output preset; `agent` is compact JSON, `human` pretty-prints |
 | `--stream` | emit large arrays as JSONL: a header line then one `{"record": ...}` per row |
-| `--expansion KEY` | route to an expansion profile (`retail`, `classic`, `tbc`, `wotlk`, `cata`, `mop-classic`, `ptr`, `beta`, `classic-ptr`) |
+| `--expansion KEY` | route to an expansion profile (`retail`, `classic`, `tbc`, `wotlk`, `cata`, `mop-classic`, `ptr`, `beta`, `classic-ptr`, `forever`) |
 | `--normalize-canonical-to-expansion` | rewrite canonical entity URLs back to the selected expansion |
 | `--citation-pack` | attach a deterministic `citation_pack` of source URLs and per-claim anchors |
 
@@ -180,12 +180,21 @@ When `--expansion` is omitted, `search` (from its query), `entity` and `entity-p
 which takes the place of `TYPE ID`), `compare` (from its entity refs), and the guide, news-post,
 blue-topic and tool commands (from their ref) auto-detect the profile from a Wowhead URL or a
 `classic/...`-style path. `search`, `entity` and `entity-page` report which rule applied in
-`expansion_source` (`flag`, `url`, or `default`). A URL under Wowhead's `/forever/` section (WoW
-Forever) names no expansion profile: `expansion-detect` reports `detected_expansion: null`, an
-entity URL there is not read (`entity --url` fails `invalid_argument`), and `news-post` reads a
-Forever post with a note in `notes` that its expansion could not be inferred. `guide`, `guide-full`
-and `news-post` add the same kind of note when the page Wowhead served belongs to another
+`expansion_source` (`flag`, `url`, or `default`). WoW Forever uses the `forever` profile (aliases
+`wow-forever` and `warcraft-forever`), `/forever/` URLs, and Wowhead data environment 16. Its search,
+entity, guide, news, blue-tracker and calculator routes use that profile; generated follow-up
+commands retain `--expansion forever`. Entity response and tooltip caches stay separate from
+Classic and retail even when an entity has the same numeric ID. `guide`, `guide-full`
+and `news-post` add a note when the page Wowhead served belongs to another
 expansion than the one selected (Wowhead answers `/classic/guide=<id>` with a retail guide).
+
+Forever is still in beta: Wowhead warns that hidden item stats become available as players
+discover them. Preserve the raw source and its metadata rather than filling missing values from
+Classic. The Forever profile provides source reads and calculator decoding; it does not establish
+Forever simulation-engine support.
+Guide reads and exports retain Wowhead's embedded `dataEnv` and `activeDbChanged` under
+`page_meta.data_env` and `page_meta.active_db_changed` when present. These include the source
+environment, game version and database revision, including beta updates within one game version.
 
 ## Commands
 
@@ -314,11 +323,15 @@ totals, talents, ranks and names), with builds from Wowhead's class guides:
 | `wotlk` | 20 | decoded (2 checked) |
 | `cata` | 13 | not decoded |
 | `mop-classic` | 7 | n/a |
-| `forever` | 7: warrior, paladin, hunter, rogue, priest, shaman and mage; made in its calculator (it has no guide builds yet) | not decoded |
+| `forever` | 9: all classes; builds made in its calculator | not decoded |
 | `classic-ptr` | 1 | not decoded |
 
-Forever warlock and druid builds were not checked because Wowhead blocked further calculator
-requests. They use the same decoder and class tree-order tables, but have no rendered comparison.
+Forever warlock and druid were checked on 2026-10-11 against the rendered `v21-1-1_t0` builds and
+the versioned talent file `https://nether.wowhead.com/forever/data/talents-classic?dv=29&db=1791493526`.
+Both show `1/1/1`: warlock takes Improved Life Tap, Improved Health Funnel and Destructive Reach;
+druid takes Improved Wrath, Ferocity and Nature's Focus. The captured file keeps those classes'
+trees, talents and first-rank spell rows unchanged. Seven other class comparisons predate this
+capture; beta tree changes require rechecking the rendered selections.
 
 Cache maintenance:
 

@@ -73,7 +73,7 @@ from simc_cli.compare import (
 )
 from simc_cli.packet import FirstCastOptions, build_analysis_packet
 from simc_cli.profile_build import apply_build_payload
-from simc_cli.provider import PROVIDER, PROVIDER_NAME, repo_payload, simc_envelope
+from simc_cli.provider import FOREVER_UNSUPPORTED_COMMANDS, PROVIDER, PROVIDER_NAME, repo_payload, simc_envelope
 from simc_cli.prune import RUNTIME_ONLY, PruneContext, PrunedEntry, prune_entries
 from simc_cli.repo import (
     RepoPaths,
@@ -89,7 +89,9 @@ from simc_cli.run import (
     CommandResult,
     binary_version,
     build_repo,
+    game_variant_for_version,
     repo_git_status,
+    require_retail_engine,
     run_profile,
     sync_repo,
 )
@@ -147,7 +149,13 @@ def _write_packet_json_or_fail(ctx: typer.Context, *, out: str | None, packet: d
 
 
 def _repo_paths(ctx: typer.Context) -> RepoPaths:
-    return discover_repo(_cfg(ctx).repo_root)
+    paths = discover_repo(_cfg(ctx).repo_root)
+    if (ctx.info_name or "").replace("-", "_") in FOREVER_UNSUPPORTED_COMMANDS:
+        try:
+            require_retail_engine(paths)
+        except ProviderError as exc:
+            _fail_with(ctx, exc)
+    return paths
 
 
 def _repo_resolution(ctx: typer.Context):
@@ -540,6 +548,8 @@ def version(ctx: typer.Context) -> None:
                 "returncode": version_info.returncode,
             },
             "version": version_info.version_line,
+            "wow_version": version_info.wow_version,
+            "game_variant": version_info.game_variant,
         },
     )
 
@@ -2253,19 +2263,22 @@ def _run_sim(
             details={"command": result.command, "json_report_path": str(json_path)},
         )
 
-    _emit(
-        ctx,
-        sim_report_payload(
-            summary,
-            profile_path=str(profile.path) if profile.source == "file" else None,
-            preset=preset,
-            input_source=profile.source,
-            json_report_path=str(json_path) if json_out is not None else None,
-            command=result.command,
-            iterations_requested=_int_or_none(run_settings.get("iterations", profile_settings.get("iterations"))),
-            disclosures=[*run_disclosures, *profile_disclosures(profile_text)],
-        ),
+    variant = game_variant_for_version(summary.game_version)
+    disclosures = [*run_disclosures, *profile_disclosures(profile_text)]
+    if variant == "forever":
+        disclosures.append("Forever simulation is experimental; successful execution does not verify combat-model accuracy.")
+    payload = sim_report_payload(
+        summary,
+        profile_path=str(profile.path) if profile.source == "file" else None,
+        preset=preset,
+        input_source=profile.source,
+        json_report_path=str(json_path) if json_out is not None else None,
+        command=result.command,
+        iterations_requested=_int_or_none(run_settings.get("iterations", profile_settings.get("iterations"))),
+        disclosures=disclosures,
     )
+    payload.update({"game_variant": variant, "support_status": "experimental" if variant == "forever" else "ready"})
+    _emit(ctx, payload)
 
 
 def _int_or_none(value: str | None) -> int | None:
@@ -2953,7 +2966,8 @@ def run_command(
     _require_binary(ctx, paths)
     result = run_profile(paths, resolved, simc_args=list(simc_arg))
     previews = output_previews(result.stdout, result.stderr)
-    version_line = binary_version(paths).version_line
+    version_info = binary_version(paths)
+    version_line = version_info.version_line
     _fail_if_nothing_to_sim(ctx, result, previews)
     if result.returncode != 0:
         fail(
@@ -2973,6 +2987,9 @@ def run_command(
             "profile_path": str(resolved),
             "command": result.command,
             "version": version_line,
+            "wow_version": version_info.wow_version,
+            "game_variant": version_info.game_variant,
+            "support_status": "experimental" if version_info.game_variant == "forever" else "ready",
             "result_lines": [line.strip() for line in result.stdout.splitlines() if RESULT_LINE_RE.match(line)],
             **previews,
         },

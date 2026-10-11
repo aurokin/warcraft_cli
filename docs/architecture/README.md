@@ -14,6 +14,7 @@ Progressive index for repo structure and shared design. Sequencing and near-term
 
 - [AUTH_ARCHITECTURE.md](AUTH_ARCHITECTURE.md) — shared auth classes, rollout status, provider posture
 - [EXPANSION_FILTERING.md](EXPANSION_FILTERING.md) — wrapper `--expansion` behavior and provider modes
+- [FOREVER_READINESS.md](FOREVER_READINESS.md) — verified Forever scope, identity boundaries, and upstream integration evidence
 - [LINTING_AND_COMPLEXITY.md](LINTING_AND_COMPLEXITY.md) — static quality tooling and the gates in `make check`
 - [FIXTURE_MAINTENANCE.md](FIXTURE_MAINTENANCE.md) — the fixture inventory, how to refresh it, and the cross-provider contract tests
 - [E2E_TESTING.md](E2E_TESTING.md) — the local end-to-end journey suite, its policy, and credential setup

@@ -176,6 +176,8 @@ class ProviderRegistration:
     app: typer.Typer
     # Extra keyword arguments for surface.doctor(), e.g. skipping wowhead's live probes.
     doctor_options: dict[str, Any] = field(default_factory=dict)
+    # Explicitly requested profiles that must not run as an advisory-only, unscoped passthrough.
+    unverified_expansions: dict[str, str] = field(default_factory=dict)
 
 
 PROVIDERS: tuple[ProviderRegistration, ...] = (
@@ -291,6 +293,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         expansion_option="site",
         app=warcraftlogs_app,
         doctor_options={"live": False},
+        unverified_expansions={
+            "forever": "A Forever Warcraft Logs host, schema, character identity, and authentication route have not been verified."
+        },
     ),
     ProviderRegistration(
         name="warcraft-wiki",
@@ -336,6 +341,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="core",
         expansion_option=None,
         app=simc_app,
+        unverified_expansions={
+            "forever": "The official Forever engine is experimental; this provider's build transport and analysis are retail-specific."
+        },
     ),
     ProviderRegistration(
         name="raidbots",
@@ -385,6 +393,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="supported",
         expansion_option=None,
         app=blizzard_app,
+        unverified_expansions={
+            "forever": "A Forever API namespace and realmless character lookup contract have not been verified."
+        },
     ),
     ProviderRegistration(
         name="curseforge",
@@ -411,6 +422,9 @@ PROVIDERS: tuple[ProviderRegistration, ...] = (
         tier="experimental",
         expansion_option=None,
         app=curseforge_app,
+        unverified_expansions={
+            "forever": "Addon lookup does not select or validate Forever-compatible files; inspect file compatibility explicitly."
+        },
     ),
     ProviderRegistration(
         name="lorrgs",
@@ -465,6 +479,8 @@ def provider_expansion_support(registration: ProviderRegistration, *, requested_
     reason = provider_expansion_exclusion_reason(registration, requested_expansion=requested_expansion)
     if reason is not None:
         payload["exclusion_reason"] = reason
+    if requested_expansion is not None and requested_expansion in registration.unverified_expansions:
+        payload["verification_note"] = registration.unverified_expansions[requested_expansion]
     return payload
 
 
@@ -483,6 +499,8 @@ def provider_expansion_exclusion_reason(
 ) -> str | None:
     if requested_expansion is None or provider_supports_expansion(registration, requested_expansion=requested_expansion):
         return None
+    if requested_expansion in registration.unverified_expansions:
+        return "provider_game_profile_unverified"
     if registration.expansion_mode == "fixed":
         return "provider_fixed_to_other_expansion"
     if registration.expansion_mode == "profiled":
@@ -598,7 +616,7 @@ def _unsupported_expansion_result(
     """Early return for a provider that cannot honour the requested expansion; ``None`` means proceed."""
     if (
         expansion is None
-        or registration.expansion_mode == "none"
+        or (registration.expansion_mode == "none" and expansion not in registration.unverified_expansions)
         or provider_expansion_exclusion_reason(registration, requested_expansion=expansion) is None
     ):
         return None

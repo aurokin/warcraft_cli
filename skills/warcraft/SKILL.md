@@ -18,6 +18,8 @@ Use `warcraft` first when the caller does not already know which provider they n
   - `warcraft <provider> ...`
 - Version-specific request:
   - `warcraft --expansion <profile> ...`
+  - Forever: `warcraft --expansion forever search "<query>"` or `warcraft --expansion forever wowhead entity item <id>`
+  - Forever discovery uses Wowhead only. Read excluded-provider reasons in `doctor`; unverified providers cannot fall back to an unscoped passthrough. Read Forever talent calculators with `wowhead talent-calc`; retail talent packets, SimC guide handoffs, and realm-based actor-profile joins are unsupported.
 - Global flags (every binary, always before the subcommand):
   - `--pretty` pretty-print JSON; default output is compact JSON
   - `--compact` truncate long prose strings, with `--compact-max-chars <n>` to set the cut; URLs,

@@ -348,7 +348,8 @@ def test_simc_version_uses_binary_probe(monkeypatch) -> None:
     monkeypatch.setattr(
         "simc_cli.main.binary_version",
         lambda paths: type("VersionInfo", (), {"binary_path": Path("/tmp/simc"), "available": True,
-                           "version_line": "SimulationCraft 1201", "returncode": 1})(),
+                           "version_line": "SimulationCraft 1201", "returncode": 1,
+                           "wow_version": None, "game_variant": "unknown"})(),
     )
     result = runner.invoke(simc_app, ["version"])
     assert result.exit_code == 0
@@ -2625,6 +2626,8 @@ def test_simc_decode_build_names_a_stale_binary_when_simc_rejects_the_hash(monke
         "git_revision": "3377576e3b",
         "checkout_head": CHECKOUT_HEAD,
         "matches_checkout": False,
+        "wow_version": None,
+        "game_variant": "unknown",
     }
     assert "built from 3377576e3b" in payload["error"]["message"]
     assert "simc build" in payload["error"]["message"]
@@ -4557,7 +4560,9 @@ def test_run_returns_the_result_lines_and_the_end_of_the_output(monkeypatch, tmp
         "simc_cli.main.run_profile",
         lambda paths, profile_path, simc_args: CommandResult(command=[], cwd=None, returncode=0, stdout=stdout, stderr=""),
     )
-    monkeypatch.setattr("simc_cli.main.binary_version", lambda _paths: type("V", (), {"version_line": "SimulationCraft 1210-01"})())
+    monkeypatch.setattr("simc_cli.main.binary_version", lambda _paths: type("V", (), {
+        "version_line": "SimulationCraft 1210-01", "wow_version": None, "game_variant": "unknown",
+    })())
     profile = tmp_path / "p.simc"
     profile.write_text("mage=p\n")
 

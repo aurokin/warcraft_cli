@@ -94,6 +94,12 @@ BINARY_COMMANDS = frozenset({
     "apl_intent_explain",
 })
 
+# These workflows use retail class/spec and talent-tree contracts; a Forever binary is not a
+# replacement even when its file layout and SimulationCraft version resemble a retail checkout.
+FOREVER_UNSUPPORTED_COMMANDS = (BINARY_COMMANDS - {"version", "run", "sim"}) | {
+    "build_harness",
+}
+
 
 
 
@@ -143,6 +149,8 @@ def repo_payload(paths: RepoPaths) -> dict[str, Any]:
             "git_branch": version.git_branch,
             "git_revision": version.git_revision,
             "matches_checkout": matches_checkout,
+            "wow_version": version.wow_version,
+            "game_variant": version.game_variant,
         },
     }
 
@@ -175,8 +183,14 @@ def doctor(*, repo_root: str | Path | None = None, **options: Any) -> Envelope:
     build_ready = bool(repo["build_ready"])
     unavailable = (set() if has_ripgrep else set(RIPGREP_COMMANDS)) | (set() if build_ready else set(BINARY_COMMANDS))
     capabilities = {name: "unavailable" if name in unavailable else state for name, state in CAPABILITIES.items()}
+    binary = repo["binary"]
+    forever = isinstance(binary, dict) and binary.get("game_variant") == "forever"
+    if forever:
+        capabilities.update({name: "not_supported" for name in FOREVER_UNSUPPORTED_COMMANDS})
+        if build_ready:
+            capabilities.update({"run": "experimental", "sim": "experimental"})
     payload = {
-        "status": "ready" if repo["repo_ready"] and build_ready and has_ripgrep else "degraded",
+        "status": "ready" if repo["repo_ready"] and build_ready and has_ripgrep and not forever else "degraded",
         "command": "doctor",
         "installed": True,
         "language": "python",

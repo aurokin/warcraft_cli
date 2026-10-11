@@ -51,8 +51,9 @@ Thin or unproven surfaces. Do not build a workflow on them without checking `doc
 ## Next
 
 - Complete and verify core provider handoffs before adding providers or analytics commands.
+- Prepare Forever through verified Wowhead reads and calculator decoding. Keep realmless profile joins, WCL/Blizzard routing, and simulation handoffs gated until their actual provider contracts are verified; current evidence lives in [architecture/FOREVER_READINESS.md](architecture/FOREVER_READINESS.md).
 - Keep CurseForge experimental for explicit addon lookup. Expansion is paused until a concrete compatible stable-release workflow justifies it; current file/changelog selection remains manual.
-- Define wrapper-level `simc` expansion semantics. Warcraft Logs already isolates cache keys by retail/classic/fresh site; its remaining live verification is separate from that implementation.
+- Verify the official experimental SimC Forever engine before enabling wrapper build or simulation handoffs. Warcraft Logs already isolates cache keys by retail/classic/fresh site; its remaining live verification is separate from that implementation.
 
 ## Deferred Candidates
 

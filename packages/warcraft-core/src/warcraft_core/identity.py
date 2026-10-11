@@ -21,14 +21,14 @@ IdentityConfidence = Literal["none", "low", "medium", "high"]
 TalentTransportStatus = Literal["unknown", "raw_only", "validated", "exact"]
 WOWHEAD_TALENT_CALC_SEGMENT = "talent-calc"
 WOWHEAD_EXPANSION_PREFIXES = wowhead_path_prefixes()
-# Wowhead calculator path prefixes: every expansion site's, plus WoW Forever's (no expansion profile yet).
+# Calculator recognition is broader than compatibility with the retail talent transport consumer.
 WOWHEAD_TALENT_CALC_PREFIXES = WOWHEAD_EXPANSION_PREFIXES | {"forever"}
 # Calculators whose paths use the retail spec table; classic ones have their own (MoP Classic's rogue ``combat``).
 RETAIL_TALENT_CALCULATORS = frozenset({"retail", "ptr", "beta"})
 # Calculators that pick one talent per tier and carry a glyph segment after the build code.
 TIERED_TALENT_CALCULATORS = frozenset({"mop-classic"})
-# The calculators SimC and build references read: retail and the expansion sites (not WoW Forever).
-_EXPANSION_SITE_CALCULATORS = WOWHEAD_EXPANSION_PREFIXES | {"retail"}
+# Adding a Wowhead content profile does not establish compatibility with the retail SimC consumer.
+_EXPANSION_SITE_CALCULATORS = (WOWHEAD_EXPANSION_PREFIXES | {"retail"}) - {"forever"}
 # Spec slugs as normalize_spec_name spells Wowhead's talent-calc path segments (beast-mastery ->
 # beast_mastery). A talent-calc path only names a spec when its third segment is one of these.
 WOW_SPECS_BY_CLASS: dict[str, frozenset[str]] = {
