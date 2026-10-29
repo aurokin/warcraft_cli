@@ -1,6 +1,6 @@
 # Expansion Filtering
 
-Reference for wrapper `--expansion` behavior. Remaining policy review is tracked in Linear [AUR-369](https://linear.app/aurokin/issue/AUR-369/warcraft-finish-expansion-filtering-phase-3-4).
+Reference for wrapper `--expansion` behavior. Remaining items are listed under [Open Work](#open-work).
 
 ## Purpose
 
