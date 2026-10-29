@@ -130,5 +130,3 @@ Within each root: `shared/` for genuinely shared data, then one directory per pr
 - shared code moves into a shared package only when a second consumer proves the need
 - package boundaries and dependency direction stay documented here and enforced in `.importlinter`
 - update this document whenever the package set or dependency rules change
-
-Open engineering work lives in Linear.

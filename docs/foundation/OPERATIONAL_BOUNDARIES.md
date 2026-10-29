@@ -97,7 +97,7 @@ warcraft --expansion retail doctor
 
 - Prefer **additive** JSON fields and `schema_version` bumps over silent breaking changes.
 - If the source no longer supports a workflow, update `doctor` capability metadata and docs — do not invent filler analytics. See [SAFE_ANALYTICS_RULES.md](SAFE_ANALYTICS_RULES.md).
-- File Linear issues with: command invoked, expansion/profile, fixture URL or report code (redacted), and the smallest failing pytest.
+- File GitHub issues with: command invoked, expansion/profile, fixture URL or report code (redacted), and the smallest failing pytest.
 
 ### 5. Ship with verification
 

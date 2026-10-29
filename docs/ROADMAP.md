@@ -2,7 +2,7 @@
 
 What the repo treats as core, what is supported, what is experimental, and what is next.
 
-- Open engineering work lives in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88), not here.
+- Next work and deferred candidates live here; individual open tasks live in GitHub issues.
 - Shipped work lives in the versioned sections of [../CHANGELOG.md](../CHANGELOG.md), not here.
 - Command behavior lives in `docs/<cli>/README.md` and the generated [reference/](reference/README.md).
 - Repo-wide rules live in [foundation/](README.md#foundations) and [architecture/](architecture/README.md).
@@ -57,7 +57,7 @@ Thin or unproven surfaces. Do not build a workflow on them without checking `doc
 
 ## Deferred Candidates
 
-Both were decided under [AUR-395](https://linear.app/aurokin/issue/AUR-395) and remain **DEFER**. Nothing is built; the un-gate conditions below are the whole decision.
+RaidPlan and Undermine Exchange were decided under former tracker key AUR-395 and remain **DEFER**. Nothing is built; the un-gate conditions below are the whole decision.
 
 **RaidPlan** (`https://raidplan.io/`) — would cover boss strategy planning, mechanic assignments, and shareable encounter plans, which no current provider covers. Deferred because it is unconfirmed whether the valuable workflows (shared plans and their assignment data) are readable without authentication, and the visual assignment data may be materially harder to normalize than guide/wiki content.
 
@@ -75,6 +75,8 @@ Un-gate when **both** are true and recorded here:
 
 First slice if un-gated: `doctor` + one item/commodity lookup + one history surface, preserving raw source identifiers and treating market-summary normalization as additive.
 
+**SimC non-retail expansion support** — not planned: SimulationCraft is not expected to support Classic or other non-retail versions (upstream `simulationcraft/simc#5821`), so `simc` stays `expansion_mode: none`; if upstream ever gains a real non-retail game-version surface, switch the registry mode, wire wrapper filtering, and add tests (former AUR-498, canceled).
+
 ## Risks
 
 - over-generalizing too early
@@ -85,7 +87,7 @@ First slice if un-gated: `doctor` + one item/commodity lookup + one history surf
 
 ## Rules
 
-- Keep tiers, what is next, and deferred candidates here; keep open tasks in Linear; keep shipped work in the changelog.
+- Keep tiers, what is next, and deferred candidates here; keep individual open tasks in GitHub issues; keep shipped work in the changelog.
 - Only extract shared code after a second provider proves the abstraction is real.
 - Prefer depth, reliability, and trust metadata in the core tier over adding another provider.
 - A provider that cannot honestly support a workflow fails clearly instead of faking coverage.

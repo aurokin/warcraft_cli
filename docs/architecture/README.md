@@ -1,6 +1,6 @@
 # Architecture Docs
 
-Progressive index for repo structure and shared design. Sequencing and near-term priorities live in [ROADMAP.md](../ROADMAP.md). Open engineering work is tracked in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88).
+Progressive index for repo structure and shared design. Sequencing and near-term priorities live in [ROADMAP.md](../ROADMAP.md).
 
 ## Start Here
 

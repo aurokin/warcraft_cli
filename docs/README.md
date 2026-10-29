@@ -7,7 +7,7 @@ Documentation ownership:
 - Repo-wide analytics and comparison safety rules belong in [foundation/SAFE_ANALYTICS_RULES.md](foundation/SAFE_ANALYTICS_RULES.md).
 - Repo-wide operational boundaries (rate limits, logging, failure response) belong in [foundation/OPERATIONAL_BOUNDARIES.md](foundation/OPERATIONAL_BOUNDARIES.md).
 - Shared cross-provider contracts belong in focused contract docs such as [foundation/ERROR_CONTRACT.md](foundation/ERROR_CONTRACT.md), [foundation/IDENTITY_CONTRACT.md](foundation/IDENTITY_CONTRACT.md), and [foundation/WRAPPER_PROVIDER_CONTRACT.md](foundation/WRAPPER_PROVIDER_CONTRACT.md).
-- [ROADMAP.md](ROADMAP.md) tracks provider tiers, what is next, and deferred candidates; open work is in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88); shipped work is in [../CHANGELOG.md](../CHANGELOG.md).
+- [ROADMAP.md](ROADMAP.md) tracks provider tiers, what is next, and deferred candidates; individual open tasks are GitHub issues; shipped work is in [../CHANGELOG.md](../CHANGELOG.md).
 - [USAGE.md](USAGE.md) carries workflows and cross-provider conventions; per-command flags live in the generated [reference/](reference/README.md).
 - Each CLI has its own folder under `docs/` with a `README.md` entrypoint.
 
@@ -49,7 +49,7 @@ Generated from the Typer apps by `make reference`; a test fails when it drifts f
 
 ## Architecture And Shared References
 
-- [ROADMAP.md](ROADMAP.md) — tiers, next work, and deferred candidates (open work in Linear)
+- [ROADMAP.md](ROADMAP.md) — tiers, next work, and deferred candidates
 - [architecture/README.md](architecture/README.md) — progressive index
 - [architecture/REPO_STRUCTURE_AND_PACKAGING.md](architecture/REPO_STRUCTURE_AND_PACKAGING.md)
 - [architecture/PACKAGE_LAYOUT.md](architecture/PACKAGE_LAYOUT.md)
@@ -57,8 +57,6 @@ Generated from the Typer apps by `make reference`; a test fails when it drifts f
 - [architecture/EXPANSION_FILTERING.md](architecture/EXPANSION_FILTERING.md)
 - [architecture/LINTING_AND_COMPLEXITY.md](architecture/LINTING_AND_COMPLEXITY.md)
 - [architecture/FIXTURE_MAINTENANCE.md](architecture/FIXTURE_MAINTENANCE.md)
-
-Engineering backlog: [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88).
 
 ## Provider CLI Docs
 

@@ -1,6 +1,6 @@
 # Auth Architecture
 
-Shared auth design for official OAuth providers, workflow/session products, and light-credential APIs. Open rollout items live in [Linear — Warcraft CLI](https://linear.app/aurokin/project/warcraft-cli-a9a133da0d88).
+Shared auth design for official OAuth providers, workflow/session products, and light-credential APIs.
 
 ## Rollout Status
 
